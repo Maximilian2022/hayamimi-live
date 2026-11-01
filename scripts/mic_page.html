@@ -742,6 +742,160 @@
       border-color: #38BDF8;
       color: #BAE6FD;
     }
+
+    /* OBS マイクミュート連動 */
+    .obs-sync-card {
+      border: 1px solid rgba(91, 127, 212, 0.3);
+      background: linear-gradient(180deg, rgba(91, 127, 212, 0.05) 0%, rgba(20, 23, 29, 0.95) 100%);
+    }
+    .obs-sync-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 0.8rem;
+    }
+    .obs-toggle-wrap {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    .obs-toggle-label {
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: var(--paper);
+    }
+    .obs-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      padding: 0.3rem 0.75rem;
+      border-radius: 9999px;
+      font-size: 0.78rem;
+      font-family: var(--mono);
+      font-weight: 600;
+      border: 1px solid transparent;
+      transition: all 0.2s ease;
+    }
+    .obs-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+    .obs-badge.obs-connected {
+      background: rgba(46, 204, 113, 0.15);
+      border-color: rgba(46, 204, 113, 0.4);
+      color: #2ecc71;
+      box-shadow: 0 0 10px rgba(46, 204, 113, 0.2);
+    }
+    .obs-badge.obs-connecting {
+      background: rgba(241, 196, 15, 0.15);
+      border-color: rgba(241, 196, 15, 0.4);
+      color: #f1c40f;
+    }
+    .obs-badge.obs-disconnected {
+      background: rgba(176, 168, 152, 0.1);
+      border-color: rgba(176, 168, 152, 0.25);
+      color: var(--paper-dim);
+    }
+    .obs-badge.obs-error {
+      background: rgba(224, 79, 47, 0.15);
+      border-color: rgba(224, 79, 47, 0.4);
+      color: var(--shu);
+    }
+    .obs-badge.obs-disabled {
+      background: rgba(42, 47, 58, 0.5);
+      border-color: var(--line);
+      color: #71717a;
+    }
+    .obs-mute-banner {
+      margin-top: 0.9rem;
+      padding: 0.75rem 1rem;
+      background: rgba(224, 79, 47, 0.18);
+      border: 1px solid var(--shu);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      gap: 0.8rem;
+      animation: obsPulse 2s infinite ease-in-out;
+    }
+    @keyframes obsPulse {
+      0%, 100% { box-shadow: 0 0 0 rgba(224, 79, 47, 0); }
+      50% { box-shadow: 0 0 12px rgba(224, 79, 47, 0.35); }
+    }
+    .obs-mute-banner .mute-icon {
+      font-size: 1.5rem;
+      flex-shrink: 0;
+    }
+    .obs-mute-banner .mute-info {
+      display: flex;
+      flex-direction: column;
+      gap: 0.15rem;
+    }
+    .obs-mute-banner .mute-info strong {
+      color: #ff6b4a;
+      font-size: 0.88rem;
+    }
+    .obs-mute-banner .mute-info span {
+      color: var(--paper);
+      font-size: 0.78rem;
+    }
+    .instruction-box {
+      background: rgba(0, 0, 0, 0.25);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 0.9rem 1rem;
+    }
+    /* iOS風トグルスイッチ */
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 44px;
+      height: 24px;
+      flex-shrink: 0;
+    }
+    .switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background-color: #2a2f3a;
+      transition: .25s;
+      border: 1px solid #3f4554;
+    }
+    .slider:before {
+      position: absolute;
+      content: "";
+      height: 16px;
+      width: 16px;
+      left: 3px;
+      bottom: 3px;
+      background-color: var(--paper);
+      transition: .25s;
+    }
+    input:checked + .slider {
+      background-color: var(--shu);
+      border-color: var(--shu);
+    }
+    input:focus + .slider {
+      box-shadow: 0 0 1px var(--shu);
+    }
+    input:checked + .slider:before {
+      transform: translateX(20px);
+      background-color: #ffffff;
+    }
+    .slider.round {
+      border-radius: 24px;
+    }
+    .slider.round:before {
+      border-radius: 50%;
+    }
+
 </style>
 </head>
 <body>
@@ -833,6 +987,85 @@
         <div class="feed-list" id="final-feed">
           <!-- 確定字幕が追加されます -->
         </div>
+      </div>
+
+            <!-- 🎥 OBS マイクミュート連動カード -->
+      <div class="card obs-sync-card">
+        <div class="card-title">
+          OBS マイクミュート連動
+          <span class="tag" style="background: rgba(91, 127, 212, 0.2); color: var(--blue);">OBS WebSocket v5</span>
+        </div>
+
+        <div class="obs-sync-header">
+          <div class="obs-toggle-wrap">
+            <label class="switch">
+              <input type="checkbox" id="obs-sync-toggle" checked>
+              <span class="slider round"></span>
+            </label>
+            <span class="obs-toggle-label">OBS連動を有効化（OBSマイクミュート時に文字起こしを自動停止）</span>
+          </div>
+          <div id="obs-status-badge" class="obs-badge obs-disconnected">
+            <span class="obs-dot"></span> <span id="obs-status-text">未接続 (OBS未起動)</span>
+          </div>
+        </div>
+
+        <!-- ミュート警告バナー（ミュート中のみ表示） -->
+        <div id="obs-mute-banner" class="obs-mute-banner" style="display: none;">
+          <span class="mute-icon">🔇</span>
+          <div class="mute-info">
+            <strong>OBS 側でマイクがミュートされています</strong>
+            <span>文字起こしへの音声入力を一時停止中… OBSでミュート解除すると自動再開します</span>
+          </div>
+        </div>
+
+        <!-- OBS 設定 & 手順アコーディオン -->
+        <details class="settings-box" style="margin-top: 0.8rem;">
+          <summary>OBS 接続設定 & 設定手順（インストラクション）</summary>
+          <div class="settings-content">
+            <!-- 接続設定フォーム -->
+            <div class="form-row">
+              <label for="obs-ws-url" style="width: 140px;">OBS WebSocket URL:</label>
+              <input type="text" id="obs-ws-url" value="ws://127.0.0.1:4455" placeholder="ws://127.0.0.1:4455">
+            </div>
+            <div class="form-row">
+              <label for="obs-ws-password" style="width: 140px;">サーバーパスワード:</label>
+              <input type="password" id="obs-ws-password" placeholder="パスワード（未設定の場合は空欄）">
+            </div>
+            <div class="form-row">
+              <label for="obs-target-source" style="width: 140px;">監視マイクソース:</label>
+              <select id="obs-target-source">
+                <option value="__auto__">自動検出 (Mic/Aux または最初のマイク)</option>
+              </select>
+            </div>
+
+            <div style="display: flex; gap: 0.6rem; margin-top: 0.8rem; align-items: center; flex-wrap: wrap;">
+              <button id="btn-obs-reconnect" class="btn-copy" style="padding: 0.4rem 1rem;">
+                🔄 OBS に再接続
+              </button>
+              <button id="btn-obs-save" class="btn-copy" style="padding: 0.4rem 1rem;">
+                💾 設定を保存
+              </button>
+              <span id="obs-reconnect-msg" style="font-size: 0.8rem; color: var(--paper-dim);"></span>
+            </div>
+
+            <hr style="border: 0; border-top: 1px solid var(--line); margin: 1.2rem 0;">
+
+            <!-- インストラクション（OBS 側の設定手順） -->
+            <div class="instruction-box">
+              <h4 style="margin: 0 0 0.5rem 0; color: var(--paper); font-size: 0.95rem;">📖 OBS Studio 側の設定手順（初回のみ）</h4>
+              <ol style="margin: 0; padding-left: 1.2rem; font-size: 0.84rem; line-height: 1.6; color: var(--paper-dim);">
+                <li><strong>OBS Studio</strong>（バージョン 28 以降）を起動します。</li>
+                <li>上部メニューの「<strong>ツール (Tools)</strong>」→「<strong>WebSocket サーバー設定 (WebSocket Server Settings)</strong>」を開きます。</li>
+                <li>「<strong>WebSocket サーバーを有効にする</strong>」にチェックを入れます。</li>
+                <li><strong>サーバーポート</strong>が「<code style="color: var(--blue);">4455</code>」になっていることを確認します。</li>
+                <li>「<strong>認証を有効にする</strong>」にチェックが入っている場合は、表示されているパスワードを上記「サーバーパスワード」欄に入力してください（パスワードを無効にすれば空欄のままで動作します）。</li>
+                <li>「<strong>適用</strong>」をクリックしてダイアログを閉じます。</li>
+                <li>早耳を先に起動している場合は、上記の「<strong>🔄 OBS に再接続</strong>」ボタンをクリックすると即座に接続されます（未接続の場合も数秒おきに自動で再接続を試みます）。</li>
+              </ol>
+            </div>
+
+          </div>
+        </details>
       </div>
 
       <!-- OBS URL ガイド -->
@@ -1524,6 +1757,7 @@
 
   function resampleAndCollect(inputFloat32, inSampleRate) {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (window.obsMuteSync && window.obsMuteSync.isMuted) return;
     const ratio = inSampleRate / TARGET_SAMPLE_RATE;
     const outLength = Math.floor(inputFloat32.length / ratio);
 
@@ -1549,6 +1783,12 @@
 
   function updateMeter() {
     if (!analyserNode || !isRecording) return;
+    if (window.obsMuteSync && window.obsMuteSync.isMuted) {
+      levelBar.style.width = "0%";
+      levelVal.textContent = "🔇 ミュート中";
+      animFrameId = requestAnimationFrame(updateMeter);
+      return;
+    }
     const data = new Uint8Array(analyserNode.frequencyBinCount);
     analyserNode.getByteTimeDomainData(data);
 
@@ -2611,6 +2851,365 @@
   loadConfigAndStyle();
   loadSpeakerProfiles();
   loadDspAndCommentConfig();
+
+  // ==========================================
+  // OBS Studio WebSocket v5 マイクミュート連動
+  // ==========================================
+  class ObsMuteSync {
+    constructor() {
+      this.ws = null;
+      this.enabled = true;
+      this.url = "ws://127.0.0.1:4455";
+      this.password = "";
+      this.targetSource = "__auto__";
+      this.availableSources = [];
+      this.isMuted = false;
+      this.reconnectTimer = null;
+      this.retryInterval = 4000;
+      this.activeMicName = null;
+      this.specialMic = null;
+
+      this.toggleEl = document.getElementById("obs-sync-toggle");
+      this.statusBadgeEl = document.getElementById("obs-status-badge");
+      this.statusTextEl = document.getElementById("obs-status-text");
+      this.muteBannerEl = document.getElementById("obs-mute-banner");
+      this.urlInput = document.getElementById("obs-ws-url");
+      this.passwordInput = document.getElementById("obs-ws-password");
+      this.sourceSelect = document.getElementById("obs-target-source");
+      this.reconnectBtn = document.getElementById("btn-obs-reconnect");
+      this.saveBtn = document.getElementById("btn-obs-save");
+      this.reconnectMsg = document.getElementById("obs-reconnect-msg");
+
+      this.loadSettings();
+      this.bindEvents();
+
+      if (this.enabled) {
+        this.connect();
+      } else {
+        this.updateStatus("disabled", "連動オフ");
+      }
+    }
+
+    loadSettings() {
+      try {
+        const savedEnabled = localStorage.getItem("hayamimi_obs_sync_enabled");
+        if (savedEnabled !== null) {
+          this.enabled = (savedEnabled === "true");
+        } else {
+          this.enabled = true; // デフォルト ON
+        }
+        if (this.toggleEl) this.toggleEl.checked = this.enabled;
+
+        const savedUrl = localStorage.getItem("hayamimi_obs_ws_url");
+        if (savedUrl) {
+          this.url = savedUrl;
+          if (this.urlInput) this.urlInput.value = savedUrl;
+        }
+
+        const savedPassword = localStorage.getItem("hayamimi_obs_ws_password");
+        if (savedPassword) {
+          this.password = savedPassword;
+          if (this.passwordInput) this.passwordInput.value = savedPassword;
+        }
+
+        const savedSource = localStorage.getItem("hayamimi_obs_target_source");
+        if (savedSource) {
+          this.targetSource = savedSource;
+        }
+      } catch (e) {
+        console.warn("localStorage read failed:", e);
+      }
+    }
+
+    saveSettings() {
+      try {
+        if (this.urlInput) this.url = this.urlInput.value.trim() || "ws://127.0.0.1:4455";
+        if (this.passwordInput) this.password = this.passwordInput.value;
+        if (this.sourceSelect) this.targetSource = this.sourceSelect.value;
+        if (this.toggleEl) this.enabled = this.toggleEl.checked;
+
+        localStorage.setItem("hayamimi_obs_sync_enabled", String(this.enabled));
+        localStorage.setItem("hayamimi_obs_ws_url", this.url);
+        localStorage.setItem("hayamimi_obs_ws_password", this.password);
+        localStorage.setItem("hayamimi_obs_target_source", this.targetSource);
+
+        if (this.reconnectMsg) {
+          this.reconnectMsg.textContent = "設定を保存しました";
+          setTimeout(() => { if (this.reconnectMsg) this.reconnectMsg.textContent = ""; }, 3000);
+        }
+      } catch (e) {
+        console.warn("localStorage save failed:", e);
+      }
+    }
+
+    bindEvents() {
+      if (this.toggleEl) {
+        this.toggleEl.addEventListener("change", () => {
+          this.enabled = this.toggleEl.checked;
+          this.saveSettings();
+          if (this.enabled) {
+            this.connect();
+          } else {
+            this.disconnect();
+            this.setMuteState(false);
+            this.updateStatus("disabled", "連動オフ");
+          }
+        });
+      }
+
+      if (this.reconnectBtn) {
+        this.reconnectBtn.addEventListener("click", () => {
+          this.saveSettings();
+          this.connect(true);
+        });
+      }
+
+      if (this.saveBtn) {
+        this.saveBtn.addEventListener("click", () => {
+          this.saveSettings();
+          if (this.enabled) {
+            this.connect(true);
+          }
+        });
+      }
+
+      if (this.sourceSelect) {
+        this.sourceSelect.addEventListener("change", () => {
+          this.targetSource = this.sourceSelect.value;
+          this.saveSettings();
+          this.determineActiveMic();
+        });
+      }
+    }
+
+    updateStatus(type, text) {
+      if (!this.statusBadgeEl || !this.statusTextEl) return;
+      this.statusBadgeEl.className = "obs-badge obs-" + type;
+      this.statusTextEl.textContent = text;
+    }
+
+    setMuteState(isMuted) {
+      if (this.isMuted === isMuted) return;
+      this.isMuted = isMuted;
+
+      if (this.muteBannerEl) {
+        this.muteBannerEl.style.display = isMuted ? "flex" : "none";
+      }
+
+      const statusLabel = document.getElementById("status-label");
+      const levelBar = document.getElementById("level-bar");
+
+      if (isMuted) {
+        if (statusLabel && isRecording) {
+          statusLabel.textContent = "🔇 OBSマイクミュート中（一時停止）";
+          statusLabel.style.color = "#e04f2f";
+        }
+        if (levelBar) {
+          levelBar.style.opacity = "0.3";
+        }
+        const liveText = document.getElementById("partial-live-text");
+        if (liveText && !liveText.classList.contains("idle")) {
+          liveText.innerHTML = '<span style="color: #b0a898;">(OBSマイクミュート中)</span><span class="caret"></span>';
+        }
+      } else {
+        if (statusLabel && isRecording) {
+          statusLabel.textContent = "マイク配信中 (送信中)";
+          statusLabel.style.color = "";
+        }
+        if (levelBar) {
+          levelBar.style.opacity = "1.0";
+        }
+      }
+    }
+
+    async computeAuth(password, salt, challenge) {
+      const enc = new TextEncoder();
+      const s1 = await crypto.subtle.digest("SHA-256", enc.encode(password + salt));
+      const s1Base64 = btoa(String.fromCharCode(...new Uint8Array(s1)));
+      const s2 = await crypto.subtle.digest("SHA-256", enc.encode(s1Base64 + challenge));
+      return btoa(String.fromCharCode(...new Uint8Array(s2)));
+    }
+
+    connect(isManual = false) {
+      if (!this.enabled) return;
+      if (this.reconnectTimer) {
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+      }
+
+      if (this.ws) {
+        try { this.ws.close(); } catch (e) {}
+        this.ws = null;
+      }
+
+      this.updateStatus("connecting", isManual ? "再接続中…" : "接続試行中…");
+
+      try {
+        this.ws = new WebSocket(this.url);
+      } catch (e) {
+        this.updateStatus("disconnected", "接続不可 (URL不正)");
+        this.scheduleReconnect();
+        return;
+      }
+
+      this.ws.onopen = () => {};
+
+      this.ws.onmessage = async (evt) => {
+        try {
+          const msg = JSON.parse(evt.data);
+          const op = msg.op;
+          const d = msg.d;
+
+          if (op === 0) {
+            await this.handleHello(d);
+          } else if (op === 2) {
+            this.handleIdentified();
+          } else if (op === 5) {
+            this.handleEvent(d);
+          } else if (op === 7) {
+            this.handleResponse(d);
+          }
+        } catch (err) {
+          console.error("OBS WS parse error:", err);
+        }
+      };
+
+      this.ws.onerror = () => {};
+
+      this.ws.onclose = () => {
+        this.ws = null;
+        this.setMuteState(false);
+        if (this.enabled) {
+          this.updateStatus("disconnected", "未接続 (OBS未起動)");
+          this.scheduleReconnect();
+        }
+      };
+    }
+
+    scheduleReconnect() {
+      if (!this.enabled) return;
+      if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = setTimeout(() => {
+        this.connect();
+      }, this.retryInterval);
+    }
+
+    disconnect() {
+      if (this.reconnectTimer) {
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+      }
+      if (this.ws) {
+        try { this.ws.close(); } catch (e) {}
+        this.ws = null;
+      }
+    }
+
+    async handleHello(d) {
+      const identifyPayload = {
+        rpcVersion: 1,
+        eventSubscriptions: 8 // EventSubscription::Inputs (1 << 3)
+      };
+
+      if (d.authentication) {
+        if (!this.password) {
+          this.updateStatus("error", "パスワードが必要です");
+          return;
+        }
+        const auth = await this.computeAuth(this.password, d.authentication.salt, d.authentication.challenge);
+        identifyPayload.authentication = auth;
+      }
+
+      this.send(1, identifyPayload);
+    }
+
+    handleIdentified() {
+      this.updateStatus("connected", "OBS接続中");
+      this.send(6, { requestType: "GetSpecialInputs", requestId: "req-special" });
+      this.send(6, { requestType: "GetInputList", requestId: "req-input-list" });
+    }
+
+    handleResponse(d) {
+      if (d.requestId === "req-special") {
+        if (d.requestStatus && d.requestStatus.result && d.responseData) {
+          this.specialMic = d.responseData.mic1 || d.responseData.mic2;
+          this.determineActiveMic();
+        }
+      } else if (d.requestId === "req-input-list") {
+        if (d.requestStatus && d.requestStatus.result && d.responseData && d.responseData.inputs) {
+          this.populateSourceList(d.responseData.inputs);
+          this.determineActiveMic();
+        }
+      } else if (d.requestId === "req-get-mute") {
+        if (d.requestStatus && d.requestStatus.result && d.responseData) {
+          this.setMuteState(Boolean(d.responseData.inputMuted));
+        }
+      }
+    }
+
+    handleEvent(d) {
+      if (d.eventType === "InputMuteStateChanged") {
+        const data = d.eventData;
+        if (data && this.isMatchingSource(data.inputName)) {
+          this.setMuteState(Boolean(data.inputMuted));
+        }
+      } else if (d.eventType === "InputCreated" || d.eventType === "InputRemoved") {
+        this.send(6, { requestType: "GetInputList", requestId: "req-input-list" });
+      }
+    }
+
+    populateSourceList(inputs) {
+      this.availableSources = inputs.filter(i => {
+        const k = (i.inputKind || "").toLowerCase();
+        return k.includes("input") || k.includes("wasapi") || k.includes("pulse") || k.includes("coreaudio") || k.includes("mic");
+      }).map(i => i.inputName);
+
+      const select = this.sourceSelect;
+      if (!select) return;
+      const currentVal = this.targetSource;
+      select.innerHTML = '<option value="__auto__">自動検出 (Mic/Aux または最初のマイク)</option>';
+
+      this.availableSources.forEach(name => {
+        const opt = document.createElement("option");
+        opt.value = name;
+        opt.textContent = name;
+        if (name === currentVal) opt.selected = true;
+        select.appendChild(opt);
+      });
+    }
+
+    determineActiveMic() {
+      if (this.targetSource && this.targetSource !== "__auto__") {
+        this.activeMicName = this.targetSource;
+      } else {
+        this.activeMicName = this.specialMic || (this.availableSources.length > 0 ? this.availableSources[0] : "Mic/Aux");
+      }
+      this.updateStatus("connected", `OBS接続中 (${this.activeMicName})`);
+      this.refreshCurrentMuteState();
+    }
+
+    isMatchingSource(inputName) {
+      if (!this.activeMicName) return true;
+      return inputName === this.activeMicName;
+    }
+
+    refreshCurrentMuteState() {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.activeMicName) return;
+      this.send(6, {
+        requestType: "GetInputMute",
+        requestId: "req-get-mute",
+        requestData: { inputName: this.activeMicName }
+      });
+    }
+
+    send(op, d) {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+      this.ws.send(JSON.stringify({ op, d }));
+    }
+  }
+
+  window.obsMuteSync = new ObsMuteSync();
+
 </script>
 
 </body>

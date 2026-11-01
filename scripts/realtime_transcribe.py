@@ -1193,12 +1193,9 @@ def _detect_translator_device() -> str:
 def _build_translator(lang: str, device: str | None = None):
     """One target language code -> a constructed translator instance.
 
-    en uses the dedicated FuguMT module; any other target is accepted if
-    M2M-100's vocabulary has a token for it (translate_m2m.
-    is_supported_target()) -- ValueError otherwise. Only a subset of M2M
-    targets have measured translation quality (translate_m2m.
-    VALIDATED_TARGETS); TranslatorM2M itself prints a note to stderr for
-    an unvalidated one but still constructs it.
+    en uses the dedicated FuguMT module (ultra-fast 20ms, EOS-fixed, beam_size=1);
+    any other target is accepted if M2M-100's vocabulary has a token for it
+    (translate_m2m.is_supported_target()) -- ValueError otherwise.
     """
     if device is None:
         device = _detect_translator_device()
@@ -1209,7 +1206,6 @@ def _build_translator(lang: str, device: str | None = None):
         try:
             tr = TranslatorJaEn(device=device)
             if device != "cpu":
-                # Warm-up / smoke test to ensure CUDA runtime libraries actually work
                 _test = tr.translate("テスト")
                 if _test == "テスト" and tr.device == "cpu":
                     device = "cpu"

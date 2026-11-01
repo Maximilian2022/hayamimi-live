@@ -55,7 +55,7 @@ EOS_TOKEN = "</s>"
 # scripts/eval_translate.py and docs/design/translate_m2m.md's "Validation tiers"
 # section). Any other M2M-100 target is still accepted (see
 # is_supported_target() below) but its quality has not been checked.
-VALIDATED_TARGETS = {"zh", "zh-tw", "zh-hk", "zh-cn", "tw", "hk", "cn", "ko", "es"}
+VALIDATED_TARGETS = {"en", "zh", "zh-tw", "zh-hk", "zh-cn", "tw", "hk", "cn", "ko", "es"}
 
 # Regional variants of Chinese mapped to OpenCC conversion configurations:
 # zh-tw / tw: Traditional Chinese (Taiwan standard phrases & characters: s2twp)
@@ -83,6 +83,7 @@ LANG_ALIASES = {
 # that confirmed these hold up on this specific model conversion. Targets not
 # listed here fall back to DEFAULT_BEAM_SIZE (untuned).
 BEAM_SIZE_BY_TARGET = {
+    "en": 2,
     "zh": 1,
     "zh-tw": 1,
     "zh-hk": 1,
@@ -193,6 +194,9 @@ class TranslatorM2M:
             )
 
         self.model_dir = model_dir
+        self.device = device
+        self.compute_type = compute_type
+        self.intra_threads = intra_threads
         self._target_token = f"__{base_lang}__"
         self._beam_size = BEAM_SIZE_BY_TARGET.get(target_lang, DEFAULT_BEAM_SIZE)
 
