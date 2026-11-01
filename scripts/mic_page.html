@@ -700,6 +700,48 @@
     .subpanel.active { display: block; animation: fadeIn 0.2s ease; }
     .optgroup-header { font-weight: bold; color: var(--paper-dim); }
 
+    /* 優先タグ (Priority Tags) 複数選択チップ */
+    .tag-container {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 6px;
+    }
+    .tag-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid #334155;
+      color: #94A3B8;
+      border-radius: 12px;
+      padding: 3px 9px;
+      font-size: 0.72rem;
+      font-family: var(--mono, monospace);
+      user-select: none;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .tag-chip:hover {
+      background: rgba(255, 255, 255, 0.12);
+      color: #F8FAFC;
+    }
+    .tag-chip.active {
+      background: rgba(249, 115, 22, 0.2);
+      border-color: #F97316;
+      color: #FDBA74;
+      box-shadow: 0 0 6px rgba(249, 115, 22, 0.3);
+    }
+    .tag-chip.common {
+      background: rgba(56, 189, 248, 0.1);
+      border-color: rgba(56, 189, 248, 0.3);
+      color: #7DD3FC;
+    }
+    .tag-chip.common.active {
+      background: rgba(56, 189, 248, 0.25);
+      border-color: #38BDF8;
+      color: #BAE6FD;
+    }
 </style>
 </head>
 <body>
@@ -856,12 +898,26 @@
         <div class="form-group" style="margin-top: 0.6rem;">
           <div style="display: flex; justify-content: space-between; align-items: center;">
             <label for="cfg-speaker-profile">話者特化プロファイル (活舌・癖補正):</label>
-            <a href="/profile" target="_blank" style="font-size: 0.72rem; color: #38BDF8; text-decoration: none;">⚙ 作成・管理 ↗</a>
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <button id="btn-reload-profiles" type="button" class="btn btn-secondary btn-sm" style="font-size: 0.72rem; padding: 2px 7px;" title="プロファイル一覧を再読み込み">🔄 再読み込み</button>
+              <a href="/profile" target="_blank" style="font-size: 0.72rem; color: #38BDF8; text-decoration: none;">⚙ 作成・管理 ↗</a>
+            </div>
           </div>
           <select id="cfg-speaker-profile">
             <option value="">なし (標準認識)</option>
           </select>
           <div class="desc">特定の話者の発声の癖やゲーム内固有名詞を自動補正する置換辞書を適用します。</div>
+
+          <!-- 優先タグ複数選択エリア (プロファイル選択時に動的表示) -->
+          <div id="speaker-profile-tags-group" style="margin-top: 0.6rem; display: none; background: rgba(0,0,0,0.25); border: 1px solid #1E293B; border-radius: 6px; padding: 8px 10px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+              <label style="font-size: 0.76rem; color: #94A3B8; margin: 0; font-weight: 600;">🏷️ 優先タグ (クリックで複数選択・即時反映):</label>
+              <span id="active-tags-count-badge" style="font-size: 0.7rem; color: #38BDF8; font-family: monospace;"></span>
+            </div>
+            <div id="speaker-profile-tags-container" class="tag-container">
+              <!-- 動的タグチップ -->
+            </div>
+          </div>
         </div>
 
         <div class="form-row">
@@ -2163,26 +2219,54 @@
     }
   }
 
-  // --- 話者特化プロファイル連携 ---
-  async function loadSpeakerProfiles() {
+  // --- 話者特化プロファイル & 優先タグ連携 ---
+  let loadedProfilesList = [];
+  let currentActiveSpeakerId = null;
+  let activeProfileTagsMap = {}; // speakerId -> Set of active tags
+
+  async function loadSpeakerProfiles(keepSelection = true) {
     const sel = document.getElementById("cfg-speaker-profile");
     if (!sel) return;
     try {
       const res = await fetch("/api/profiles");
       if (res.ok) {
-        const profs = await res.json();
-        const currentVal = localStorage.getItem("hayamimi_speaker_profile") || "";
+        loadedProfilesList = await res.json();
+        const storedSpk = localStorage.getItem("hayamimi_speaker_profile") || "";
+        const currentVal = keepSelection ? (sel.value || storedSpk) : storedSpk;
         sel.innerHTML = '<option value="">なし (標準認識)</option>';
-        profs.forEach(p => {
+        loadedProfilesList.forEach(p => {
           const opt = document.createElement("option");
           opt.value = p.speaker_id;
           const vpIcon = (p.voiceprint && p.voiceprint.length) ? " 🎙️[声紋済]" : "";
-          opt.textContent = `${p.display_name} (${p.speaker_id})${vpIcon}`;
+          const tagCount = (p.available_tags && p.available_tags.length) ? ` (${p.available_tags.length}タグ)` : "";
+          opt.textContent = `${p.display_name} (${p.speaker_id})${tagCount}${vpIcon}`;
           if (p.speaker_id === currentVal) opt.selected = true;
           sel.appendChild(opt);
         });
-        if (currentVal) {
-          applySpeakerProfile(currentVal, false);
+
+        // サーバー側のアクティブプロファイル状態も照合
+        try {
+          const actRes = await fetch("/api/profiles/active");
+          if (actRes.ok) {
+            const actData = await actRes.json();
+            if (actData.active && actData.speaker_id) {
+              currentActiveSpeakerId = actData.speaker_id;
+              if (actData.active_tags) {
+                activeProfileTagsMap[actData.speaker_id] = new Set(actData.active_tags);
+              }
+              if (!sel.value && loadedProfilesList.some(p => p.speaker_id === actData.speaker_id)) {
+                sel.value = actData.speaker_id;
+              }
+            }
+          }
+        } catch (_) {}
+
+        const activeId = sel.value;
+        if (activeId) {
+          renderProfileTags(activeId);
+          applySpeakerProfile(activeId, false);
+        } else {
+          renderProfileTags("");
         }
       }
     } catch (e) {
@@ -2190,7 +2274,82 @@
     }
   }
 
-  async function applySpeakerProfile(speakerId, notify = true) {
+  function renderProfileTags(speakerId) {
+    const group = document.getElementById("speaker-profile-tags-group");
+    const container = document.getElementById("speaker-profile-tags-container");
+    const badge = document.getElementById("active-tags-count-badge");
+    if (!group || !container) return;
+
+    if (!speakerId) {
+      group.style.display = "none";
+      container.innerHTML = "";
+      if (badge) badge.textContent = "";
+      return;
+    }
+
+    const prof = loadedProfilesList.find(p => p.speaker_id === speakerId);
+    if (!prof) {
+      group.style.display = "none";
+      return;
+    }
+
+    group.style.display = "block";
+    container.innerHTML = "";
+
+    const allTags = prof.available_tags || ["共通"];
+    if (!activeProfileTagsMap[speakerId]) {
+      // localStorage から復元または初期値（全タグ選択）
+      try {
+        const saved = localStorage.getItem("hayamimi_speaker_tags_" + speakerId);
+        if (saved) {
+          activeProfileTagsMap[speakerId] = new Set(JSON.parse(saved));
+        } else {
+          activeProfileTagsMap[speakerId] = new Set(allTags);
+        }
+      } catch (_) {
+        activeProfileTagsMap[speakerId] = new Set(allTags);
+      }
+    }
+
+    const activeSet = activeProfileTagsMap[speakerId];
+    if (badge) {
+      badge.textContent = `選択中: ${activeSet.size} / ${allTags.length}タグ`;
+    }
+
+    allTags.forEach(tag => {
+      const isCommon = (tag === "共通");
+      const isSel = activeSet.has(tag);
+      const chip = document.createElement("span");
+      chip.className = `tag-chip ${isCommon ? 'common' : ''} ${isSel ? 'active' : ''}`;
+      chip.textContent = `${isSel ? '✓ ' : '+ '}${tag}`;
+      chip.title = isSel ? `クリックして除外 (${tag})` : `クリックして追加 (${tag})`;
+      chip.onclick = (e) => {
+        e.stopPropagation();
+        toggleProfileTag(speakerId, tag);
+      };
+      container.appendChild(chip);
+    });
+  }
+
+  async function toggleProfileTag(speakerId, tag) {
+    if (!activeProfileTagsMap[speakerId]) {
+      const prof = loadedProfilesList.find(p => p.speaker_id === speakerId);
+      activeProfileTagsMap[speakerId] = new Set(prof ? prof.available_tags : ["共通"]);
+    }
+    const tagSet = activeProfileTagsMap[speakerId];
+    if (tagSet.has(tag)) {
+      tagSet.delete(tag);
+      // 0個になった場合は最低限「共通」を保持
+      if (tagSet.size === 0) tagSet.add("共通");
+    } else {
+      tagSet.add(tag);
+    }
+    localStorage.setItem("hayamimi_speaker_tags_" + speakerId, JSON.stringify(Array.from(tagSet)));
+    renderProfileTags(speakerId);
+    await applySpeakerProfile(speakerId, true, Array.from(tagSet));
+  }
+
+  async function applySpeakerProfile(speakerId, notify = true, targetTags = null) {
     const saveMsg = document.getElementById("save-msg");
     if (!speakerId) {
       try {
@@ -2200,6 +2359,7 @@
           body: JSON.stringify({}),
         });
         localStorage.removeItem("hayamimi_speaker_profile");
+        renderProfileTags("");
         if (notify && saveMsg) {
           saveMsg.textContent = "話者プロファイルを解除しました（標準辞書）";
           saveMsg.style.display = "block";
@@ -2208,18 +2368,36 @@
       } catch (e) {}
       return;
     }
+
+    // 適用するタグ一覧の特定
+    if (!targetTags) {
+      if (activeProfileTagsMap[speakerId]) {
+        targetTags = Array.from(activeProfileTagsMap[speakerId]);
+      } else {
+        const prof = loadedProfilesList.find(p => p.speaker_id === speakerId);
+        targetTags = prof ? prof.available_tags : ["共通"];
+      }
+    }
+
     try {
       const res = await fetch("/api/profiles/apply", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ speaker_id: speakerId }),
+        body: JSON.stringify({ speaker_id: speakerId, active_tags: targetTags }),
       });
       if (res.ok) {
         const data = await res.json();
+        currentActiveSpeakerId = speakerId;
         localStorage.setItem("hayamimi_speaker_profile", speakerId);
+        if (data.active_tags) {
+          activeProfileTagsMap[speakerId] = new Set(data.active_tags);
+        }
+        renderProfileTags(speakerId);
+
         if (notify && saveMsg) {
           const vpInfo = data.has_voiceprint ? " (🎙️ 声紋特徴量 512次元を認識)" : "";
-          saveMsg.textContent = `話者プロファイル「${data.display_name || speakerId}」を適用しました！${vpInfo}`;
+          const tagInfo = data.active_tags ? ` (優先タグ: ${data.active_tags.join(", ")})` : "";
+          saveMsg.textContent = `話者プロファイル「${data.display_name || speakerId}」を適用しました！${tagInfo}${vpInfo}`;
           saveMsg.style.display = "block";
           setTimeout(() => { saveMsg.style.display = "none"; saveMsg.textContent = "設定を保存しました"; }, 3500);
         }
@@ -2230,8 +2408,28 @@
   }
 
   document.getElementById("cfg-speaker-profile").addEventListener("change", (e) => {
-    applySpeakerProfile(e.target.value, true);
+    const sid = e.target.value;
+    renderProfileTags(sid);
+    applySpeakerProfile(sid, true);
   });
+
+  // プロファイル再読み込みボタン
+  const btnReloadProfiles = document.getElementById("btn-reload-profiles");
+  if (btnReloadProfiles) {
+    btnReloadProfiles.addEventListener("click", async () => {
+      btnReloadProfiles.textContent = "🔄 読込中...";
+      btnReloadProfiles.disabled = true;
+      await loadSpeakerProfiles(true);
+      btnReloadProfiles.textContent = "🔄 再読み込み";
+      btnReloadProfiles.disabled = false;
+      const saveMsg = document.getElementById("save-msg");
+      if (saveMsg) {
+        saveMsg.textContent = "話者プロファイル一覧を再読み込みしました！";
+        saveMsg.style.display = "block";
+        setTimeout(() => { saveMsg.style.display = "none"; saveMsg.textContent = "設定を保存しました"; }, 3500);
+      }
+    });
+  }
 
   loadConfigAndStyle();
   loadSpeakerProfiles();

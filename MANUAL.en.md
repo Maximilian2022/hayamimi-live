@@ -143,14 +143,15 @@ Automatically extracts proper nouns and pronunciation patterns from past streams
 ### Priority Tags & Video Title Hashtag Integration
 For creators streaming multiple games or themes, "Priority Tags" let you tag individual vocabulary items and selectively activate them.
 
-1. **Automatic Hashtag Extraction from YouTube Titles**:
-   - When generating or growing a profile from a YouTube video URL or channel, hashtags in the video title (e.g. `【#ApexLegends】Ranked Grind` ──▶ `#ApexLegends`) are automatically detected and assigned to extracted terms.
+1. **Automatic Hashtag Extraction from YouTube Titles & Descriptions**:
+   - When generating or growing a profile from a YouTube video URL or channel, hashtags in both the video title and description (e.g. `【#ApexLegends】Ranked Grind` and description `#GTA RP` ──▶ `#ApexLegends`, `#GTARP`) are automatically detected and assigned to extracted terms.
    - General speaking quirks and non-hashtag terms are assigned the "`共通`" (Common) tag.
 2. **Multi-Game Vocabulary Growth**:
    - When training on additional videos from different games, existing words retain previous tags while newly detected tags are merged without duplication (e.g., "ウルト" can organically belong to both `#ApexLegends` and `#OW2`).
-3. **Tag Selection & ASR Injection via Launcher and Web UI**:
-   - **Web UI (`/profile`)**: Tag chips appear on profile cards. Clicking chips immediately updates the active ASR dictionary with selected tags. Individual rule tags can also be edited in the modal.
-   - **Launcher (`launcher_gui.ps1`)**: Selecting a profile displays its priority tags as checkboxes. Clicking "⚡ Apply" loads the selected tags into the ASR engine (or queues them for automatic injection on startup).
+3. **Tag Multi-Selection & Hot-Reload on Web Mic Page (`/mic`)**:
+   - **Web Mic Page (`/mic`)**: Selecting a speaker profile dynamically reveals priority tag chips (e.g., `[✓ Common]` `[✓ #Apex]` `[  #GTARP]`). Click chips to multi-select tags and immediately hot-reload the ASR replacement dictionary without typing.
+   - **🔄 Reload Button**: Located beside the profile selector to instantly refresh profile lists and rule updates without restarting the server or launcher.
+   - **Management Page (`/profile`)**: Inspect tags on cards and edit individual rule tags via modal.
 4. **SudachiPy Morphological Correction**:
    - Fast morphological analysis (~0.02ms / 0.02% CPU) prevents improper splitting of compound gaming terms and applies natural normalization during both live in-progress drafts and final confirmed subtitles.
 5. **Automatic Profile Migration**:

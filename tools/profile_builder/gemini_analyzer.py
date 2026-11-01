@@ -453,11 +453,10 @@ class GeminiProfileAnalyzer:
             vid_id = None
             extracted_tags = []
             if metadata:
-                from tools.profile_builder.youtube_fetcher import extract_video_id, extract_hashtags
+                from tools.profile_builder.youtube_fetcher import extract_video_id, extract_hashtags_from_metadata
                 if metadata.url:
                     vid_id = extract_video_id(metadata.url)
-                if metadata.title:
-                    extracted_tags = extract_hashtags(metadata.title)
+                extracted_tags = extract_hashtags_from_metadata(metadata)
 
             # Default to ['共通'] if no hashtags were found in video title
             if not extracted_tags:

@@ -25,6 +25,10 @@ All models run locally on the CPU using quantized INT8 weights. Because live spe
   Provides a transparent browser source overlay with real-time styling controls for fonts, sizing, colors, outlines, and display effects (standard stroke, double outline, glow). Main speech and translation lines can be styled independently.
 - **Automated Dictionary Generation from YouTube Archives**:
   Analyzes past stream archives (video, playlist, or channel URLs) to detect proper nouns, game terminology, and speech characteristics, automatically generating phonetic replacement dictionaries to prevent misrecognitions.
+- **Stream-Linked Priority Tags**:
+  Automatically extracts hashtags from both video titles and descriptions (e.g., `#ApexLegends`, `#StreetFighter6`) and tags each extracted term. Multi-select relevant tags on the Web Mic page (`/mic`) to inject specialized gaming vocabularies directly into the ASR engine.
+- **Morphological Correction (SudachiPy)**:
+  Prevents mis-segmentation of gaming terms, applying fast and natural word-boundary correction during both live drafting and final confirmation with ultra-low latency (~0.02ms).
 - **Local Data Privacy**:
   Audio buffers are processed in-memory and discarded. No audio recordings or transcripts are transmitted to external servers.
 
@@ -45,8 +49,8 @@ When the desktop launcher appears, click **"Start Speech Recognition"**.
 Navigate to `http://localhost:8833/mic` in your browser.  
 Select your microphone input, choose target translation languages, and customize subtitle appearance. Changes apply to the OBS overlay immediately.
 
-### 4. Custom Dictionary (Optional)
-Navigate to `http://localhost:8833/profile` to generate a personalized replacement dictionary by analyzing your past YouTube stream archives.
+### 4. Custom Dictionary & Priority Tags (Optional)
+Navigate to `http://localhost:8833/profile` to generate a personalized replacement dictionary from YouTube stream archives. Active tags can be multi-selected and hot-reloaded with one click on the Web Mic page (`/mic`).
 
 ---
 

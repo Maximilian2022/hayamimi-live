@@ -266,6 +266,22 @@ def extract_hashtags(title: str) -> List[str]:
     return tags
 
 
+def extract_hashtags_from_metadata(metadata: Any) -> List[str]:
+    """Extract hashtags from both video title and description, preserving order and deduplicating."""
+    if not metadata:
+        return []
+    title = getattr(metadata, "title", "") or ""
+    desc = getattr(metadata, "description", "") or ""
+    combined = []
+    seen = set()
+    for text in (title, desc):
+        for tag in extract_hashtags(text):
+            if tag.lower() not in seen:
+                seen.add(tag.lower())
+                combined.append(tag)
+    return combined
+
+
 def discover_working_browser(test_url: str, yt_dlp_cmd: Union[str, List[str]] = "yt-dlp") -> Optional[str]:
     """Probe installed browsers with yt-dlp if opt-in via HAYAMIMI_ALLOW_BROWSER_COOKIES=1."""
     global _WORKING_COOKIE_BROWSER

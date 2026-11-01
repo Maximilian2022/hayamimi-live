@@ -327,7 +327,7 @@ def _execute_maintenance(server, log_callback=None):
                     logger.error("Maintenance video %s failed: %s", v_info["url"], ve)
 
         # 3. Migrate legacy profiles & tags (schema 1.2.0, one-time automatic execution)
-        from tools.profile_builder.youtube_fetcher import extract_hashtags, YouTubeFetcher
+        from tools.profile_builder.youtube_fetcher import extract_hashtags_from_metadata, YouTubeFetcher
         fetcher = None
         profs = list_profiles(pdir)
         for p in profs:
@@ -339,8 +339,8 @@ def _execute_maintenance(server, log_callback=None):
                             if fetcher is None:
                                 fetcher = YouTubeFetcher()
                             meta = fetcher.fetch_metadata(f"https://www.youtube.com/watch?v={r.source_video_id}")
-                            if meta and meta.title:
-                                tags = extract_hashtags(meta.title)
+                            if meta:
+                                tags = extract_hashtags_from_metadata(meta)
                                 if tags:
                                     r.tags = tags
                         except Exception:

@@ -18,7 +18,7 @@ from tools.profile_builder.profile_model import (
     ReplacementRule,
     CURRENT_SCHEMA_VERSION,
 )
-from tools.profile_builder.youtube_fetcher import extract_hashtags
+from tools.profile_builder.youtube_fetcher import extract_hashtags, extract_hashtags_from_metadata, VideoMetadata
 from tools.profile_builder.profile_exporter import save_profile, load_profile
 
 
@@ -46,6 +46,22 @@ class TestHashtagExtraction(unittest.TestCase):
         tags = extract_hashtags(title)
         # Case-insensitive deduplication preserves first occurrence
         self.assertEqual(tags, ["#Apex"])
+
+    def test_extract_hashtags_from_metadata_title_and_description(self):
+        meta = VideoMetadata(
+            video_id="test1234",
+            title="【#Apex】ランクマ配信！ソロダイヤいくぞ",
+            channel="TestChannel",
+            description="ご視聴ありがとうございます！\nチャンネル登録よろしく！\n#ApexLegends #ストグラ #ゲーム実況",
+            duration_sec=3600.0,
+            tags=["Apex", "FPS"]
+        )
+        tags = extract_hashtags_from_metadata(meta)
+        self.assertIn("#Apex", tags)
+        self.assertIn("#ApexLegends", tags)
+        self.assertIn("#ストグラ", tags)
+        self.assertIn("#ゲーム実況", tags)
+        self.assertEqual(len(tags), 4)
 
 
 class TestProfileModelPriorityTags(unittest.TestCase):

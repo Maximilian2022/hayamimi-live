@@ -1,5 +1,5 @@
 ﻿# --- バージョン管理 (version.txt を Single Source of Truth として動的同期) ---
-$script:AppVersion = "1.6.0"
+$script:AppVersion = "1.6.1"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $versionTxtFile = Join-Path $repoRoot "version.txt"
 if (Test-Path $versionTxtFile) {
@@ -480,7 +480,7 @@ function Update-ContainerLogFile {
 [xml]$xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Hayamimi Live ランチャー (GUI v1.6.0)"
+        Title="Hayamimi Live ランチャー (GUI v1.6.1)"
         Height="780" Width="780"
         MinHeight="680" MinWidth="720"
         WindowStartupLocation="CenterScreen"
@@ -534,9 +534,8 @@ function Update-ContainerLogFile {
             <RowDefinition Height="Auto"/> <!-- ヘッダー (Row 0) -->
             <RowDefinition Height="Auto"/> <!-- ステータス &amp; 設定カード (Row 1) -->
             <RowDefinition Height="Auto"/> <!-- 操作ボタンエリア (Row 2) -->
-            <RowDefinition Height="Auto"/> <!-- 話者プロファイル &amp; 優先タグ (Row 3) -->
-            <RowDefinition Height="Auto"/> <!-- Web画面クイックリンク (Row 4) -->
-            <RowDefinition Height="*"/>    <!-- ログコンソール (Row 5, 伸縮) -->
+            <RowDefinition Height="Auto"/> <!-- Web画面クイックリンク (Row 3) -->
+            <RowDefinition Height="*"/>    <!-- ログコンソール (Row 4, 伸縮) -->
         </Grid.RowDefinitions>
 
         <!-- 0. ヘッダー -->
@@ -559,7 +558,7 @@ function Update-ContainerLogFile {
                         <TextBlock x:Name="GpuBadge" Text="⚡ GPU: 検出中..." FontSize="11" Foreground="#10B981" FontWeight="SemiBold"/>
                     </Border>
                     <Border Background="#1E1B4B" CornerRadius="12" Padding="10,5" Margin="0,0,8,0" BorderBrush="#4338CA" BorderThickness="1">
-                        <TextBlock x:Name="VersionBadge" Text="GUI v1.6.0" FontSize="11" Foreground="#A5B4FC" FontWeight="Bold" FontFamily="{StaticResource MonoFont}"/>
+                        <TextBlock x:Name="VersionBadge" Text="GUI v1.6.1" FontSize="11" Foreground="#A5B4FC" FontWeight="Bold" FontFamily="{StaticResource MonoFont}"/>
                     </Border>
                     <Border Background="#141B2D" CornerRadius="12" Padding="10,5" BorderBrush="#253350" BorderThickness="1">
                         <TextBlock x:Name="RuntimeBadge" Text="Python venv" FontSize="11" Foreground="#38BDF8" FontWeight="SemiBold"/>
@@ -737,43 +736,8 @@ function Update-ContainerLogFile {
             </Grid>
         </Grid>
 
-        <!-- 3. 話者プロファイル & 優先タグ (ASR自動投入) -->
+        <!-- 3. Web画面クイックリンク -->
         <Border Grid.Row="3" Background="#111622" CornerRadius="8" Padding="14,9" Margin="0,0,0,14" BorderBrush="#1C2434" BorderThickness="1">
-            <Grid>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                </Grid.RowDefinitions>
-                <Grid Grid.Row="0">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="220"/>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="*"/>
-                    </Grid.ColumnDefinitions>
-                    <TextBlock Grid.Column="0" Text="👤 話者プロファイル:" FontSize="12" FontWeight="SemiBold" Foreground="#94A3B8" VerticalAlignment="Center" Margin="0,0,10,0"/>
-                    <ComboBox x:Name="CmbProfile" Grid.Column="1" Height="26" FontSize="11.5" Background="#1A2234" Foreground="#F8FAFC" BorderBrush="#253350" VerticalContentAlignment="Center"/>
-                    <Button x:Name="BtnRefreshProfiles" Grid.Column="2" Content="🔄" Width="26" Height="26" Margin="6,0,0,0" Background="#152033" BorderBrush="#2563EB" BorderThickness="1" Foreground="#60A5FA" ToolTip="プロファイル一覧を再読み込み"/>
-                    <StackPanel Grid.Column="3" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                        <TextBlock x:Name="TxtActiveProfileStatus" Text="未適用" FontSize="11" Foreground="#64748B" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                        <Button x:Name="BtnApplyProfile" Content="⚡ 適用" Background="#10B981" Foreground="#041E15" FontWeight="Bold" FontSize="11" Padding="10,4" Height="26"/>
-                    </StackPanel>
-                </Grid>
-                <Grid Grid.Row="1" Margin="0,8,0,0">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="*"/>
-                    </Grid.ColumnDefinitions>
-                    <TextBlock Grid.Column="0" Text="🏷️ 優先タグ:" FontSize="11.5" FontWeight="SemiBold" Foreground="#64748B" VerticalAlignment="Center" Margin="0,0,10,0"/>
-                    <WrapPanel x:Name="PnlProfileTags" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                        <TextBlock Text="（プロファイルを選択してください）" FontSize="11" Foreground="#475569" VerticalAlignment="Center"/>
-                    </WrapPanel>
-                </Grid>
-            </Grid>
-        </Border>
-
-        <!-- 4. Web画面クイックリンク -->
-        <Border Grid.Row="4" Background="#111622" CornerRadius="8" Padding="14,9" Margin="0,0,0,14" BorderBrush="#1C2434" BorderThickness="1">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
@@ -815,8 +779,8 @@ function Update-ContainerLogFile {
             </Grid>
         </Border>
 
-        <!-- 5. ログコンソール (MinHeight 240px、タイトルとボタン群の絶対非重複グリッド) -->
-        <Border Grid.Row="5" Background="#090D14" CornerRadius="8" BorderBrush="#1C2433" BorderThickness="1" MinHeight="240">
+        <!-- 4. ログコンソール (MinHeight 240px、タイトルとボタン群の絶対非重複グリッド) -->
+        <Border Grid.Row="4" Background="#090D14" CornerRadius="8" BorderBrush="#1C2433" BorderThickness="1" MinHeight="240">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
@@ -923,12 +887,6 @@ $btnOpenObs = $window.FindName("BtnOpenObs")
 $btnOpenDashboard = $window.FindName("BtnOpenDashboard")
 $btnOpenProfile = $window.FindName("BtnOpenProfile")
 $btnOpenOverlay = $window.FindName("BtnOpenOverlay")
-$cmbProfile = $window.FindName("CmbProfile")
-$btnRefreshProfiles = $window.FindName("BtnRefreshProfiles")
-$btnApplyProfile = $window.FindName("BtnApplyProfile")
-$txtActiveProfileStatus = $window.FindName("TxtActiveProfileStatus")
-$pnlProfileTags = $window.FindName("PnlProfileTags")
-$script:LoadedProfiles = @()
 $logTextBox = $window.FindName("LogTextBox")
 $logScrollViewer = $window.FindName("LogScrollViewer")
 $btnClearLog = $window.FindName("BtnClearLog")
@@ -3026,9 +2984,6 @@ $healthTimer.Add_Tick({
         Write-AppLog "✔ サーバーの全モジュール（モデルロード/HTTP/WebSocket）の起動が完了しました！" "INFO"
         Write-AppLog "ブラウザ（MICページ）を開きます: $MicUrl" "INFO"
 
-        # 選択中のプロファイル & 優先タグがあれば自動適用
-        Apply-SelectedProfileAndTags -Silent $true
-
         # リスナーが完全に安定するまで 500ms 待機
         Start-Sleep -Milliseconds 500
 
@@ -3569,177 +3524,6 @@ if ($btnUpdateWsl) {
 $btnOpenMic.Add_Click({ Start-Process $MicUrl })
 $btnOpenObs.Add_Click({ Start-Process $ObsUrl })
 $btnOpenDashboard.Add_Click({ Start-Process $DashboardUrl })
-# プロファイル & 優先タグ UI ロジック
-function Load-ProfilesIntoCmb {
-    if (-not $cmbProfile) { return }
-    $pDir = Join-Path $ProjectRoot "profiles"
-    $script:LoadedProfiles = @()
-    $cmbProfile.Items.Clear()
-
-    $noneItem = [System.Windows.Controls.ComboBoxItem]::new()
-    $noneItem.Content = "-- 選択なし (共通辞書のみ) --"
-    $noneItem.Tag = ""
-    [void]$cmbProfile.Items.Add($noneItem)
-
-    if (Test-Path $pDir) {
-        $files = Get-ChildItem -Path $pDir -Filter "*.json" -File -ErrorAction SilentlyContinue
-        foreach ($f in $files) {
-            try {
-                $raw = Get-Content $f.FullName -Raw -Encoding UTF8
-                $json = ConvertFrom-Json $raw
-                if ($json.speaker_id) {
-                    $tagsList = [System.Collections.Generic.List[string]]::new()
-                    if ($json.replacements) {
-                        foreach ($r in $json.replacements) {
-                            if ($r.tags) {
-                                foreach ($t in $r.tags) {
-                                    if ($t -and -not $tagsList.Contains($t)) { $tagsList.Add($t) }
-                                }
-                            }
-                        }
-                    }
-                    if (-not $tagsList.Contains("共通")) { $tagsList.Insert(0, "共通") }
-                    $pObj = [PSCustomObject]@{
-                        SpeakerId = $json.speaker_id
-                        DisplayName = if ($json.display_name) { $json.display_name } else { $json.speaker_id }
-                        AvailableTags = $tagsList.ToArray()
-                        RuleCount = if ($json.replacements) { $json.replacements.Count } else { 0 }
-                    }
-                    $script:LoadedProfiles += $pObj
-
-                    $item = [System.Windows.Controls.ComboBoxItem]::new()
-                    $item.Content = "$($pObj.DisplayName) ($($pObj.SpeakerId))"
-                    $item.Tag = $pObj.SpeakerId
-                    [void]$cmbProfile.Items.Add($item)
-                }
-            } catch {}
-        }
-    }
-
-    if ($cmbProfile.Items.Count -gt 1) {
-        $cmbProfile.SelectedIndex = 1
-    } else {
-        $cmbProfile.SelectedIndex = 0
-    }
-}
-
-function Update-ProfileTagsPanel {
-    if (-not $pnlProfileTags -or -not $cmbProfile) { return }
-    $pnlProfileTags.Children.Clear()
-
-    $selectedItem = $cmbProfile.SelectedItem
-    if (-not $selectedItem -or [string]::IsNullOrEmpty($selectedItem.Tag)) {
-        $tb = [System.Windows.Controls.TextBlock]::new()
-        $tb.Text = "（プロファイルを選択してください）"
-        $tb.FontSize = 11
-        $tb.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#475569")
-        $tb.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
-        [void]$pnlProfileTags.Children.Add($tb)
-        return
-    }
-
-    $sid = $selectedItem.Tag
-    $prof = $script:LoadedProfiles | Where-Object { $_.SpeakerId -eq $sid } | Select-Object -First 1
-    if (-not $prof -or -not $prof.AvailableTags -or $prof.AvailableTags.Length -eq 0) {
-        $tb = [System.Windows.Controls.TextBlock]::new()
-        $tb.Text = "（タグなし）"
-        $tb.FontSize = 11
-        $tb.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#475569")
-        [void]$pnlProfileTags.Children.Add($tb)
-        return
-    }
-
-    foreach ($t in $prof.AvailableTags) {
-        $cb = [System.Windows.Controls.CheckBox]::new()
-        $cb.Content = $t
-        $cb.Tag = $t
-        $cb.IsChecked = $true
-        $cb.Margin = [System.Windows.Thickness]::new(0, 0, 10, 0)
-        $cb.FontSize = 11.5
-        $cb.Foreground = if ($t -eq "共通") {
-            [System.Windows.Media.BrushConverter]::new().ConvertFromString("#93C5FD")
-        } else {
-            [System.Windows.Media.BrushConverter]::new().ConvertFromString("#FDBA74")
-        }
-        $cb.Cursor = [System.Windows.Input.Cursors]::Hand
-        [void]$pnlProfileTags.Children.Add($cb)
-    }
-}
-
-function Apply-SelectedProfileAndTags {
-    param([bool]$Silent = $false)
-    if (-not $cmbProfile) { return }
-    $selectedItem = $cmbProfile.SelectedItem
-    if (-not $selectedItem -or [string]::IsNullOrEmpty($selectedItem.Tag)) {
-        if (-not $Silent) {
-            Write-AppLog "適用する話者プロファイルが選択されていません。" "WARN"
-        }
-        return
-    }
-    $sid = $selectedItem.Tag
-    $selectedTags = @()
-    if ($pnlProfileTags) {
-        foreach ($child in $pnlProfileTags.Children) {
-            if ($child -is [System.Windows.Controls.CheckBox] -and $child.IsChecked) {
-                $selectedTags += $child.Tag
-            }
-        }
-    }
-    if ($selectedTags.Count -eq 0) { $selectedTags = @("共通") }
-
-    if (-not (Test-PortInUse 8833)) {
-        if (-not $Silent) {
-            Write-AppLog "サーバーが稼働していません。起動後に自動適用されます。" "INFO"
-        }
-        if ($txtActiveProfileStatus) {
-            $txtActiveProfileStatus.Text = "待機中 (次回起動時)"
-            $txtActiveProfileStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#F59E0B")
-        }
-        return
-    }
-
-    try {
-        $bodyObj = @{
-            speaker_id = $sid
-            active_tags = $selectedTags
-        }
-        $jsonStr = ConvertTo-Json -InputObject $bodyObj -Compress
-        $bytes = [System.Text.Encoding]::UTF8.GetBytes($jsonStr)
-        $resp = Invoke-RestMethod -Uri "http://localhost:8833/api/profiles/apply" -Method Post -ContentType "application/json; charset=utf-8" -Body $bytes -TimeoutSec 3 -ErrorAction Stop
-
-        if ($txtActiveProfileStatus) {
-            $txtActiveProfileStatus.Text = "✔ 適用中 ($($resp.rules_count)件 / $($selectedTags.Count)タグ)"
-            $txtActiveProfileStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#10B981")
-        }
-        Write-AppLog "✔ 話者プロファイル '$sid' を適用しました (優先タグ: $($selectedTags -join ', ') / 有効ルール: $($resp.rules_count)件)" "INFO"
-    } catch {
-        if (-not $Silent) {
-            Write-AppLog "プロファイル適用失敗: $($_.Exception.Message)" "ERROR"
-        }
-        if ($txtActiveProfileStatus) {
-            $txtActiveProfileStatus.Text = "適用エラー"
-            $txtActiveProfileStatus.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#EF4444")
-        }
-    }
-}
-
-if ($cmbProfile) {
-    $cmbProfile.Add_SelectionChanged({ Update-ProfileTagsPanel })
-}
-if ($btnRefreshProfiles) {
-    $btnRefreshProfiles.Add_Click({
-        Load-ProfilesIntoCmb
-        Update-ProfileTagsPanel
-    })
-}
-if ($btnApplyProfile) {
-    $btnApplyProfile.Add_Click({
-        Apply-SelectedProfileAndTags
-    })
-}
-Load-ProfilesIntoCmb
-Update-ProfileTagsPanel
-
 if ($btnOpenProfile) {
     $btnOpenProfile.Add_Click({ Start-Process $ProfileUrl })
 }
