@@ -1033,7 +1033,8 @@ def test_legacy_profile_migration():
     # Migrate
     changed = prof.migrate_from_legacy()
     assert changed is True
-    assert prof.schema_version == "1.1.0"
+    assert prof.schema_version == "1.2.0"
+    assert prof.replacements[0].tags == ["共通"]
     # Verify legacy rule is given grace period using created_at
     assert prof.replacements[0].added_at == "2026-01-01T00:00:00Z"
     assert prof.replacements[0].is_archived is False

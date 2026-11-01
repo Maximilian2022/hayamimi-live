@@ -326,9 +326,29 @@ def _execute_maintenance(server, log_callback=None):
                 except Exception as ve:
                     logger.error("Maintenance video %s failed: %s", v_info["url"], ve)
 
-        # 3. Archive stale rules (180 days / 6 months) across profiles
-        archived_total = 0
+        # 3. Migrate legacy profiles & tags (schema 1.2.0, one-time automatic execution)
+        from tools.profile_builder.youtube_fetcher import extract_hashtags, YouTubeFetcher
+        fetcher = None
         profs = list_profiles(pdir)
+        for p in profs:
+            if p.schema_version != "1.2.0" or any(not getattr(r, "tags", None) for r in p.replacements):
+                p.migrate_from_legacy()
+                for r in p.replacements:
+                    if r.source_video_id and (not r.tags or r.tags == ["共通"]):
+                        try:
+                            if fetcher is None:
+                                fetcher = YouTubeFetcher()
+                            meta = fetcher.fetch_metadata(f"https://www.youtube.com/watch?v={r.source_video_id}")
+                            if meta and meta.title:
+                                tags = extract_hashtags(meta.title)
+                                if tags:
+                                    r.tags = tags
+                        except Exception:
+                            pass
+                save_profile(p, pdir)
+
+        # 4. Archive stale rules (180 days / 6 months) across profiles
+        archived_total = 0
         for p in profs:
             cnt = p.archive_stale_rules(days=180)
             if cnt > 0:
@@ -336,8 +356,9 @@ def _execute_maintenance(server, log_callback=None):
                 save_profile(p, pdir)
                 if server and getattr(server, "_active_profile", None) and server._active_profile.speaker_id == p.speaker_id:
                     server._active_profile = p
+                    active_tags = getattr(server, "_active_profile_tags", None)
                     if server.asr:
-                        mapping = {r.pattern: r.replacement for r in p.replacements if not r.is_archived and r.pattern and r.replacement}
+                        mapping = p.get_active_replacements(active_tags)
                         server.asr.set_replacements(mapping)
 
         final_msg = f"メンテナンス完了: {learned_videos}本の新着動画を学習、{archived_total}件の古いルールを休眠整理しました。"
@@ -1295,16 +1316,24 @@ class SubtitleServer:
                         from tools.profile_builder.profile_exporter import list_profiles
                         pdir = _get_profiles_dir()
                         profs = list_profiles(pdir)
-                        self._json(200, [p.model_dump() for p in profs])
+                        res_list = []
+                        for p in profs:
+                            d = p.model_dump()
+                            d["available_tags"] = p.get_available_tags()
+                            res_list.append(d)
+                        self._json(200, res_list)
                     except Exception as e:
                         self._json(500, {"error": str(e)})
                 elif req_path == "/api/profiles/active":
                     act = getattr(server, "_active_profile", None)
+                    active_tags = getattr(server, "_active_profile_tags", []) or []
                     if act:
                         self._json(200, {
                             "active": True,
                             "speaker_id": act.speaker_id,
                             "display_name": act.display_name,
+                            "available_tags": act.get_available_tags(),
+                            "active_tags": active_tags,
                             "has_voiceprint": bool(act.voiceprint and len(act.voiceprint) > 0),
                             "voiceprint_samples": act.voiceprint_sample_count or 0,
                         })
@@ -1576,6 +1605,10 @@ class SubtitleServer:
                         if not is_safe_speaker_id(sid):
                             self._json(400, {"error": "Invalid speaker_id format"})
                             return
+                        active_tags = payload.get("active_tags")
+                        if active_tags is not None and not isinstance(active_tags, list):
+                            active_tags = [str(active_tags)]
+
                         # Sync existing active profile stats before switching
                         _sync_stats_to_profile(server)
 
@@ -1585,21 +1618,92 @@ class SubtitleServer:
                         if prof is None:
                             self._json(404, {"error": f"profile {sid} not found"})
                             return
-                        mapping = {r.pattern: r.replacement for r in prof.replacements if not r.is_archived and r.pattern and r.replacement}
+                        mapping = prof.get_active_replacements(active_tags)
                         if server.asr is not None:
                             server.asr.set_replacements(mapping)
                         server._active_profile = prof
+                        server._active_profile_tags = active_tags or []
                         has_vp = bool(prof.voiceprint and len(prof.voiceprint) > 0)
                         self._json(200, {
                             "ok": True,
                             "speaker_id": sid,
                             "display_name": prof.display_name,
                             "rules_count": len(mapping),
+                            "total_rules_count": len(prof.replacements),
+                            "available_tags": prof.get_available_tags(),
+                            "active_tags": server._active_profile_tags,
                             "has_voiceprint": has_vp,
                             "voiceprint_samples": prof.voiceprint_sample_count or 0,
                         })
                     except Exception as exc:
                         self._json(400, {"error": str(exc)})
+                    return
+                if req_path == "/api/profiles/update-tags":
+                    code, payload = self._read_json_body()
+                    if code != 200 or payload is None:
+                        return
+                    if not isinstance(payload, dict):
+                        self._json(400, {"error": "body must be a JSON object"})
+                        return
+                    act = getattr(server, "_active_profile", None)
+                    if not act:
+                        self._json(400, {"error": "No active profile"})
+                        return
+                    active_tags = payload.get("active_tags", [])
+                    if not isinstance(active_tags, list):
+                        active_tags = [str(active_tags)]
+                    mapping = act.get_active_replacements(active_tags)
+                    if server.asr is not None:
+                        server.asr.set_replacements(mapping)
+                    server._active_profile_tags = active_tags
+                    self._json(200, {
+                        "ok": True,
+                        "speaker_id": act.speaker_id,
+                        "active_tags": active_tags,
+                        "rules_count": len(mapping),
+                        "total_rules_count": len(act.replacements),
+                        "available_tags": act.get_available_tags(),
+                    })
+                    return
+                if req_path == "/api/profiles/update-rule-tags":
+                    code, payload = self._read_json_body()
+                    if code != 200 or payload is None:
+                        return
+                    if not isinstance(payload, dict):
+                        self._json(400, {"error": "body must be a JSON object"})
+                        return
+                    sid = payload.get("speaker_id")
+                    pattern = payload.get("pattern")
+                    tags = payload.get("tags")
+                    if not sid or not pattern or not isinstance(tags, list):
+                        self._json(400, {"error": "speaker_id, pattern and tags list are required"})
+                        return
+                    if not is_safe_speaker_id(sid):
+                        self._json(400, {"error": "Invalid speaker_id format"})
+                        return
+                    from tools.profile_builder.profile_exporter import load_profile, save_profile
+                    pdir = _get_profiles_dir()
+                    prof = load_profile(sid, pdir)
+                    if prof is None:
+                        self._json(404, {"error": f"profile {sid} not found"})
+                        return
+                    found = False
+                    for r in prof.replacements + prof.archived_replacements:
+                        if r.pattern == pattern:
+                            r.tags = [t.strip() for t in tags if t and isinstance(t, str)]
+                            found = True
+                            break
+                    if not found:
+                        self._json(404, {"error": f"rule '{pattern}' not found"})
+                        return
+                    save_profile(prof, pdir)
+                    # If active, reload replacements
+                    if getattr(server, "_active_profile", None) and server._active_profile.speaker_id == sid:
+                        server._active_profile = prof
+                        if server.asr is not None:
+                            active_tags = getattr(server, "_active_profile_tags", None)
+                            server.asr.set_replacements(prof.get_active_replacements(active_tags))
+                    self._json(200, {"ok": True, "speaker_id": sid, "pattern": pattern, "tags": r.tags})
                     return
                 if req_path == "/api/profiles/import":
                     code, payload = self._read_json_body()

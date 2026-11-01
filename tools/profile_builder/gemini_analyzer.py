@@ -449,11 +449,19 @@ class GeminiProfileAnalyzer:
             if extracted_section:
                 profile.extracted_section = extracted_section
 
-            # Extract video ID for tracking source
+            # Extract video ID and hashtags for tracking source and tagging
             vid_id = None
-            if metadata and metadata.url:
-                from tools.profile_builder.youtube_fetcher import extract_video_id
-                vid_id = extract_video_id(metadata.url)
+            extracted_tags = []
+            if metadata:
+                from tools.profile_builder.youtube_fetcher import extract_video_id, extract_hashtags
+                if metadata.url:
+                    vid_id = extract_video_id(metadata.url)
+                if metadata.title:
+                    extracted_tags = extract_hashtags(metadata.title)
+
+            # Default to ['共通'] if no hashtags were found in video title
+            if not extracted_tags:
+                extracted_tags = ["共通"]
 
             # Sanitize, trim fillers/particles, and guard against overly long/short rules
             cleaned_rules = []
@@ -466,6 +474,7 @@ class GeminiProfileAnalyzer:
                         replacement=r_clean,
                         reason=r.reason,
                         source_video_id=vid_id,
+                        tags=list(extracted_tags),
                     ))
             profile.replacements = cleaned_rules
 

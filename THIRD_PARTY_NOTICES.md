@@ -84,6 +84,8 @@ outside `models/`), not by `download_models.py`.
 | [imageio-ffmpeg](https://github.com/imageio/imageio-ffmpeg) | BSD-2-Clause (binary: LGPL-2.1) | bundled standalone ffmpeg binaries for audio extraction in profile builder |
 | [pydantic](https://github.com/pydantic/pydantic) | MIT | data validation and schema modeling for speaker profiles |
 | [google-genai](https://github.com/googleapis/python-genai) | Apache-2.0 | Google Gemini API SDK for automatic profile dictionary learning |
+| [sudachipy](https://github.com/WorksApplications/SudachiPy) | Apache-2.0 | fast Japanese morphological analyzer for boundary-aware replacement and text normalization |
+| [sudachidict-core](https://github.com/WorksApplications/SudachiDict) | Apache-2.0 | core lexicon dictionary for SudachiPy |
 
 ### Dev / eval-only dependencies (`requirements-dev.txt`)
 

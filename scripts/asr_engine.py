@@ -44,6 +44,18 @@ import sherpa_onnx
 import itn_cjk
 from lid_preprocessing import trim_lid_clip  # noqa: F401 (re-exported as asr_engine.trim_lid_clip)
 
+try:
+    from sudachipy import dictionary, tokenizer
+    _SUDACHI_DICT = dictionary.Dictionary()
+    if hasattr(_SUDACHI_DICT, 'tokenizer'):
+        _SUDACHI_TOKENIZER = _SUDACHI_DICT.tokenizer()
+    else:
+        _SUDACHI_TOKENIZER = _SUDACHI_DICT.create()
+    _SUDACHI_SPLIT_MODE = tokenizer.Tokenizer.SplitMode.C
+except Exception:
+    _SUDACHI_TOKENIZER = None
+    _SUDACHI_SPLIT_MODE = None
+
 MODELS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models")
 V3_MODEL_DIR = os.path.join(MODELS_DIR, "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8")
 # en-only alternative to v3 for the "en" language, opt-in via RoutedASR(en_tier="v2")
@@ -1536,6 +1548,7 @@ class RoutedASR:
     def _replace(self, text: str) -> str:
         if not text:
             return text
+        # 1. Direct pattern replacement
         for wrong, right in self._replacements:
             if not wrong or not isinstance(wrong, str):
                 continue
@@ -1544,6 +1557,31 @@ class RoutedASR:
                 with self._stats_lock:
                     self._rule_hit_counts[wrong] = self._rule_hit_counts.get(wrong, 0) + 1
                     self._rule_last_hit[wrong] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+        # 2. SudachiPy-assisted normalization / boundary-aware fallback
+        if _SUDACHI_TOKENIZER and self._replacements:
+            try:
+                rule_dict = dict(self._replacements)
+                morphemes = _SUDACHI_TOKENIZER.tokenize(text, _SUDACHI_SPLIT_MODE)
+                replaced_tokens = []
+                changed = False
+                for m in morphemes:
+                    surf = m.surface()
+                    norm = m.normalized_form()
+                    if norm in rule_dict and norm != surf and surf not in rule_dict:
+                        target_right = rule_dict[norm]
+                        replaced_tokens.append(target_right)
+                        changed = True
+                        with self._stats_lock:
+                            self._rule_hit_counts[norm] = self._rule_hit_counts.get(norm, 0) + 1
+                            self._rule_last_hit[norm] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                    else:
+                        replaced_tokens.append(surf)
+                if changed:
+                    text = "".join(replaced_tokens)
+            except Exception:
+                pass
+
         return text
 
     def get_replacement_stats(self) -> dict[str, dict]:

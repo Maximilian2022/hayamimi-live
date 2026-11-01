@@ -246,6 +246,26 @@ def is_bot_detection_error(text: str) -> bool:
     )
 
 
+def extract_hashtags(title: str) -> List[str]:
+    """Extract hashtags from YouTube video title (e.g. #ApexLegends, #ストグラ).
+    Normalizes full-width ＃ to half-width # and trims trailing punctuation.
+    """
+    if not title or not isinstance(title, str):
+        return []
+    t = title.replace("＃", "#")
+    matches = re.findall(r"#([^\s#　!！?？)）\]】＞>]+)", t)
+    seen = set()
+    tags = []
+    for m in matches:
+        clean = m.strip().strip("-_.,")
+        if clean:
+            tag = f"#{clean}"
+            if tag.lower() not in seen:
+                seen.add(tag.lower())
+                tags.append(tag)
+    return tags
+
+
 def discover_working_browser(test_url: str, yt_dlp_cmd: Union[str, List[str]] = "yt-dlp") -> Optional[str]:
     """Probe installed browsers with yt-dlp if opt-in via HAYAMIMI_ALLOW_BROWSER_COOKIES=1."""
     global _WORKING_COOKIE_BROWSER

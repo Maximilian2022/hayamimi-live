@@ -140,6 +140,22 @@ Automatically extracts proper nouns and pronunciation patterns from past streams
 3. **Review & Apply**: The system extracts speech segments, transcribes them with local ASR, detects errors and proper nouns, and generates phonetic replacement pairs. Click **"Apply Profile"** to activate.
 4. **Automated Maintenance**: If linked to a channel URL, new video uploads are automatically checked on launcher shutdown to update dictionaries incrementally.
 
+### Priority Tags & Video Title Hashtag Integration
+For creators streaming multiple games or themes, "Priority Tags" let you tag individual vocabulary items and selectively activate them.
+
+1. **Automatic Hashtag Extraction from YouTube Titles**:
+   - When generating or growing a profile from a YouTube video URL or channel, hashtags in the video title (e.g. `【#ApexLegends】Ranked Grind` ──▶ `#ApexLegends`) are automatically detected and assigned to extracted terms.
+   - General speaking quirks and non-hashtag terms are assigned the "`共通`" (Common) tag.
+2. **Multi-Game Vocabulary Growth**:
+   - When training on additional videos from different games, existing words retain previous tags while newly detected tags are merged without duplication (e.g., "ウルト" can organically belong to both `#ApexLegends` and `#OW2`).
+3. **Tag Selection & ASR Injection via Launcher and Web UI**:
+   - **Web UI (`/profile`)**: Tag chips appear on profile cards. Clicking chips immediately updates the active ASR dictionary with selected tags. Individual rule tags can also be edited in the modal.
+   - **Launcher (`launcher_gui.ps1`)**: Selecting a profile displays its priority tags as checkboxes. Clicking "⚡ Apply" loads the selected tags into the ASR engine (or queues them for automatic injection on startup).
+4. **SudachiPy Morphological Correction**:
+   - Fast morphological analysis (~0.02ms / 0.02% CPU) prevents improper splitting of compound gaming terms and applies natural normalization during both live in-progress drafts and final confirmed subtitles.
+5. **Automatic Profile Migration**:
+   - Older profiles (schema 1.1.0 and earlier) are automatically migrated to `1.2.0` on startup or maintenance, with all existing rules initialized with the "`共通`" tag.
+
 ### Manual Replacement Rules & Profile Migration
 - **Replacement Rules**: Manually add, edit, or remove word replacement pairs with regex support.
 - **Profile Import & Export**: Export speaker profiles as JSON files for easy migration and backup.

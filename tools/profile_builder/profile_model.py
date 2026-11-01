@@ -30,6 +30,10 @@ class ReplacementRule(BaseModel):
     )
     source_video_id: Optional[str] = Field(None, description="YouTube Video ID from which this rule was extracted")
     is_archived: bool = Field(False, description="Whether this rule is archived (inactive) due to staleness")
+    tags: List[str] = Field(
+        default_factory=list,
+        description="Associated tags (e.g. hashtags from video title: #ApexLegends, #スト6, or '共通')",
+    )
 
     @field_validator("pattern", "replacement")
     @classmethod
@@ -73,9 +77,12 @@ def sanitize_and_trim_rule(pattern: str, replacement: str) -> Optional[tuple[str
     return (p, r)
 
 
+CURRENT_SCHEMA_VERSION = '1.2.0'
+
+
 class SpeakerProfile(BaseModel):
     """Complete speaker profile model."""
-    schema_version: str = Field("1.1.0", description="Schema version")
+    schema_version: str = Field("1.2.0", description="Schema version")
     speaker_id: str = Field(..., description="Unique alphanumeric identifier (e.g. val_channel)")
     display_name: str = Field(..., description="Human-readable display name (e.g. ヴァル閣下)")
     created_at: str = Field(
@@ -133,21 +140,61 @@ class SpeakerProfile(BaseModel):
         description="Total speech segments used to compute/refine this voiceprint centroid",
     )
 
+    def get_available_tags(self) -> List[str]:
+        """Return sorted list of all unique tags present across active replacements."""
+        tag_set = set()
+        for r in self.replacements:
+            if not r.is_archived and r.tags:
+                for t in r.tags:
+                    if t and isinstance(t, str):
+                        tag_set.add(t.strip())
+        tags = sorted(list(tag_set))
+        if "共通" in tags:
+            tags.remove("共通")
+            tags.insert(0, "共通")
+        return tags
+
+    def get_active_replacements(self, active_tags: Optional[List[str]] = None) -> dict[str, str]:
+        """Return mapping of pattern -> replacement filtered by active priority tags.
+        If active_tags is None or empty: all active rules are included.
+        If active_tags is provided:
+          - Rules with no tags or with '共通' are ALWAYS included.
+          - Rules with matching tags in active_tags are included.
+        """
+        if not active_tags:
+            return {
+                r.pattern: r.replacement
+                for r in self.replacements
+                if not r.is_archived and r.pattern and r.replacement
+            }
+
+        target_tags = {t.strip().lower() for t in active_tags if t and isinstance(t, str)}
+        mapping = {}
+        for r in self.replacements:
+            if r.is_archived or not r.pattern or not r.replacement:
+                continue
+            rule_tags = [t.strip().lower() for t in (r.tags or []) if t]
+            # Common rule: no tags or contains '共通'
+            is_common = not rule_tags or any(t in ("共通", "#共通", "common", "all") for t in rule_tags)
+            is_matched = any(t in target_tags for t in rule_tags)
+            if is_common or is_matched:
+                mapping[r.pattern] = r.replacement
+        return mapping
+
     def migrate_from_legacy(self) -> bool:
         """Ensure backward compatibility for profiles created with older versions.
-        - Sets schema_version to 1.1.0.
-        - Sets added_at of existing rules to created_at/updated_at to guarantee a 180-day grace period.
-        - Infers youtube_channel_url from source_video_urls if not yet set.
+        - Upgrades schema_version to 1.2.0.
+        - Ensures tags field exists on all rules (defaults to ['共通'] if empty).
+        - Sets added_at of existing rules to created_at/updated_at to guarantee grace period.
         """
         changed = False
-        is_legacy = (self.schema_version != "1.1.0")
+        is_legacy = (self.schema_version != "1.2.0")
         if is_legacy:
-            self.schema_version = "1.1.0"
+            self.schema_version = "1.2.0"
             changed = True
 
-        # Base timestamp for legacy rules
         fallback_dt = self.created_at or self.updated_at or datetime.datetime.now(datetime.timezone.utc).isoformat()
-        for r in self.replacements:
+        for r in self.replacements + self.archived_replacements:
             if is_legacy or not getattr(r, "added_at", None):
                 r.added_at = fallback_dt
                 changed = True
@@ -156,6 +203,12 @@ class SpeakerProfile(BaseModel):
                 changed = True
             if getattr(r, "is_archived", None) is None:
                 r.is_archived = False
+                changed = True
+            if getattr(r, "tags", None) is None:
+                r.tags = ["共通"]
+                changed = True
+            elif not r.tags:
+                r.tags = ["共通"]
                 changed = True
 
         return changed
@@ -271,18 +324,25 @@ class SpeakerProfile(BaseModel):
         for new_r in other.replacements:
             if new_r.pattern in rule_map:
                 cur = rule_map[new_r.pattern]
+                # Merge tags without duplicates
+                combined_tags = list(cur.tags or [])
+                for t in (new_r.tags or []):
+                    if t and t not in combined_tags:
+                        combined_tags.append(t)
+                combined_reason = cur.reason
                 if new_r.reason and new_r.reason not in (cur.reason or ""):
                     combined_reason = f"{cur.reason}; {new_r.reason}" if cur.reason else new_r.reason
-                    rule_map[new_r.pattern] = ReplacementRule(
-                        pattern=cur.pattern,
-                        replacement=cur.replacement,
-                        reason=combined_reason,
-                        hit_count=cur.hit_count,
-                        last_hit_at=cur.last_hit_at,
-                        added_at=cur.added_at,
-                        source_video_id=cur.source_video_id or new_r.source_video_id,
-                        is_archived=cur.is_archived,
-                    )
+                rule_map[new_r.pattern] = ReplacementRule(
+                    pattern=cur.pattern,
+                    replacement=cur.replacement,
+                    reason=combined_reason,
+                    hit_count=cur.hit_count,
+                    last_hit_at=cur.last_hit_at,
+                    added_at=cur.added_at,
+                    source_video_id=cur.source_video_id or new_r.source_video_id,
+                    is_archived=cur.is_archived,
+                    tags=combined_tags,
+                )
             else:
                 rule_map[new_r.pattern] = new_r
         self.replacements = list(rule_map.values())

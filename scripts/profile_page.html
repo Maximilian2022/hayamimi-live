@@ -374,6 +374,50 @@
       padding-top: 0.7rem;
     }
 
+    /* 優先タグ (Priority Tags) チップ */
+    .tag-container {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 8px;
+      margin-bottom: 4px;
+    }
+    .tag-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--line);
+      color: var(--paper-dim);
+      border-radius: 12px;
+      padding: 2px 8px;
+      font-size: 0.72rem;
+      font-family: var(--mono);
+      user-select: none;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .tag-badge:hover {
+      background: rgba(255, 255, 255, 0.12);
+      color: var(--paper);
+    }
+    .tag-badge.active {
+      background: rgba(224, 79, 47, 0.18);
+      border-color: var(--shu);
+      color: #ff9d80;
+      box-shadow: 0 0 6px rgba(224, 79, 47, 0.25);
+    }
+    .tag-badge.common {
+      background: rgba(91, 127, 212, 0.12);
+      border-color: rgba(91, 127, 212, 0.35);
+      color: #8da6e8;
+    }
+    .tag-badge.common.active {
+      background: rgba(91, 127, 212, 0.25);
+      border-color: #8da6e8;
+      color: #b0c4de;
+    }
+
     /* ドロップゾーン */
     .dropzone {
       border: 2px dashed var(--line);
@@ -858,11 +902,12 @@
       <table class="rule-table">
         <thead>
           <tr>
-            <th style="width: 28%;">誤認識パターン</th>
-            <th style="width: 28%;">正しい置換後</th>
-            <th style="width: 18%;">理由・メモ</th>
-            <th style="width: 16%;">統計 (ヒット/最終)</th>
-            <th style="width: 10%;">操作</th>
+            <th style="width: 24%;">誤認識パターン</th>
+            <th style="width: 24%;">正しい置換後</th>
+            <th style="width: 18%;">優先タグ</th>
+            <th style="width: 16%;">理由・メモ</th>
+            <th style="width: 10%;">統計</th>
+            <th style="width: 8%;">操作</th>
           </tr>
         </thead>
         <tbody id="ruleTableBody">
@@ -902,6 +947,8 @@
 <script>
   let profiles = [];
   let activeProfileId = null;
+  let activeTags = [];
+  let selectedTagsBySpeaker = {};
   let editingProfile = null;
   let pollTimer = null;
   let isTaskRunning = false;
@@ -917,10 +964,29 @@
   });
 
   async function init() {
+    await checkActiveProfile();
     await checkApiKey();
     await loadProfiles();
     setupDropzone();
     await checkActiveTask(); // F5やタブ再オープン時の自動復旧
+  }
+
+  async function checkActiveProfile() {
+    try {
+      const res = await fetch("/api/profiles/active");
+      if (res.ok) {
+        const data = await res.json();
+        if (data.active) {
+          activeProfileId = data.speaker_id;
+          activeTags = data.active_tags || [];
+        } else {
+          activeProfileId = null;
+          activeTags = [];
+        }
+      }
+    } catch (e) {
+      console.warn("Failed to fetch active profile:", e);
+    }
   }
 
   // --- Session Recovery (F5 / Tab Re-open) ---
@@ -1178,6 +1244,32 @@
               特徴: ${escapeHtml(p.articulation_traits.join(" / "))}
             </div>
           ` : ''}
+          <div style="margin-top: 10px;">
+            <div style="font-size: 0.72rem; color: var(--paper-muted); font-weight: 600; margin-bottom: 4px; display:flex; justify-content:space-between; align-items:center;">
+              <span>🏷️ 優先タグ (クリックで選択/切替):</span>
+              ${p.speaker_id === activeProfileId ? '<span style="font-size:0.68rem; color:var(--shu);">※即時ASR反映</span>' : ''}
+            </div>
+            <div class="tag-container">
+              ${(() => {
+                const allTags = p.available_tags || ["共通"];
+                if (!selectedTagsBySpeaker[p.speaker_id]) {
+                  selectedTagsBySpeaker[p.speaker_id] = new Set(allTags);
+                }
+                return allTags.map(tag => {
+                  const isCommon = (tag === "共通");
+                  let isSel = false;
+                  if (p.speaker_id === activeProfileId) {
+                    isSel = activeTags.length === 0 || activeTags.includes(tag);
+                  } else {
+                    isSel = selectedTagsBySpeaker[p.speaker_id].has(tag);
+                  }
+                  return `<span class="tag-badge ${isCommon ? 'common' : ''} ${isSel ? 'active' : ''}" title="${escapeHtml(tag)}" onclick="toggleTag('${escapeHtml(p.speaker_id)}', '${escapeHtml(tag)}', event)">
+                    ${isSel ? '✓ ' : '+ '}${escapeHtml(tag)}
+                  </span>`;
+                }).join("");
+              })()}
+            </div>
+          </div>
         </div>
         <div class="profile-actions">
           <button class="btn btn-success btn-sm" onclick="applyProfile('${escapeHtml(p.speaker_id)}')" style="font-size:0.75rem; padding: 5px 10px;">⚡ 適用</button>
@@ -1191,18 +1283,63 @@
     });
   }
 
+  async function toggleTag(speakerId, tag, event) {
+    if (event) event.stopPropagation();
+    if (!selectedTagsBySpeaker[speakerId]) {
+      const p = profiles.find(x => x.speaker_id === speakerId);
+      selectedTagsBySpeaker[speakerId] = new Set(p ? p.available_tags : ["共通"]);
+    }
+    const tagSet = selectedTagsBySpeaker[speakerId];
+    if (speakerId === activeProfileId) {
+      const p = profiles.find(x => x.speaker_id === speakerId);
+      const allAvail = p ? (p.available_tags || ["共通"]) : ["共通"];
+      let currentActive = activeTags.length > 0 ? [...activeTags] : [...allAvail];
+      if (currentActive.includes(tag)) {
+        currentActive = currentActive.filter(t => t !== tag);
+        if (currentActive.length === 0) currentActive = ["共通"];
+      } else {
+        currentActive.push(tag);
+      }
+      try {
+        const res = await fetch("/api/profiles/update-tags", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ active_tags: currentActive })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          activeTags = data.active_tags || [];
+          selectedTagsBySpeaker[speakerId] = new Set(activeTags);
+          renderProfiles();
+        }
+      } catch (e) {
+        console.error("Failed to update active tags:", e);
+      }
+    } else {
+      if (tagSet.has(tag)) {
+        tagSet.delete(tag);
+        if (tagSet.size === 0) tagSet.add("共通");
+      } else {
+        tagSet.add(tag);
+      }
+      renderProfiles();
+    }
+  }
+
   async function applyProfile(speakerId) {
     try {
+      const targetTags = selectedTagsBySpeaker[speakerId] ? Array.from(selectedTagsBySpeaker[speakerId]) : null;
       const res = await fetch("/api/profiles/apply", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ speaker_id: speakerId }),
+        body: JSON.stringify({ speaker_id: speakerId, active_tags: targetTags }),
       });
       const data = await res.json();
       if (res.ok) {
         activeProfileId = speakerId;
+        activeTags = data.active_tags || (targetTags || []);
         renderProfiles();
-        alert(`話者プロファイル「${speakerId}」を現在アクティブな字幕エンジンに適用しました！`);
+        alert(`話者プロファイル「${speakerId}」を適用しました！\n（優先タグ: ${activeTags.join(", ")} / 有効置換ルール: ${data.rules_count}件）`);
       } else {
         alert("適用失敗: " + (data.error || ""));
       }
@@ -1489,9 +1626,11 @@
     (editingProfile.replacements || []).forEach((r, idx) => {
       const tr = document.createElement("tr");
       const lastHitStr = r.last_hit_at ? r.last_hit_at.substring(0, 10) : "未ヒット";
+      const tagsStr = (r.tags && r.tags.length) ? r.tags.join(", ") : "共通";
       tr.innerHTML = `
         <td><input type="text" value="${escapeHtml(r.pattern)}" onchange="updateRule(${idx}, 'pattern', this.value)"></td>
         <td><input type="text" value="${escapeHtml(r.replacement)}" onchange="updateRule(${idx}, 'replacement', this.value)"></td>
+        <td><input type="text" value="${escapeHtml(tagsStr)}" placeholder="共通, #Apex" onchange="updateRuleTags(${idx}, this.value)" style="font-size:0.75rem;"></td>
         <td><input type="text" value="${escapeHtml(r.reason || '')}" onchange="updateRule(${idx}, 'reason', this.value)"></td>
         <td style="font-size: 0.75rem; color: var(--paper-dim);">
           <span style="display:inline-block; background:rgba(255,255,255,0.06); padding:2px 6px; border-radius:3px; font-weight:600; color:${(r.hit_count && r.hit_count > 0) ? 'var(--green)' : 'var(--paper-muted)'};">${r.hit_count || 0}回</span>
@@ -1503,6 +1642,13 @@
     });
     renderArchivedTable();
   }
+
+  window.updateRuleTags = (idx, val) => {
+    if (editingProfile && editingProfile.replacements[idx]) {
+      const parts = val.split(",").map(s => s.trim()).filter(Boolean);
+      editingProfile.replacements[idx].tags = parts.length > 0 ? parts : ["共通"];
+    }
+  };
 
   function renderArchivedTable() {
     const tbody = document.getElementById("archivedTableBody");
@@ -1561,7 +1707,7 @@
   document.getElementById("btnAddRuleRow").onclick = () => {
     if (editingProfile) {
       if (!editingProfile.replacements) editingProfile.replacements = [];
-      editingProfile.replacements.push({ pattern: "", replacement: "", reason: "", hit_count: 0 });
+      editingProfile.replacements.push({ pattern: "", replacement: "", tags: ["共通"], reason: "", hit_count: 0 });
       renderRuleTable();
     }
   };
@@ -1579,6 +1725,11 @@
     const traitsStr = document.getElementById("modalTraits").value.trim();
     editingProfile.articulation_traits = traitsStr ? traitsStr.split(",").map(s => s.trim()).filter(Boolean) : [];
     editingProfile.replacements = (editingProfile.replacements || []).filter(r => r.pattern.trim() && r.replacement.trim());
+    editingProfile.replacements.forEach(r => {
+      if (!r.tags || !Array.isArray(r.tags) || r.tags.length === 0) {
+        r.tags = ["共通"];
+      }
+    });
 
     try {
       const res = await fetch("/api/profiles/import", {
