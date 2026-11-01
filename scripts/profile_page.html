@@ -894,6 +894,22 @@
         <input type="text" id="modalTraits" class="input-text">
       </div>
 
+      <!-- コラボ・他者混入アーカイブ自動除外設定 -->
+      <div class="form-group" style="background: rgba(91, 127, 212, 0.08); border: 1px solid rgba(91, 127, 212, 0.28); border-radius: var(--radius-sm); padding: 10px 12px; margin-top: 6px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+          <label style="display: flex; align-items: center; gap: 7px; font-size: 0.85rem; font-weight: 700; color: #b4c7f7; cursor: pointer; margin: 0;">
+            <input type="checkbox" id="modalCollabFilterEnabled" checked style="accent-color: var(--blue); width: 15px; height: 15px; cursor: pointer;">
+            🛡️ コラボ・他者混入アーカイブを自動除外する (推奨)
+          </label>
+          <button type="button" id="btnResetCollabKeywords" class="btn btn-secondary" style="font-size: 0.7rem; padding: 2px 8px;">↺ 標準ワードに戻す</button>
+        </div>
+        <label class="form-label" style="font-size: 0.75rem; color: var(--paper-dim); margin-bottom: 3px;">除外用キーワード (カンマ区切り — 自由に追加・削除できます)</label>
+        <input type="text" id="modalCollabKeywords" class="input-text" style="font-size: 0.8rem;" placeholder="コラボ, collab, w/, with, ゲスト, 参加型, 大会...">
+        <div style="font-size: 0.71rem; color: var(--paper-muted); margin-top: 4px; line-height: 1.4;">
+          ※新着学習・メンテナンス時、タイトル・概要欄・ハッシュタグに上記ワードや他配信者の <code>@メンション</code> が含まれる動画を自動スキップし、他人の声や口調の混入を防ぎます。
+        </div>
+      </div>
+
       <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 8px;">
         <label class="form-label" style="margin: 0;">置換ルール一覧</label>
         <button id="btnAddRuleRow" class="btn btn-secondary" style="font-size: 0.75rem; padding: 4px 8px;">＋ ルール追加</button>
@@ -1227,6 +1243,7 @@
               <div class="profile-card-id">${escapeHtml(p.speaker_id)}</div>
             </div>
             <div style="display:flex; gap:6px; align-items:center;">
+              ${p.lora_adapter_path ? `<span class="badge" style="background:rgba(192, 132, 252, 0.16); color:#d8b4fe; border:1px solid rgba(192, 132, 252, 0.4); font-size:0.7rem; padding: 2px 7px;">🧠 LoRA (${p.lora_trained_video_count || 1}本学習)</span>` : ''}
               ${p.voiceprint && p.voiceprint.length ? '<span class="badge" style="background:rgba(91, 127, 212, 0.15); color:#8da6e8; border:1px solid rgba(91, 127, 212, 0.35); font-size:0.7rem; padding: 2px 7px;">🎙️ 声紋 (512次元)</span>' : ''}
               ${p.speaker_id === activeProfileId ? '<span class="badge" style="background:var(--green); color:#fff; box-shadow:0 0 8px var(--green-glow); font-size:0.7rem; padding: 2px 7px;">適用中</span>' : ''}
             </div>
@@ -1236,6 +1253,7 @@
             ${p.archived_replacements && p.archived_replacements.length ? `<span style="color: var(--paper-muted);">休眠: <b>${p.archived_replacements.length}</b> 件</span>` : ''}
             <span style="color: var(--gold);">学習動画: <b>${vCount}</b> 本</span>
             <span>声紋: <b style="color: ${p.voiceprint && p.voiceprint.length ? 'var(--blue)' : 'var(--paper-muted)'}">${p.voiceprint && p.voiceprint.length ? '学習済' : '未学習'}</b></span>
+            <span>🛡️ コラボ除外: <b style="color: ${p.collab_filter_enabled !== false ? 'var(--green)' : 'var(--paper-muted)'}">${p.collab_filter_enabled !== false ? 'ON' : 'OFF'}</b></span>
             ${p.youtube_channel_url ? `<span style="color: var(--blue);">📺 チャンネル連携済</span>` : ''}
             ${p.extracted_section ? `<span>直近抽出: ${p.extracted_section.duration_sec}秒</span>` : ''}
           </div>
@@ -1608,6 +1626,13 @@
   }
 
   // --- Modal Edit ---
+  const DEFAULT_COLLAB_KEYWORDS = [
+    "コラボ", "collab", "collaboration", "w/", "with",
+    "ゲスト", "guest", "凸待ち", "逆凸", "対談",
+    "参加型", "大会", "カスタム", "スクリム",
+    "among us", "アモアス", "人狼", "feign"
+  ];
+
   function openEditModal(speakerId) {
     editingProfile = JSON.parse(JSON.stringify(profiles.find(p => p.speaker_id === speakerId)));
     if (!editingProfile) return;
@@ -1616,8 +1641,29 @@
     document.getElementById("modalDisplayName").value = editingProfile.display_name;
     document.getElementById("modalYoutubeChannel").value = editingProfile.youtube_channel_url || "";
     document.getElementById("modalTraits").value = (editingProfile.articulation_traits || []).join(", ");
+    const chkCollab = document.getElementById("modalCollabFilterEnabled");
+    if (chkCollab) {
+      chkCollab.checked = (editingProfile.collab_filter_enabled !== false);
+    }
+    const kwInput = document.getElementById("modalCollabKeywords");
+    if (kwInput) {
+      const kws = Array.isArray(editingProfile.collab_exclude_keywords)
+        ? editingProfile.collab_exclude_keywords
+        : DEFAULT_COLLAB_KEYWORDS;
+      kwInput.value = kws.join(", ");
+    }
     renderRuleTable();
     document.getElementById("editModal").classList.add("open");
+  }
+
+  const btnResetCollab = document.getElementById("btnResetCollabKeywords");
+  if (btnResetCollab) {
+    btnResetCollab.onclick = () => {
+      const kwInput = document.getElementById("modalCollabKeywords");
+      if (kwInput) kwInput.value = DEFAULT_COLLAB_KEYWORDS.join(", ");
+      const chkCollab = document.getElementById("modalCollabFilterEnabled");
+      if (chkCollab) chkCollab.checked = true;
+    };
   }
 
   function renderRuleTable() {
@@ -1724,6 +1770,15 @@
     editingProfile.youtube_channel_url = document.getElementById("modalYoutubeChannel").value.trim();
     const traitsStr = document.getElementById("modalTraits").value.trim();
     editingProfile.articulation_traits = traitsStr ? traitsStr.split(",").map(s => s.trim()).filter(Boolean) : [];
+    const chkCollab = document.getElementById("modalCollabFilterEnabled");
+    if (chkCollab) {
+      editingProfile.collab_filter_enabled = chkCollab.checked;
+    }
+    const kwInput = document.getElementById("modalCollabKeywords");
+    if (kwInput) {
+      const kwStr = kwInput.value.trim();
+      editingProfile.collab_exclude_keywords = kwStr ? kwStr.split(",").map(s => s.trim()).filter(Boolean) : [];
+    }
     editingProfile.replacements = (editingProfile.replacements || []).filter(r => r.pattern.trim() && r.replacement.trim());
     editingProfile.replacements.forEach(r => {
       if (!r.tags || !Array.isArray(r.tags) || r.tags.length === 0) {

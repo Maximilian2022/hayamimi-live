@@ -1568,6 +1568,7 @@ class RoutedASR:
                 for m in morphemes:
                     surf = m.surface()
                     norm = m.normalized_form()
+                    reading = m.reading_form() if hasattr(m, "reading_form") else ""
                     if norm in rule_dict and norm != surf and surf not in rule_dict:
                         target_right = rule_dict[norm]
                         replaced_tokens.append(target_right)
@@ -1575,6 +1576,13 @@ class RoutedASR:
                         with self._stats_lock:
                             self._rule_hit_counts[norm] = self._rule_hit_counts.get(norm, 0) + 1
                             self._rule_last_hit[norm] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                    elif reading and len(reading) >= 3 and reading in rule_dict and reading != surf and surf not in rule_dict:
+                        target_right = rule_dict[reading]
+                        replaced_tokens.append(target_right)
+                        changed = True
+                        with self._stats_lock:
+                            self._rule_hit_counts[reading] = self._rule_hit_counts.get(reading, 0) + 1
+                            self._rule_last_hit[reading] = datetime.datetime.now(datetime.timezone.utc).isoformat()
                     else:
                         replaced_tokens.append(surf)
                 if changed:
@@ -1611,11 +1619,32 @@ class RoutedASR:
         in transcribe() -- so this can override anything ITN or punctuation
         restoration produced.
         """
-        safe_pairs = []
+        user_pairs = []
         for k, v in (mapping or {}).items():
             if isinstance(k, str) and k.strip() != "":
-                safe_pairs.append((k, v if isinstance(v, str) else str(v)))
-        self._replacements = tuple(safe_pairs)
+                user_pairs.append((k, v if isinstance(v, str) else str(v)))
+        self._user_replacements = tuple(user_pairs)
+        self._rebuild_merged_replacements()
+
+    def set_dynamic_comment_replacements(self, mapping: dict) -> None:
+        """Atomically update live comment-derived hotword replacements without overwriting user rules."""
+        dyn_pairs = []
+        for k, v in (mapping or {}).items():
+            if isinstance(k, str) and k.strip() != "":
+                dyn_pairs.append((k, v if isinstance(v, str) else str(v)))
+        self._dynamic_comment_replacements = tuple(dyn_pairs)
+        self._rebuild_merged_replacements()
+
+    def _rebuild_merged_replacements(self) -> None:
+        """Combine user/profile replacements (high priority) and dynamic comment replacements."""
+        user_tups = getattr(self, "_user_replacements", ()) or ()
+        dyn_tups = getattr(self, "_dynamic_comment_replacements", ()) or ()
+        user_keys = {k for k, _ in user_tups}
+        combined = list(user_tups)
+        for k, v in dyn_tups:
+            if k not in user_keys:
+                combined.append((k, v))
+        self._replacements = tuple(combined)
 
     def set_itn_overrides(self, exclude: set | None = None,
                            force: dict | None = None) -> None:

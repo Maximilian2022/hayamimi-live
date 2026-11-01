@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from tools.profile_builder.gemini_analyzer import GeminiProfileAnalyzer, load_gemini_api_key
 from tools.profile_builder.local_transcribe import LocalTranscriber
+from tools.profile_builder.lora_trainer import SpeakerLoRATrainer
 from tools.profile_builder.profile_exporter import load_profile, save_profile
 from tools.profile_builder.profile_model import ExtractedSection, SpeakerProfile
 from tools.profile_builder.voiceprint_extractor import VoiceprintExtractor
@@ -24,10 +25,16 @@ from tools.profile_builder.youtube_fetcher import (
     extract_video_id,
     format_seconds_to_timestamp,
     is_channel_url,
+    is_collab_or_guest_video,
     is_playlist_url,
 )
 
 logger = logging.getLogger("hayamimi.profile_pipeline")
+
+
+class CollabVideoSkippedError(Exception):
+    """Raised when a video is skipped because collaboration/guest content was detected."""
+    pass
 
 
 class ProfileBuilderPipeline:
@@ -83,35 +90,74 @@ class ProfileBuilderPipeline:
             batch_kind = "再生リスト" if is_playlist else "チャンネル"
             report("batch", 0.02, f"{batch_kind}URLを検出しました。動画一覧をスキャン中: {youtube_url}")
 
-            # Collect already processed video IDs to prevent duplicate work
+            # Collect already processed and skipped video IDs to prevent duplicate work
             exclude_ids = set()
+            filter_collab = True
+            collab_kws = None
             if existing_profile:
                 exclude_ids.update(existing_profile.processed_video_ids)
+                exclude_ids.update(existing_profile.skipped_video_ids)
                 for u in existing_profile.source_video_urls:
                     vid = extract_video_id(u)
                     if vid:
                         exclude_ids.add(vid)
+                filter_collab = getattr(existing_profile, "collab_filter_enabled", True)
+                collab_kws = getattr(existing_profile, "collab_exclude_keywords", None)
 
+            skipped_collab_ids: list[str] = []
             if is_playlist:
-                videos = self.fetcher.fetch_playlist_videos(
-                    playlist_url=youtube_url,
-                    limit=max_videos,
-                    candidate_pool=50,
-                    exclude_video_ids=exclude_ids,
-                    log_callback=log,
-                )
+                try:
+                    videos = self.fetcher.fetch_playlist_videos(
+                        playlist_url=youtube_url,
+                        limit=max_videos,
+                        candidate_pool=50,
+                        exclude_video_ids=exclude_ids,
+                        log_callback=log,
+                        filter_collab=filter_collab,
+                        collab_keywords=collab_kws,
+                        skipped_video_ids_out=skipped_collab_ids,
+                    )
+                except TypeError:
+                    videos = self.fetcher.fetch_playlist_videos(
+                        playlist_url=youtube_url,
+                        limit=max_videos,
+                        candidate_pool=50,
+                        exclude_video_ids=exclude_ids,
+                        log_callback=log,
+                    )
             else:
-                videos = self.fetcher.fetch_channel_videos(
-                    channel_url=youtube_url,
-                    limit=max_videos,
-                    candidate_pool=50,
-                    exclude_video_ids=exclude_ids,
-                    log_callback=log,
-                )
+                try:
+                    videos = self.fetcher.fetch_channel_videos(
+                        channel_url=youtube_url,
+                        limit=max_videos,
+                        candidate_pool=50,
+                        exclude_video_ids=exclude_ids,
+                        log_callback=log,
+                        filter_collab=filter_collab,
+                        collab_keywords=collab_kws,
+                        skipped_video_ids_out=skipped_collab_ids,
+                    )
+                except TypeError:
+                    videos = self.fetcher.fetch_channel_videos(
+                        channel_url=youtube_url,
+                        limit=max_videos,
+                        candidate_pool=50,
+                        exclude_video_ids=exclude_ids,
+                        log_callback=log,
+                    )
+
+            if existing_profile and skipped_collab_ids:
+                for sid_v in skipped_collab_ids:
+                    if sid_v not in existing_profile.skipped_video_ids:
+                        existing_profile.skipped_video_ids.append(sid_v)
+                try:
+                    save_profile(existing_profile)
+                except Exception:
+                    pass
 
             if not videos:
-                if exclude_ids:
-                    msg = f"{batch_kind}内の対象動画はすべて学習済みです（学習済み: {len(exclude_ids)}本、スキップ完了）。"
+                if exclude_ids or skipped_collab_ids:
+                    msg = f"{batch_kind}内の対象動画はすべて学習済みまたは除外済みです（学習・除外済: {len(exclude_ids) + len(skipped_collab_ids)}本、スキップ完了）。"
                 else:
                     msg = f"{batch_kind}から対象動画が見つかりませんでした。"
                 report("complete", 1.0, msg)
@@ -123,11 +169,12 @@ class ProfileBuilderPipeline:
             report(
                 "batch",
                 0.05,
-                f"{batch_kind}から {total_vids} 本の動画を抽出しました（重複 {len(exclude_ids)} 本は自動除外）。一括学習を開始します...",
+                f"{batch_kind}から {total_vids} 本の動画を抽出しました（重複 {len(exclude_ids)} 本・コラボ {len(skipped_collab_ids)} 本は自動除外）。一括学習を開始します...",
             )
 
             cur_prof = existing_profile
             successful_count = 0
+            skipped_collab_in_loop = len(skipped_collab_ids)
             failed_errors = []
             consecutive_failures = 0
 
@@ -156,6 +203,14 @@ class ProfileBuilderPipeline:
                     )
                     successful_count += 1
                     consecutive_failures = 0
+                except CollabVideoSkippedError as cse:
+                    skipped_collab_in_loop += 1
+                    log("WARN", f"🛡️ [{idx+1}/{total_vids}本目] 『{v_title}』 はコラボ・他者混入アーカイブのためスキップしました: {cse}")
+                    if cur_prof is not None:
+                        try:
+                            save_profile(cur_prof)
+                        except Exception:
+                            pass
                 except Exception as e:
                     logger.error("Error processing video %d/%d (%s): %s", idx + 1, total_vids, v_url, e, exc_info=True)
                     log("ERROR", f"[{idx+1}/{total_vids}本目] 『{v_title}』の処理中にエラーが発生しました: {e}")
@@ -176,9 +231,11 @@ class ProfileBuilderPipeline:
                         break
 
             # バッチ処理終了後の判定
-            if cur_prof is not None and successful_count > 0:
+            if cur_prof is not None and (successful_count > 0 or skipped_collab_in_loop > 0):
                 learned_count = len(cur_prof.processed_video_ids) or len(cur_prof.source_video_urls)
                 status_msg = f"🎉 {batch_kind}一括学習が完了しました！ (今回学習: {successful_count}/{total_vids}本, 累計学習: {learned_count}本, 置換ルール: {len(cur_prof.replacements)}件)"
+                if skipped_collab_in_loop > 0:
+                    status_msg += f" ※コラボ除外: {skipped_collab_in_loop}本"
                 if failed_errors:
                     status_msg += f" ※スキップされたエラー動画: {len(failed_errors)}本"
                 report("complete", 1.0, status_msg)
@@ -189,6 +246,8 @@ class ProfileBuilderPipeline:
                 return cur_prof
             else:
                 # 1本も成功せず新規プロファイルも作成できなかった場合
+                if skipped_collab_in_loop > 0 and not failed_errors:
+                    raise CollabVideoSkippedError(f"{batch_kind}内の候補動画 ({skipped_collab_in_loop}本) がすべてコラボ・他者混入アーカイブとして除外されました。")
                 err_detail = "; ".join(failed_errors) if failed_errors else "全動画の処理に失敗しました"
                 raise RuntimeError(f"{batch_kind}の一括学習に失敗しました: {err_detail}")
 
@@ -234,6 +293,26 @@ class ProfileBuilderPipeline:
             report("metadata", 0.05, "動画メタデータを取得中...")
             metadata = self.fetcher.fetch_metadata(youtube_url)
             log("INFO", f"メタデータ取得完了: タイトル『{metadata.title}』 / チャンネル: {metadata.channel} / 長さ: {int(metadata.duration_sec)}秒")
+
+            # 1.5 Check collaboration / guest exclusion filter
+            filter_enabled = getattr(existing_profile, "collab_filter_enabled", True) if existing_profile else True
+            collab_kws = getattr(existing_profile, "collab_exclude_keywords", None) if existing_profile else None
+            own_chan_url = (existing_profile.youtube_channel_url if existing_profile else None) or metadata.channel_url
+            own_chan_name = (existing_profile.display_name if existing_profile else None) or display_name or metadata.channel
+
+            is_collab, collab_reason = is_collab_or_guest_video(
+                metadata=metadata,
+                filter_enabled=filter_enabled,
+                exclude_keywords=collab_kws,
+                own_channel_url=own_chan_url,
+                own_channel_name=own_chan_name,
+            )
+            if is_collab:
+                log("WARN", f"🛡️ コラボ・他者混入アーカイブとして自動除外しました: 『{metadata.title}』 ({collab_reason})")
+                if existing_profile and metadata.video_id:
+                    if metadata.video_id not in existing_profile.skipped_video_ids:
+                        existing_profile.skipped_video_ids.append(metadata.video_id)
+                raise CollabVideoSkippedError(f"{collab_reason} (タイトル: 『{metadata.title}』)")
 
             # Determine speaker_id and display_name
             if existing_profile:
@@ -383,6 +462,27 @@ class ProfileBuilderPipeline:
             except Exception as e:
                 logger.warning("Voiceprint extraction failed: %s", e)
                 log("WARN", f"声紋抽出で例外が発生したためスキップしました: {e}")
+
+            # 5.8 Speaker LoRA Acoustic Adapter Training / Continual Growth
+            report("lora", 0.90, "話者専用 LoRA 音響モデルを学習・育成中...")
+            try:
+                lora_trainer = SpeakerLoRATrainer()
+                prev_lora_path = existing_profile.lora_adapter_path if existing_profile else None
+                prev_lora_cnt = existing_profile.lora_trained_video_count if existing_profile else 0
+                adapter_path, updated_lora_cnt = lora_trainer.train_or_grow(
+                    speaker_id=speaker_id,
+                    wav_path=wav_path,
+                    voiceprint=profile.voiceprint or (existing_profile.voiceprint if existing_profile else None),
+                    existing_adapter_path=prev_lora_path,
+                    existing_video_count=prev_lora_cnt,
+                    status_callback=lambda msg: report("lora", 0.91, msg),
+                    log_callback=log_callback,
+                )
+                profile.lora_adapter_path = adapter_path
+                profile.lora_trained_video_count = updated_lora_cnt
+            except Exception as lora_err:
+                logger.warning("Speaker LoRA training skipped due to error: %s", lora_err)
+                log("WARN", f"LoRA 音響学習はスキップされました: {lora_err}")
 
             # 6. Save Profile (with merge if growing)
             if existing_profile:

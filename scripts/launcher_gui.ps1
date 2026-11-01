@@ -1,5 +1,5 @@
 ﻿# --- バージョン管理 (version.txt を Single Source of Truth として動的同期) ---
-$script:AppVersion = "1.6.1"
+$script:AppVersion = "1.6.2"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $versionTxtFile = Join-Path $repoRoot "version.txt"
 if (Test-Path $versionTxtFile) {
@@ -21,69 +21,11 @@ try {
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
 
-# --- コンソール & Windows Terminal の完全非表示化 (SW_HIDE) ---
-try {
-    $win32Def = @"
-using System;
-using System.Collections.Concurrent;
-using System.Diagnostics;
-using System.Runtime.InteropServices;
-
-public class LauncherConsoleHelper {
-    [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
-    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-}
-
-public class LauncherProcessPump {
-    private readonly ConcurrentQueue<string> _stdoutQueue = new ConcurrentQueue<string>();
-    private readonly ConcurrentQueue<string> _stderrQueue = new ConcurrentQueue<string>();
-
-    public LauncherProcessPump(Process proc) {
-        proc.OutputDataReceived += (s, e) => {
-            if (e.Data != null) _stdoutQueue.Enqueue(e.Data);
-        };
-        proc.ErrorDataReceived += (s, e) => {
-            if (e.Data != null) _stderrQueue.Enqueue(e.Data);
-        };
-        proc.BeginOutputReadLine();
-        proc.BeginErrorReadLine();
-    }
-
-    public bool TryDequeueStdout(out string line) {
-        return _stdoutQueue.TryDequeue(out line);
-    }
-
-    public bool TryDequeueStderr(out string line) {
-        return _stderrQueue.TryDequeue(out line);
-    }
-
-    public bool HasPending {
-        get { return !_stdoutQueue.IsEmpty || !_stderrQueue.IsEmpty; }
-    }
-}
-"@
-    Add-Type -TypeDefinition $win32Def -ErrorAction SilentlyContinue
-
-    $cWnd = [LauncherConsoleHelper]::GetConsoleWindow()
-    if ($cWnd -ne [IntPtr]::Zero) {
-        [LauncherConsoleHelper]::ShowWindow($cWnd, 0)
-    }
-
-    $curPid = $PID
-    for ($i = 0; $i -lt 5; $i++) {
-        $parentPid = (Get-CimInstance Win32_Process -Filter "ProcessId = $curPid" -ErrorAction SilentlyContinue).ParentProcessId
-        if (-not $parentPid) { break }
-        $parentProc = Get-Process -Id $parentPid -ErrorAction SilentlyContinue
-        if ($parentProc) {
-            if ($parentProc.ProcessName -match "WindowsTerminal|wt|cmd|conhost") {
-                if ($parentProc.MainWindowHandle -ne [IntPtr]::Zero) {
-                    [LauncherConsoleHelper]::ShowWindow($parentProc.MainWindowHandle, 0)
-                }
-            }
-        }
-        $curPid = $parentPid
-    }
-} catch {}
+# --- スマートアプリコントロール (SAC) 対策: 動的 C# コンパイル (Add-Type -TypeDefinition) を排除 ---
+# Add-Type -TypeDefinition は %TEMP% に未署名の一時 .dll を生成するため、Windows 11 の
+# スマートアプリコントロール (SAC) によるブロックやクラッシュの原因となる。
+# コンソール非表示は start.vbs / start.bat (-WindowStyle Hidden) で担保し、
+# プロセス出力ポンプは .NET 標準の ReadLineAsync() で安全に処理する。
 
 <#
 .SYNOPSIS
@@ -223,38 +165,146 @@ function Write-AppLogBatch {
     }
 }
 
-# UI メッセージループ維持 & 外部プロセス非同期逐次ロギング待機関数 (パイプ詰まりデッドロック完全根絶)
+# --- スマートアプリコントロール (SAC) & Mark of the Web (Zone.Identifier) 自動解除ヘルパー ---
+function Unblock-ProjectFiles {
+    param([string]$RootDir = $ProjectRoot)
+    try {
+        if (-not $RootDir -or -not (Test-Path $RootDir)) { return }
+        # ルート直下および主要サブフォルダのスクリプト・バイナリから Zone.Identifier ストリームを除去
+        $targetDirs = @(
+            $RootDir,
+            (Join-Path $RootDir "scripts"),
+            (Join-Path $RootDir "tools"),
+            (Join-Path $RootDir ".venv\Scripts")
+        )
+        foreach ($d in $targetDirs) {
+            if (Test-Path $d) {
+                Get-ChildItem -Path $d -Recurse -File -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Extension -in @(".ps1", ".bat", ".vbs", ".py", ".exe", ".dll", ".pyd") } |
+                    ForEach-Object {
+                        try { Unblock-File -LiteralPath $_.FullName -ErrorAction SilentlyContinue } catch {}
+                    }
+            }
+        }
+        # PowerShell 5.1 互換性のため .ps1 ファイルに UTF-8 BOM (EF BB BF) を保証
+        $ps1Files = @(
+            (Join-Path $RootDir "setup.ps1"),
+            (Join-Path $RootDir "scripts\launcher_gui.ps1"),
+            (Join-Path $RootDir "scripts\desktop_overlay.ps1")
+        )
+        foreach ($pf in $ps1Files) {
+            if (Test-Path $pf) {
+                try {
+                    $b = [System.IO.File]::ReadAllBytes($pf)
+                    if ($b.Length -ge 3 -and ($b[0] -ne 239 -or $b[1] -ne 187 -or $b[2] -ne 191)) {
+                        [System.IO.File]::WriteAllBytes($pf, ([byte[]]@(239, 187, 191) + $b))
+                    }
+                } catch {}
+            }
+        }
+    } catch {}
+}
+
+$script:UvBlockedBySac = $false
+
+# スマートアプリコントロール (SAC) でブロックされない 안전한 uv 実行可能ファイルの検証・取得関数
+function Get-SafeUvCommand {
+    if ($script:UvBlockedBySac) { return $null }
+    $cand = $null
+    try {
+        $sysUv = (where.exe uv 2>$null | Select-Object -First 1)
+        if ($sysUv -and (Test-Path $sysUv)) {
+            $cand = $sysUv
+        } else {
+            $localUv = Join-Path $ProjectRoot "tools\uv\uv.exe"
+            if (Test-Path $localUv) {
+                $cand = $localUv
+            }
+        }
+    } catch {}
+
+    if (-not $cand) { return $null }
+
+    try {
+        Unblock-File -LiteralPath $cand -ErrorAction SilentlyContinue
+        $pinfo = [System.Diagnostics.ProcessStartInfo]::new()
+        $pinfo.FileName = $cand
+        $pinfo.Arguments = "--version"
+        $pinfo.RedirectStandardOutput = $true
+        $pinfo.RedirectStandardError = $true
+        $pinfo.UseShellExecute = $false
+        $pinfo.CreateNoWindow = $true
+        $proc = [System.Diagnostics.Process]::Start($pinfo)
+        $proc.WaitForExit(2000) | Out-Null
+        if ($proc.ExitCode -eq 0) {
+            return $cand
+        }
+    } catch {
+        # スマートアプリコントロール (SAC) 等による起動ブロックを検知した場合
+        $script:UvBlockedBySac = $true
+        Write-AppLog "スマートアプリコントロール等のセキュリティポリシーにより uv.exe が制限されているため、公式 Python (pip) に自動フォールバックします。" "WARN"
+        # 次回以降 SAC のブロックポップアップが出ないようローカルの未署名 uv.exe をリネーム隔離
+        $localUv = Join-Path $ProjectRoot "tools\uv\uv.exe"
+        if (Test-Path $localUv) {
+            try { Move-Item -LiteralPath $localUv -Destination "$localUv.blocked" -Force -ErrorAction SilentlyContinue } catch {}
+        }
+        return $null
+    }
+    return $null
+}
+
+# UI メッセージループ維持 & 外部プロセス非同期逐次ロギング待機関数 (Add-Type不要 / パイプ詰まりデッドロック完全根絶)
 function Wait-ProcessWithUiPump {
     param(
         [System.Diagnostics.Process]$Proc,
         [string]$LogPrefix = "[処理中]"
     )
+    if (-not $Proc) { return }
 
-    $pump = [LauncherProcessPump]::new($Proc)
+    $outTask = $null
+    $errTask = $null
+    try { $outTask = $Proc.StandardOutput.ReadLineAsync() } catch {}
+    try { $errTask = $Proc.StandardError.ReadLineAsync() } catch {}
 
-    while (-not $Proc.HasExited -or $pump.HasPending) {
+    while (($null -ne $outTask) -or ($null -ne $errTask) -or (-not $Proc.HasExited)) {
         # WPF UI メッセージループを明示的に実行し、OSからの「応答なし」判定を根絶
         try {
             [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([Action]{}, [System.Windows.Threading.DispatcherPriority]::Background)
         } catch {}
 
-        # 逐次出力を安全に非ブロッキングで読み取ってGUIログへリアルタイム反映
-        $line = ""
-        while ($pump.TryDequeueStdout([ref]$line)) {
-            if ($line -and $line.Trim()) {
-                Write-AppLog "$LogPrefix $($line.Trim())" "INFO"
+        # 標準出力の非ブロッキング逐次読み取り
+        while (($null -ne $outTask) -and $outTask.IsCompleted) {
+            $line = $null
+            try { $line = $outTask.GetAwaiter().GetResult() } catch { $line = $null }
+            if ($null -ne $line) {
+                if ($line.Trim()) {
+                    Write-AppLog "$LogPrefix $($line.Trim())" "INFO"
+                }
+                try { $outTask = $Proc.StandardOutput.ReadLineAsync() } catch { $outTask = $null }
+            } else {
+                $outTask = $null
             }
         }
 
-        $errLine = ""
-        while ($pump.TryDequeueStderr([ref]$errLine)) {
-            if ($errLine -and $errLine.Trim()) {
-                Write-AppLog "$LogPrefix $($errLine.Trim())" "INFO"
+        # 標準エラーの非ブロッキング逐次読み取り
+        while (($null -ne $errTask) -and $errTask.IsCompleted) {
+            $errLine = $null
+            try { $errLine = $errTask.GetAwaiter().GetResult() } catch { $errLine = $null }
+            if ($null -ne $errLine) {
+                if ($errLine.Trim()) {
+                    Write-AppLog "$LogPrefix $($errLine.Trim())" "INFO"
+                }
+                try { $errTask = $Proc.StandardError.ReadLineAsync() } catch { $errTask = $null }
+            } else {
+                $errTask = $null
             }
         }
 
-        Start-Sleep -Milliseconds 40
+        if (($null -ne $outTask) -or ($null -ne $errTask) -or (-not $Proc.HasExited)) {
+            Start-Sleep -Milliseconds 40
+        }
     }
+    try { $Proc.WaitForExit(1000) | Out-Null } catch {}
 }
 
 # --- 高精度クラウド同期検出 (レジストリ / Cloud Filter 属性 / パス名非依存) ---
@@ -480,7 +530,7 @@ function Update-ContainerLogFile {
 [xml]$xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Hayamimi Live ランチャー (GUI v1.6.1)"
+        Title="Hayamimi Live ランチャー (GUI v1.6.2)"
         Height="780" Width="780"
         MinHeight="680" MinWidth="720"
         WindowStartupLocation="CenterScreen"
@@ -558,7 +608,7 @@ function Update-ContainerLogFile {
                         <TextBlock x:Name="GpuBadge" Text="⚡ GPU: 検出中..." FontSize="11" Foreground="#10B981" FontWeight="SemiBold"/>
                     </Border>
                     <Border Background="#1E1B4B" CornerRadius="12" Padding="10,5" Margin="0,0,8,0" BorderBrush="#4338CA" BorderThickness="1">
-                        <TextBlock x:Name="VersionBadge" Text="GUI v1.6.1" FontSize="11" Foreground="#A5B4FC" FontWeight="Bold" FontFamily="{StaticResource MonoFont}"/>
+                        <TextBlock x:Name="VersionBadge" Text="GUI v1.6.2" FontSize="11" Foreground="#A5B4FC" FontWeight="Bold" FontFamily="{StaticResource MonoFont}"/>
                     </Border>
                     <Border Background="#141B2D" CornerRadius="12" Padding="10,5" BorderBrush="#253350" BorderThickness="1">
                         <TextBlock x:Name="RuntimeBadge" Text="Python venv" FontSize="11" Foreground="#38BDF8" FontWeight="SemiBold"/>
@@ -1647,16 +1697,12 @@ function Invoke-SetupPythonVenv {
     Set-UIState "Python環境構築中..." $brushOrange $false $false
     if ($initProgressBar) { $initProgressBar.Visibility = "Visible" }
 
-    # 1. uv の準備 (既存の uv または tools\uv\uv.exe)
-    $uvCmd = (where.exe uv 2>$null | Select-Object -First 1)
+    # 1. uv の準備 (スマートアプリコントロール SAC 対応 & 自動フォールバック付き)
+    $uvCmd = Get-SafeUvCommand
     $localUvDir = Join-Path $ProjectRoot "tools\uv"
     $localUvExe = Join-Path $localUvDir "uv.exe"
 
-    if (-not $uvCmd -and (Test-Path $localUvExe)) {
-        $uvCmd = $localUvExe
-    }
-
-    if (-not $uvCmd) {
+    if (-not $uvCmd -and -not $script:UvBlockedBySac) {
         Write-AppLog "高速パッケージツール (uv) を取得中 (GitHub Releases)..." "INFO"
         try {
             if (-not (Test-Path $localUvDir)) {
@@ -1678,15 +1724,19 @@ function Invoke-SetupPythonVenv {
             }
             $wc.Dispose()
             
+            try { Unblock-File -LiteralPath $uvZip -ErrorAction SilentlyContinue } catch {}
             Expand-Archive -Path $uvZip -DestinationPath $localUvDir -Force
             Remove-Item -Path $uvZip -Force -ErrorAction SilentlyContinue
 
             if (Test-Path $localUvExe) {
-                $uvCmd = $localUvExe
-                Write-AppLog "✔ uv ツールの配置が完了しました: $uvCmd" "INFO"
+                try { Unblock-File -LiteralPath $localUvExe -ErrorAction SilentlyContinue } catch {}
+                $uvCmd = Get-SafeUvCommand
+                if ($uvCmd) {
+                    Write-AppLog "✔ uv ツールの配置が完了しました: $uvCmd" "INFO"
+                }
             }
         } catch {
-            Write-AppLog "uv のダウンロードに失敗しました: $_" "ERROR"
+            Write-AppLog "uv のダウンロードに失敗しました (標準 Python pip を使用します): $_" "WARN"
         }
     }
 
@@ -1705,41 +1755,53 @@ function Invoke-SetupPythonVenv {
 
     if ($ForceRecreate -or -not (Test-Path $venvPython)) {
         Write-AppLog "Python 3.14 仮想環境 (.venv) を作成しています..." "INFO"
+        $venvCreated = $false
         if ($uvCmd) {
-            $pinfoVenv = [System.Diagnostics.ProcessStartInfo]::new()
-            $pinfoVenv.FileName = $uvCmd
-            $pinfoVenv.Arguments = "venv .venv --python 3.14"
-            $pinfoVenv.WorkingDirectory = $ProjectRoot
-            $pinfoVenv.RedirectStandardOutput = $true
-            $pinfoVenv.RedirectStandardError = $true
-            $pinfoVenv.UseShellExecute = $false
-            $pinfoVenv.CreateNoWindow = $true
-            $procVenv = [System.Diagnostics.Process]::Start($pinfoVenv)
-            Wait-ProcessWithUiPump -Proc $procVenv -LogPrefix "[venv作成]"
-            
-            if ($procVenv.ExitCode -ne 0) {
-                Write-AppLog "仮想環境の作成に失敗しました (ExitCode: $($procVenv.ExitCode))" "ERROR"
-                Set-UIState "セットアップ失敗" $brushRed $true $false
-                if ($initProgressBar) { $initProgressBar.Visibility = "Collapsed" }
-                return $false
+            try {
+                $pinfoVenv = [System.Diagnostics.ProcessStartInfo]::new()
+                $pinfoVenv.FileName = $uvCmd
+                $pinfoVenv.Arguments = "venv .venv --python 3.14"
+                $pinfoVenv.WorkingDirectory = $ProjectRoot
+                $pinfoVenv.RedirectStandardOutput = $true
+                $pinfoVenv.RedirectStandardError = $true
+                $pinfoVenv.UseShellExecute = $false
+                $pinfoVenv.CreateNoWindow = $true
+                $procVenv = [System.Diagnostics.Process]::Start($pinfoVenv)
+                Wait-ProcessWithUiPump -Proc $procVenv -LogPrefix "[venv作成]"
+                
+                if ($procVenv.ExitCode -eq 0 -and (Test-Path $venvPython)) {
+                    Write-AppLog "✔ Python 3.14 仮想環境 (.venv) を作成しました。" "INFO"
+                    $venvCreated = $true
+                }
+            } catch {
+                Write-AppLog "uv による venv 作成がブロックされたため、標準 Python にフォールバックします: $_" "WARN"
+                $uvCmd = $null
             }
-            Write-AppLog "✔ Python 3.14 仮想環境 (.venv) を作成しました。" "INFO"
-        } else {
+        }
+        if (-not $venvCreated) {
             $sysPython = (where.exe python 2>$null | Select-Object -First 1)
             if ($sysPython) {
-                $pinfoSys = [System.Diagnostics.ProcessStartInfo]::new()
-                $pinfoSys.FileName = $sysPython
-                $pinfoSys.Arguments = "-m venv .venv"
-                $pinfoSys.WorkingDirectory = $ProjectRoot
-                $pinfoSys.RedirectStandardOutput = $true
-                $pinfoSys.RedirectStandardError = $true
-                $pinfoSys.UseShellExecute = $false
-                $pinfoSys.CreateNoWindow = $true
-                $procSys = [System.Diagnostics.Process]::Start($pinfoSys)
-                Wait-ProcessWithUiPump -Proc $procSys -LogPrefix "[venv作成]"
-            } else {
-                Write-AppLog "Python または uv が見つかりません。" "ERROR"
-                Set-UIState "Python未検出" $brushRed $true $false
+                try {
+                    $pinfoSys = [System.Diagnostics.ProcessStartInfo]::new()
+                    $pinfoSys.FileName = $sysPython
+                    $pinfoSys.Arguments = "-m venv .venv"
+                    $pinfoSys.WorkingDirectory = $ProjectRoot
+                    $pinfoSys.RedirectStandardOutput = $true
+                    $pinfoSys.RedirectStandardError = $true
+                    $pinfoSys.UseShellExecute = $false
+                    $pinfoSys.CreateNoWindow = $true
+                    $procSys = [System.Diagnostics.Process]::Start($pinfoSys)
+                    Wait-ProcessWithUiPump -Proc $procSys -LogPrefix "[venv作成]"
+                    if ($procSys.ExitCode -eq 0 -and (Test-Path $venvPython)) {
+                        $venvCreated = $true
+                    }
+                } catch {
+                    Write-AppLog "Python による venv 作成エラー: $_" "ERROR"
+                }
+            }
+            if (-not $venvCreated) {
+                Write-AppLog "Python 仮想環境の作成に失敗しました。" "ERROR"
+                Set-UIState "セットアップ失敗" $brushRed $true $false
                 if ($initProgressBar) { $initProgressBar.Visibility = "Collapsed" }
                 return $false
             }
@@ -1752,31 +1814,42 @@ function Invoke-SetupPythonVenv {
     if (Test-Path $reqFile) {
         $installSuccess = $false
         if ($uvCmd) {
-            $pinfoPip = [System.Diagnostics.ProcessStartInfo]::new()
-            $pinfoPip.FileName = $uvCmd
-            $pinfoPip.Arguments = "pip install -r `"$reqFile`" --python `"$venvPython`""
-            $pinfoPip.WorkingDirectory = $ProjectRoot
-            $pinfoPip.RedirectStandardOutput = $true
-            $pinfoPip.RedirectStandardError = $true
-            $pinfoPip.UseShellExecute = $false
-            $pinfoPip.CreateNoWindow = $true
-            $pinfoPip.Environment["PYTHONDONTWRITEBYTECODE"] = "1"
-            $procPip = [System.Diagnostics.Process]::Start($pinfoPip)
-            Wait-ProcessWithUiPump -Proc $procPip -LogPrefix "[pip導入]"
-            if ($procPip.ExitCode -eq 0) { $installSuccess = $true }
-        } else {
-            $pinfoPipSys = [System.Diagnostics.ProcessStartInfo]::new()
-            $pinfoPipSys.FileName = $venvPython
-            $pinfoPipSys.Arguments = "-B -m pip install -r `"$reqFile`""
-            $pinfoPipSys.WorkingDirectory = $ProjectRoot
-            $pinfoPipSys.RedirectStandardOutput = $true
-            $pinfoPipSys.RedirectStandardError = $true
-            $pinfoPipSys.UseShellExecute = $false
-            $pinfoPipSys.CreateNoWindow = $true
-            $pinfoPipSys.Environment["PYTHONDONTWRITEBYTECODE"] = "1"
-            $procPipSys = [System.Diagnostics.Process]::Start($pinfoPipSys)
-            Wait-ProcessWithUiPump -Proc $procPipSys -LogPrefix "[pip導入]"
-            if ($procPipSys.ExitCode -eq 0) { $installSuccess = $true }
+            try {
+                $pinfoPip = [System.Diagnostics.ProcessStartInfo]::new()
+                $pinfoPip.FileName = $uvCmd
+                $pinfoPip.Arguments = "pip install -r `"$reqFile`" --python `"$venvPython`""
+                $pinfoPip.WorkingDirectory = $ProjectRoot
+                $pinfoPip.RedirectStandardOutput = $true
+                $pinfoPip.RedirectStandardError = $true
+                $pinfoPip.UseShellExecute = $false
+                $pinfoPip.CreateNoWindow = $true
+                $pinfoPip.Environment["PYTHONDONTWRITEBYTECODE"] = "1"
+                $procPip = [System.Diagnostics.Process]::Start($pinfoPip)
+                Wait-ProcessWithUiPump -Proc $procPip -LogPrefix "[pip導入]"
+                if ($procPip.ExitCode -eq 0) { $installSuccess = $true }
+            } catch {
+                Write-AppLog "uv pip がブロックされたため、標準 pip にフォールバックします: $_" "WARN"
+                $uvCmd = $null
+            }
+        }
+        if (-not $installSuccess -and (Test-Path $venvPython)) {
+            try {
+                Unblock-File -LiteralPath $venvPython -ErrorAction SilentlyContinue
+                $pinfoPipSys = [System.Diagnostics.ProcessStartInfo]::new()
+                $pinfoPipSys.FileName = $venvPython
+                $pinfoPipSys.Arguments = "-B -m pip install -r `"$reqFile`""
+                $pinfoPipSys.WorkingDirectory = $ProjectRoot
+                $pinfoPipSys.RedirectStandardOutput = $true
+                $pinfoPipSys.RedirectStandardError = $true
+                $pinfoPipSys.UseShellExecute = $false
+                $pinfoPipSys.CreateNoWindow = $true
+                $pinfoPipSys.Environment["PYTHONDONTWRITEBYTECODE"] = "1"
+                $procPipSys = [System.Diagnostics.Process]::Start($pinfoPipSys)
+                Wait-ProcessWithUiPump -Proc $procPipSys -LogPrefix "[pip導入]"
+                if ($procPipSys.ExitCode -eq 0) { $installSuccess = $true }
+            } catch {
+                Write-AppLog "pip の起動に失敗しました: $_" "ERROR"
+            }
         }
 
         if (-not $installSuccess) {
@@ -1785,6 +1858,7 @@ function Invoke-SetupPythonVenv {
             if ($initProgressBar) { $initProgressBar.Visibility = "Collapsed" }
             return $false
         }
+        Unblock-ProjectFiles -RootDir $ProjectRoot
         Write-AppLog "✔ 依存パッケージのインストールが完了しました！" "INFO"
     }
 
@@ -2581,11 +2655,18 @@ function Invoke-UpdateAppCode {
         if (-not $updateSuccess) {
             Write-AppLog "GitHub から最新ソースコードアーカイブを取得中..." "INFO"
             [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
-            $zipUrl = "https://github.com/Maximilian2022/hayamimi/archive/refs/heads/main.zip"
+            $zipUrl = "https://github.com/Maximilian2022/hayamimi-live/archive/refs/heads/main.zip"
             $tempZip = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "hayamimi-latest.zip")
             $tempExtract = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "hayamimi-extract-" + [System.Guid]::NewGuid().ToString("N"))
 
-            Invoke-WebRequest -Uri $zipUrl -OutFile $tempZip -UseBasicParsing -TimeoutSec 30
+            try {
+                Invoke-WebRequest -Uri $zipUrl -OutFile $tempZip -UseBasicParsing -TimeoutSec 30
+            } catch {
+                $fallbackZipUrl = "https://github.com/Maximilian2022/hayamimi/archive/refs/heads/main.zip"
+                Invoke-WebRequest -Uri $fallbackZipUrl -OutFile $tempZip -UseBasicParsing -TimeoutSec 30
+            }
+            # 展開前に ZIP ファイル自体の Mark of the Web (Zone.Identifier) を除去し、スマートアプリコントロールの誤検知を防止
+            try { Unblock-File -LiteralPath $tempZip -ErrorAction SilentlyContinue } catch {}
             Expand-Archive -Path $tempZip -DestinationPath $tempExtract -Force
 
             # 展開フォルダ内のファイルをプロジェクトルートに安全上書き (.venv / models / logs / config / scratch / .git は保持)
@@ -2636,41 +2717,54 @@ function Invoke-UpdateAppCode {
         Set-UIState "停止中" $brushGray $true $false
 
         if ($updateSuccess) {
-            # 既存の .venv に対する依存パッケージの更新確認 (Python 3.11 / 3.14 両対応)
+            # 取得・展開された全ファイルから Zone.Identifier (Mark of the Web) を除去し、UTF-8 BOM を保証
+            Unblock-ProjectFiles -RootDir $ProjectRoot
+
+            # 既存の .venv に対する依存パッケージの更新確認 (スマートアプリコントロール SAC 安全フォールバック付き)
             $venvPython = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
             $reqFile = Join-Path $ProjectRoot "requirements.txt"
             if ((Test-Path $venvPython) -and (Test-Path $reqFile)) {
                 Write-AppLog "仮想環境 (.venv) の依存パッケージ更新を確認・適用しています..." "INFO"
-                $uvCmd = (where.exe uv 2>$null | Select-Object -First 1)
-                if (-not $uvCmd) {
-                    $localUvExe = Join-Path $ProjectRoot "tools\uv\uv.exe"
-                    if (Test-Path $localUvExe) { $uvCmd = $localUvExe }
-                }
+                $pipDone = $false
+                $uvCmd = Get-SafeUvCommand
                 if ($uvCmd) {
-                    $pinfoPip = [System.Diagnostics.ProcessStartInfo]::new()
-                    $pinfoPip.FileName = $uvCmd
-                    $pinfoPip.Arguments = "pip install -r `"$reqFile`" --python `"$venvPython`""
-                    $pinfoPip.WorkingDirectory = $ProjectRoot
-                    $pinfoPip.RedirectStandardOutput = $true
-                    $pinfoPip.RedirectStandardError = $true
-                    $pinfoPip.UseShellExecute = $false
-                    $pinfoPip.CreateNoWindow = $true
-                    $pinfoPip.Environment["PYTHONDONTWRITEBYTECODE"] = "1"
-                    $procPip = [System.Diagnostics.Process]::Start($pinfoPip)
-                    Wait-ProcessWithUiPump -Proc $procPip -LogPrefix "[依存更新]"
-                } else {
-                    $pinfoPip = [System.Diagnostics.ProcessStartInfo]::new()
-                    $pinfoPip.FileName = $venvPython
-                    $pinfoPip.Arguments = "-B -m pip install -r `"$reqFile`""
-                    $pinfoPip.WorkingDirectory = $ProjectRoot
-                    $pinfoPip.RedirectStandardOutput = $true
-                    $pinfoPip.RedirectStandardError = $true
-                    $pinfoPip.UseShellExecute = $false
-                    $pinfoPip.CreateNoWindow = $true
-                    $pinfoPip.Environment["PYTHONDONTWRITEBYTECODE"] = "1"
-                    $procPip = [System.Diagnostics.Process]::Start($pinfoPip)
-                    Wait-ProcessWithUiPump -Proc $procPip -LogPrefix "[依存更新]"
+                    try {
+                        $pinfoPip = [System.Diagnostics.ProcessStartInfo]::new()
+                        $pinfoPip.FileName = $uvCmd
+                        $pinfoPip.Arguments = "pip install -r `"$reqFile`" --python `"$venvPython`""
+                        $pinfoPip.WorkingDirectory = $ProjectRoot
+                        $pinfoPip.RedirectStandardOutput = $true
+                        $pinfoPip.RedirectStandardError = $true
+                        $pinfoPip.UseShellExecute = $false
+                        $pinfoPip.CreateNoWindow = $true
+                        $pinfoPip.Environment["PYTHONDONTWRITEBYTECODE"] = "1"
+                        $procPip = [System.Diagnostics.Process]::Start($pinfoPip)
+                        Wait-ProcessWithUiPump -Proc $procPip -LogPrefix "[依存更新]"
+                        if ($procPip.ExitCode -eq 0) { $pipDone = $true }
+                    } catch {
+                        Write-AppLog "uv による依存更新が制限されたため、標準 pip に切り替えます: $_" "WARN"
+                    }
                 }
+                if (-not $pipDone) {
+                    try {
+                        Unblock-File -LiteralPath $venvPython -ErrorAction SilentlyContinue
+                        $pinfoPip = [System.Diagnostics.ProcessStartInfo]::new()
+                        $pinfoPip.FileName = $venvPython
+                        $pinfoPip.Arguments = "-B -m pip install -r `"$reqFile`""
+                        $pinfoPip.WorkingDirectory = $ProjectRoot
+                        $pinfoPip.RedirectStandardOutput = $true
+                        $pinfoPip.RedirectStandardError = $true
+                        $pinfoPip.UseShellExecute = $false
+                        $pinfoPip.CreateNoWindow = $true
+                        $pinfoPip.Environment["PYTHONDONTWRITEBYTECODE"] = "1"
+                        $procPip = [System.Diagnostics.Process]::Start($pinfoPip)
+                        Wait-ProcessWithUiPump -Proc $procPip -LogPrefix "[依存更新]"
+                        $pipDone = $true
+                    } catch {
+                        Write-AppLog "依存パッケージ自動更新をスキップしました: $_" "WARN"
+                    }
+                }
+                Unblock-ProjectFiles -RootDir $ProjectRoot
                 Write-AppLog "✔ 依存パッケージの同期が完了しました。" "INFO"
             }
 
@@ -3754,7 +3848,11 @@ $updateCheckTimer = [System.Windows.Threading.DispatcherTimer]::new()
 $updateCheckTimer.Interval = [TimeSpan]::FromMilliseconds(1200)
 $updateCheckTimer.Add_Tick({
     $updateCheckTimer.Stop()
-    Test-AppUpdate -PromptUser
+    try {
+        Test-AppUpdate -PromptUser
+    } catch {
+        Write-AppLog "起動時アップデート確認中に例外が発生しました: $_" "WARN"
+    }
 })
 $updateCheckTimer.Start()
 
@@ -3763,59 +3861,81 @@ $modelRepairTimer = [System.Windows.Threading.DispatcherTimer]::new()
 $modelRepairTimer.Interval = [TimeSpan]::FromMilliseconds(400)
 $modelRepairTimer.Add_Tick({
     $modelRepairTimer.Stop()
-    if ($script:NeedModelRepairOnStartup) {
-        $script:NeedModelRepairOnStartup = $false
-        Ensure-ModelsIntegrity | Out-Null
+    try {
+        if ($script:NeedModelRepairOnStartup) {
+            $script:NeedModelRepairOnStartup = $false
+            Ensure-ModelsIntegrity | Out-Null
+        }
+    } catch {
+        Write-AppLog "起動時モデル自己修復中に例外が発生しました: $_" "WARN"
     }
 })
 $modelRepairTimer.Start()
 
-# 起動時新機能依存パッケージ自己修復タイマー (起動600ms後に安全にチェック)
+# 起動時新機能依存パッケージ自己修復タイマー (起動600ms後にUIスレッドセーフ・SAC安全にチェック)
+# ※ PowerShell では ThreadPool.QueueUserWorkItem に ScriptBlock を渡すと Runspace 不在例外で
+#    プロセス全体が即死するため、必ず WPF DispatcherTimer でプロセス完了を監視する。
+$script:ProcDepInstall = $null
+$depInstallWatchTimer = [System.Windows.Threading.DispatcherTimer]::new()
+$depInstallWatchTimer.Interval = [TimeSpan]::FromMilliseconds(500)
+$depInstallWatchTimer.Add_Tick({
+    try {
+        if (-not $script:ProcDepInstall) {
+            $depInstallWatchTimer.Stop()
+            return
+        }
+        if ($script:ProcDepInstall.HasExited) {
+            $depInstallWatchTimer.Stop()
+            $exitCode = $script:ProcDepInstall.ExitCode
+            $script:ProcDepInstall = $null
+            if ($exitCode -eq 0) {
+                Unblock-ProjectFiles -RootDir $ProjectRoot
+                Write-AppLog "✔ imageio-ffmpeg の自動配備が完了しました (YouTube取得・ffmpeg対応)" "INFO"
+            }
+        }
+    } catch {
+        $depInstallWatchTimer.Stop()
+        $script:ProcDepInstall = $null
+    }
+})
+
 $depCheckTimer = [System.Windows.Threading.DispatcherTimer]::new()
 $depCheckTimer.Interval = [TimeSpan]::FromMilliseconds(600)
 $depCheckTimer.Add_Tick({
     $depCheckTimer.Stop()
-    if ($script:CurrentEngineMode -eq "Venv") {
-        $venvPython = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
-        if (Test-Path $venvPython) {
-            # imageio_ffmpeg の有無をクイックチェック
-            $pinfoCheck = [System.Diagnostics.ProcessStartInfo]::new()
-            $pinfoCheck.FileName = $venvPython
-            $pinfoCheck.Arguments = "-B -c `"import imageio_ffmpeg`""
-            $pinfoCheck.CreateNoWindow = $true
-            $pinfoCheck.UseShellExecute = $false
-            $procCheck = [System.Diagnostics.Process]::Start($pinfoCheck)
-            $procCheck.WaitForExit(3000) | Out-Null
-            if ($procCheck.ExitCode -ne 0) {
-                Write-AppLog "未適用の外部依存パッケージ (imageio-ffmpeg) を自動検出しました。仮想環境を同期中..." "INFO"
-                $uvCmd = (where.exe uv 2>$null | Select-Object -First 1)
-                if (-not $uvCmd) {
-                    $localUvExe = Join-Path $ProjectRoot "tools\uv\uv.exe"
-                    if (Test-Path $localUvExe) { $uvCmd = $localUvExe }
-                }
-                $pinfoInstall = [System.Diagnostics.ProcessStartInfo]::new()
-                if ($uvCmd) {
-                    $pinfoInstall.FileName = $uvCmd
-                    $pinfoInstall.Arguments = "pip install imageio-ffmpeg>=0.5.1 --python `"$venvPython`""
-                } else {
+    try {
+        # 起動直後にスクリプト・実行ファイル群の Zone.Identifier (Mark of the Web) を安全解除
+        Unblock-ProjectFiles -RootDir $ProjectRoot
+
+        if ($script:CurrentEngineMode -eq "Venv") {
+            $venvPython = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
+            if (Test-Path $venvPython) {
+                # imageio_ffmpeg の有無をクイックチェック
+                $pinfoCheck = [System.Diagnostics.ProcessStartInfo]::new()
+                $pinfoCheck.FileName = $venvPython
+                $pinfoCheck.Arguments = "-B -c `"import imageio_ffmpeg`""
+                $pinfoCheck.CreateNoWindow = $true
+                $pinfoCheck.UseShellExecute = $false
+                $procCheck = [System.Diagnostics.Process]::Start($pinfoCheck)
+                $procCheck.WaitForExit(3000) | Out-Null
+                if ($procCheck.HasExited -and $procCheck.ExitCode -ne 0) {
+                    Write-AppLog "未適用の外部依存パッケージ (imageio-ffmpeg) を自動検出しました。仮想環境を同期中..." "INFO"
+                    # スマートアプリコントロール (SAC) による未署名 uv.exe ブロック警告を回避するため、
+                    # 既に起動確認済みの公式 Python (pip) を直接使用してバックグラウンド導入する
+                    $pinfoInstall = [System.Diagnostics.ProcessStartInfo]::new()
                     $pinfoInstall.FileName = $venvPython
                     $pinfoInstall.Arguments = "-B -m pip install imageio-ffmpeg>=0.5.1"
+                    $pinfoInstall.WorkingDirectory = $ProjectRoot
+                    $pinfoInstall.CreateNoWindow = $true
+                    $pinfoInstall.UseShellExecute = $false
+                    $pinfoInstall.Environment["PYTHONDONTWRITEBYTECODE"] = "1"
+                    $script:ProcDepInstall = [System.Diagnostics.Process]::Start($pinfoInstall)
+                    $depInstallWatchTimer.Start()
                 }
-                $pinfoInstall.CreateNoWindow = $true
-                $pinfoInstall.UseShellExecute = $false
-                $pinfoInstall.Environment["PYTHONDONTWRITEBYTECODE"] = "1"
-                $procInstall = [System.Diagnostics.Process]::Start($pinfoInstall)
-                [System.Threading.ThreadPool]::QueueUserWorkItem({
-                    param($p)
-                    $p.WaitForExit()
-                    if ($p.ExitCode -eq 0) {
-                        $window.Dispatcher.Invoke([Action]{
-                            Write-AppLog "✔ imageio-ffmpeg の自動配備が完了しました (YouTube取得・ffmpeg対応)" "INFO"
-                        })
-                    }
-                }, $procInstall) | Out-Null
             }
         }
+    } catch {
+        Write-AppLog "依存パッケージ自動チェックをスキップしました: $_" "WARN"
     }
 })
 $depCheckTimer.Start()
@@ -3835,4 +3955,7 @@ if ($modelRepairTimer -and $modelRepairTimer.IsEnabled) {
 }
 if ($depCheckTimer -and $depCheckTimer.IsEnabled) {
     $depCheckTimer.Stop()
+}
+if ($depInstallWatchTimer -and $depInstallWatchTimer.IsEnabled) {
+    $depInstallWatchTimer.Stop()
 }

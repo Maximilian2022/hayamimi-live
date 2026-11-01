@@ -917,8 +917,65 @@
             <div id="speaker-profile-tags-container" class="tag-container">
               <!-- 動的タグチップ -->
             </div>
+            <div id="speaker-profile-collab-info" style="margin-top: 6px; padding-top: 5px; border-top: 1px dashed #1E293B; font-size: 0.7rem; color: #94A3B8; display: flex; justify-content: space-between; align-items: center;">
+            </div>
           </div>
         </div>
+
+        <!-- 放送局品質 DSP 音響前処理アコーディオン -->
+        <details id="dsp-settings-accordion" style="margin-top: 0.6rem; background: rgba(15, 23, 42, 0.55); border: 1px solid #1E293B; border-radius: 6px; padding: 8px 10px;">
+          <summary style="cursor: pointer; font-size: 0.8rem; font-weight: 600; color: #E2E8F0; display: flex; justify-content: space-between; align-items: center; list-style: none;">
+            <span>🎛️ 放送局品質 音声前処理 (DSP チェーン)</span>
+            <span id="dsp-status-badge" style="font-size: 0.68rem; color: #4ADE80; font-family: monospace;">🟢 有効 (CPU 0.1%)</span>
+          </summary>
+          <div style="margin-top: 8px; padding-top: 6px; border-top: 1px solid #1E293B; display: flex; flex-direction: column; gap: 6px; font-size: 0.75rem;">
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; color: #CBD5E1; margin: 0;">
+              <input type="checkbox" id="cfg-dsp-enabled" checked style="accent-color: #38BDF8;">
+              <strong>DSP 前処理チェーン全体を有効化</strong>
+            </label>
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; color: #94A3B8; margin: 0 0 0 12px;">
+              <input type="checkbox" id="cfg-dsp-noise" checked style="accent-color: #38BDF8;">
+              <span>⌨️ キーボード打鍵音・クリック音・ファンノイズ抑制</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; color: #94A3B8; margin: 0 0 0 12px;">
+              <input type="checkbox" id="cfg-dsp-agc" checked style="accent-color: #38BDF8;">
+              <span>📢 叫び声の音割れ防止 &amp; 小声自動ブースト (AGC/Compressor)</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; color: #94A3B8; margin: 0 0 0 12px;">
+              <input type="checkbox" id="cfg-dsp-hp" checked style="accent-color: #38BDF8;">
+              <span>💨 マイク低音振動・息吹かれカット (80Hz High-Pass)</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; color: #94A3B8; margin: 0 0 0 12px;">
+              <input type="checkbox" id="cfg-dsp-deesser" checked style="accent-color: #38BDF8;">
+              <span>✨ サ行の歯擦音・高域刺さり抑制 (De-Esser)</span>
+            </label>
+          </div>
+        </details>
+
+        <!-- わんコメ / コメント連携アコーディオン -->
+        <details id="comment-sync-accordion" style="margin-top: 0.5rem; background: rgba(15, 23, 42, 0.55); border: 1px solid #1E293B; border-radius: 6px; padding: 8px 10px;">
+          <summary style="cursor: pointer; font-size: 0.8rem; font-weight: 600; color: #E2E8F0; display: flex; justify-content: space-between; align-items: center; list-style: none;">
+            <span>💬 わんコメ / 配信コメント語彙リアルタイム連携</span>
+            <span id="comment-sync-badge" style="font-size: 0.68rem; color: #94A3B8; font-family: monospace;">⚪ オフ</span>
+          </summary>
+          <div style="margin-top: 8px; padding-top: 6px; border-top: 1px solid #1E293B; display: flex; flex-direction: column; gap: 6px; font-size: 0.75rem;">
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; color: #CBD5E1; margin: 0;">
+              <input type="checkbox" id="cfg-comment-sync-enabled" style="accent-color: #38BDF8;">
+              <strong>コメントから旬の固有名詞を自動抽出してASR辞書へ即時反映</strong>
+            </label>
+            <div style="margin-top: 2px;">
+              <label style="font-size: 0.7rem; color: #94A3B8; margin-bottom: 2px;">わんコメ ローカルAPI URL:</label>
+              <input type="text" id="cfg-onecomme-url" value="http://127.0.0.1:11180/api/comments" style="font-size: 0.74rem; padding: 4px 8px;">
+            </div>
+            <div>
+              <label style="font-size: 0.7rem; color: #94A3B8; margin-bottom: 2px;">コメント監視テキストファイルパス (任意・副系):</label>
+              <input type="text" id="cfg-comment-file-path" placeholder="例: C:\obs\comment.txt" style="font-size: 0.74rem; padding: 4px 8px;">
+            </div>
+            <div id="comment-hotwords-preview" style="font-size: 0.7rem; color: #38BDF8; margin-top: 2px;">
+              獲得ホットワード: 0語
+            </div>
+          </div>
+        </details>
 
         <div class="form-row">
           <div>
@@ -2329,6 +2386,17 @@
       };
       container.appendChild(chip);
     });
+
+    const collabInfo = document.getElementById("speaker-profile-collab-info");
+    if (collabInfo) {
+      const isCollabOn = (prof.collab_filter_enabled !== false);
+      const kwCnt = Array.isArray(prof.collab_exclude_keywords) ? prof.collab_exclude_keywords.length : 18;
+      const statusColor = isCollabOn ? "#4ADE80" : "#94A3B8";
+      collabInfo.innerHTML = `
+        <span>🛡️ コラボ・他者アーカイブ自動除外: <strong style="color:${statusColor};">${isCollabOn ? `有効 (${kwCnt}ワード登録)` : '無効 (OFF)'}</strong></span>
+        <a href="/profile" target="_blank" style="color:#38BDF8; text-decoration:none;">除外ワード編集 ↗</a>
+      `;
+    }
   }
 
   async function toggleProfileTag(speakerId, tag) {
@@ -2431,8 +2499,118 @@
     });
   }
 
+  // --- 放送局品質 DSP 設定 & わんコメ連携 ---
+  async function loadDspAndCommentConfig() {
+    try {
+      const dspRes = await fetch("/api/dsp/config");
+      if (dspRes.ok) {
+        const d = await dspRes.json();
+        document.getElementById("cfg-dsp-enabled").checked = d.enabled !== false;
+        document.getElementById("cfg-dsp-noise").checked = d.noise_suppress_enabled !== false;
+        document.getElementById("cfg-dsp-agc").checked = d.agc_compressor_enabled !== false;
+        document.getElementById("cfg-dsp-hp").checked = d.highpass_enabled !== false;
+        document.getElementById("cfg-dsp-deesser").checked = d.deesser_enabled !== false;
+        updateDspBadge(d);
+      }
+    } catch (_) {}
+
+    try {
+      const cRes = await fetch("/api/comments/status");
+      if (cRes.ok) {
+        const c = await cRes.json();
+        document.getElementById("cfg-comment-sync-enabled").checked = !!c.enabled;
+        if (c.onecomme_url) document.getElementById("cfg-onecomme-url").value = c.onecomme_url;
+        if (c.comment_file_path !== undefined) document.getElementById("cfg-comment-file-path").value = c.comment_file_path;
+        updateCommentSyncBadge(c);
+      }
+    } catch (_) {}
+  }
+
+  function updateDspBadge(d) {
+    const badge = document.getElementById("dsp-status-badge");
+    if (!badge) return;
+    if (d.enabled !== false) {
+      badge.textContent = "🟢 有効 (CPU 0.1%)";
+      badge.style.color = "#4ADE80";
+    } else {
+      badge.textContent = "⚪ 無効";
+      badge.style.color = "#94A3B8";
+    }
+  }
+
+  async function saveDspConfig() {
+    const payload = {
+      enabled: document.getElementById("cfg-dsp-enabled").checked,
+      noise_suppress_enabled: document.getElementById("cfg-dsp-noise").checked,
+      agc_compressor_enabled: document.getElementById("cfg-dsp-agc").checked,
+      highpass_enabled: document.getElementById("cfg-dsp-hp").checked,
+      deesser_enabled: document.getElementById("cfg-dsp-deesser").checked,
+    };
+    updateDspBadge(payload);
+    try {
+      await fetch("/api/dsp/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    } catch (_) {}
+  }
+
+  ["cfg-dsp-enabled", "cfg-dsp-noise", "cfg-dsp-agc", "cfg-dsp-hp", "cfg-dsp-deesser"].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener("change", saveDspConfig);
+  });
+
+  function updateCommentSyncBadge(c) {
+    const badge = document.getElementById("comment-sync-badge");
+    const prev = document.getElementById("comment-hotwords-preview");
+    if (badge) {
+      if (!c.enabled) {
+        badge.textContent = "⚪ オフ";
+        badge.style.color = "#94A3B8";
+      } else if (c.connected_source === "onecomme_api" || c.connected_source === "comment_file" || c.connected_source === "manual") {
+        badge.textContent = `🟢 連携中 (${c.active_words_count || 0}語獲得)`;
+        badge.style.color = "#4ADE80";
+      } else {
+        badge.textContent = `🟡 待機中 (${c.active_words_count || 0}語)`;
+        badge.style.color = "#FACC15";
+      }
+    }
+    if (prev) {
+      const words = c.active_words || [];
+      prev.textContent = words.length > 0
+        ? `獲得ホットワード (${words.length}語): ${words.slice(0, 12).join(", ")}`
+        : "獲得ホットワード: 0語 (コメント待機中)";
+    }
+  }
+
+  async function saveCommentSyncConfig() {
+    const payload = {
+      enabled: document.getElementById("cfg-comment-sync-enabled").checked,
+      onecomme_url: document.getElementById("cfg-onecomme-url").value.trim(),
+      comment_file_path: document.getElementById("cfg-comment-file-path").value.trim(),
+    };
+    try {
+      const res = await fetch("/api/comments/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        updateCommentSyncBadge(data);
+      }
+    } catch (_) {}
+  }
+
+  ["cfg-comment-sync-enabled", "cfg-onecomme-url", "cfg-comment-file-path"].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener("change", saveCommentSyncConfig);
+  });
+
   loadConfigAndStyle();
   loadSpeakerProfiles();
+  loadDspAndCommentConfig();
 </script>
 
 </body>

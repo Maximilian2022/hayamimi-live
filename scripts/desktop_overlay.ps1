@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     早耳 (hayamimi) - デスクトップ透過オーバーレイ字幕ウィンドウ
 .DESCRIPTION
@@ -70,7 +70,7 @@ public class OverlayWin32 {
 }
 "@
 if (-not ([System.Management.Automation.PSTypeName]'OverlayWin32').Type) {
-    Add-Type -TypeDefinition $win32Code
+    try { Add-Type -TypeDefinition $win32Code -ErrorAction SilentlyContinue } catch {}
 }
 
 # ログファイルパス & ロギング関数 (logs/launcher.log へ集約)
@@ -700,7 +700,7 @@ $window.Add_Closed({
 $window.Add_SourceInitialized({
     $helper = New-Object System.Windows.Interop.WindowInteropHelper($window)
     $script:hWnd = $helper.Handle
-    [OverlayWin32]::SetForegroundWindow($script:hWnd) | Out-Null
+    try { [OverlayWin32]::SetForegroundWindow($script:hWnd) | Out-Null } catch {}
 
     # Win32 メッセージフック (WM_HOTKEY: 0x0312 の受信)
     try {

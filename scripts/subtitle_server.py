@@ -248,13 +248,31 @@ def _scan_channels_for_maintenance(server):
                 if chan_url:
                     try:
                         exclude = set(prof.processed_video_ids) | set(prof.skipped_video_ids)
-                        new_vids = fetcher.fetch_channel_videos(
-                            channel_url=chan_url,
-                            limit=2,
-                            candidate_pool=15,
-                            exclude_video_ids=exclude,
-                            sort_by="recent",
-                        )
+                        skipped_in_scan: list[str] = []
+                        try:
+                            new_vids = fetcher.fetch_channel_videos(
+                                channel_url=chan_url,
+                                limit=2,
+                                candidate_pool=15,
+                                exclude_video_ids=exclude,
+                                sort_by="recent",
+                                filter_collab=getattr(prof, "collab_filter_enabled", True),
+                                collab_keywords=getattr(prof, "collab_exclude_keywords", None),
+                                skipped_video_ids_out=skipped_in_scan,
+                            )
+                        except TypeError:
+                            new_vids = fetcher.fetch_channel_videos(
+                                channel_url=chan_url,
+                                limit=2,
+                                candidate_pool=15,
+                                exclude_video_ids=exclude,
+                                sort_by="recent",
+                            )
+                        if skipped_in_scan:
+                            for svid in skipped_in_scan:
+                                if svid not in prof.skipped_video_ids:
+                                    prof.skipped_video_ids.append(svid)
+                            save_profile(prof, pdir)
                         for nv in new_vids:
                             pending_vids.append({
                                 "id": nv["id"],
@@ -295,8 +313,8 @@ def _execute_maintenance(server, log_callback=None):
         _maintenance_status["last_result"] = None
 
     import datetime
-    from tools.profile_builder.pipeline import ProfileBuilderPipeline
-    from tools.profile_builder.profile_exporter import list_profiles, save_profile
+    from tools.profile_builder.pipeline import CollabVideoSkippedError, ProfileBuilderPipeline
+    from tools.profile_builder.profile_exporter import list_profiles, load_profile, save_profile
     pdir = _get_profiles_dir()
     vids_to_process = list(_maintenance_status.get("pending_videos", []))
 
@@ -307,6 +325,7 @@ def _execute_maintenance(server, log_callback=None):
         # 2. Process pending new videos automatically (continuous growing)
         key = _get_gemini_key()
         learned_videos = 0
+        skipped_collab = 0
         if vids_to_process and key:
             pipeline = ProfileBuilderPipeline(api_key=key)
             for idx, v_info in enumerate(vids_to_process):
@@ -323,6 +342,16 @@ def _execute_maintenance(server, log_callback=None):
                         duration_sec=720.0,
                     )
                     learned_videos += 1
+                except CollabVideoSkippedError as cse:
+                    skipped_collab += 1
+                    logger.info("Maintenance skipped collab video %s: %s", v_info["url"], cse)
+                    try:
+                        p_skip = load_profile(v_info["speaker_id"], pdir)
+                        if p_skip and v_info.get("id") and v_info["id"] not in p_skip.skipped_video_ids:
+                            p_skip.skipped_video_ids.append(v_info["id"])
+                            save_profile(p_skip, pdir)
+                    except Exception:
+                        pass
                 except Exception as ve:
                     logger.error("Maintenance video %s failed: %s", v_info["url"], ve)
 
@@ -1293,6 +1322,18 @@ class SubtitleServer:
                     k = _get_gemini_key()
                     masked = (k[:6] + "..." + k[-4:]) if len(k) > 10 else ("設定済み" if k else "")
                     self._json(200, {"configured": bool(k), "masked": masked})
+                elif req_path == "/api/dsp/config":
+                    try:
+                        from scripts.audio_dsp import get_global_dsp
+                    except ImportError:
+                        from audio_dsp import get_global_dsp
+                    self._json(200, get_global_dsp().get_config())
+                elif req_path == "/api/comments/status":
+                    try:
+                        from scripts.comment_sync import get_global_comment_sync
+                    except ImportError:
+                        from comment_sync import get_global_comment_sync
+                    self._json(200, get_global_comment_sync().get_status())
                 elif req_path == "/api/maintenance/status":
                     with _maintenance_lock:
                         st = dict(_maintenance_status)
@@ -1590,6 +1631,39 @@ class SubtitleServer:
                     _sync_stats_to_profile(server)
                     self._json(200, {"ok": True})
                     return
+                if req_path == "/api/dsp/config":
+                    code, payload = self._read_json_body()
+                    if code != 200 or payload is None:
+                        return
+                    if not isinstance(payload, dict):
+                        self._json(400, {"error": "body must be a JSON object"})
+                        return
+                    try:
+                        from scripts.audio_dsp import save_global_dsp_config
+                    except ImportError:
+                        from audio_dsp import save_global_dsp_config
+                    updated = save_global_dsp_config(payload)
+                    self._json(200, {"ok": True, **updated})
+                    return
+                if req_path == "/api/comments/config":
+                    code, payload = self._read_json_body()
+                    if code != 200 or payload is None:
+                        return
+                    if not isinstance(payload, dict):
+                        self._json(400, {"error": "body must be a JSON object"})
+                        return
+                    try:
+                        from scripts.comment_sync import get_global_comment_sync, save_global_comment_sync_config
+                    except ImportError:
+                        from comment_sync import get_global_comment_sync, save_global_comment_sync_config
+                    syncer = get_global_comment_sync()
+                    if server.asr is not None and syncer.on_dictionary_updated is None:
+                        syncer.on_dictionary_updated = lambda m: server.asr.set_dynamic_comment_replacements(m)
+                    status = save_global_comment_sync_config(payload)
+                    if status.get("enabled") and "PYTEST_CURRENT_TEST" not in os.environ:
+                        syncer.start()
+                    self._json(200, {"ok": True, **status})
+                    return
                 if req_path == "/api/profiles/apply":
                     code, payload = self._read_json_body()
                     if code != 200 or payload is None:
@@ -1705,6 +1779,39 @@ class SubtitleServer:
                             server.asr.set_replacements(prof.get_active_replacements(active_tags))
                     self._json(200, {"ok": True, "speaker_id": sid, "pattern": pattern, "tags": r.tags})
                     return
+                if req_path == "/api/profiles/update-collab-settings":
+                    code, payload = self._read_json_body()
+                    if code != 200 or payload is None:
+                        return
+                    if not isinstance(payload, dict):
+                        self._json(400, {"error": "body must be a JSON object"})
+                        return
+                    sid = payload.get("speaker_id")
+                    if not sid or not is_safe_speaker_id(sid):
+                        self._json(400, {"error": "Valid speaker_id is required"})
+                        return
+                    from tools.profile_builder.profile_exporter import load_profile, save_profile
+                    pdir = _get_profiles_dir()
+                    prof = load_profile(sid, pdir)
+                    if prof is None:
+                        self._json(404, {"error": f"profile {sid} not found"})
+                        return
+                    if "collab_filter_enabled" in payload:
+                        prof.collab_filter_enabled = bool(payload["collab_filter_enabled"])
+                    if "collab_exclude_keywords" in payload and isinstance(payload["collab_exclude_keywords"], list):
+                        prof.collab_exclude_keywords = [
+                            str(k).strip() for k in payload["collab_exclude_keywords"] if str(k).strip()
+                        ]
+                    save_profile(prof, pdir)
+                    if getattr(server, "_active_profile", None) and server._active_profile.speaker_id == sid:
+                        server._active_profile = prof
+                    self._json(200, {
+                        "ok": True,
+                        "speaker_id": sid,
+                        "collab_filter_enabled": prof.collab_filter_enabled,
+                        "collab_exclude_keywords": prof.collab_exclude_keywords,
+                    })
+                    return
                 if req_path == "/api/profiles/import":
                     code, payload = self._read_json_body()
                     if code != 200 or payload is None:
@@ -1720,6 +1827,11 @@ class SubtitleServer:
                         from tools.profile_builder.profile_exporter import import_profile_json
                         pdir = _get_profiles_dir()
                         prof = import_profile_json(json_content, storage_dir=pdir)
+                        if getattr(server, "_active_profile", None) and server._active_profile.speaker_id == prof.speaker_id:
+                            server._active_profile = prof
+                            if server.asr is not None:
+                                active_tags = getattr(server, "_active_profile_tags", None)
+                                server.asr.set_replacements(prof.get_active_replacements(active_tags))
                         self._json(200, prof.model_dump())
                     except Exception as exc:
                         self._json(400, {"error": str(exc)})
@@ -1801,5 +1913,17 @@ class SubtitleServer:
         # Kick off background maintenance scan 3 seconds after startup (non-blocking)
         if "PYTEST_CURRENT_TEST" not in os.environ:
             threading.Timer(3.0, _scan_channels_for_maintenance, args=(self,)).start()
+            try:
+                from comment_sync import get_global_comment_sync
+                csync = get_global_comment_sync()
+                csync.on_dictionary_updated = lambda m: (
+                    self.asr.set_dynamic_comment_replacements(m)
+                    if self.asr is not None and hasattr(self.asr, "set_dynamic_comment_replacements")
+                    else None
+                )
+                if csync.enabled:
+                    csync.start()
+            except Exception as ce:
+                logger.debug("Comment sync startup skipped: %s", ce)
 
         return self

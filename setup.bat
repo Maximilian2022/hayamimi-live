@@ -36,11 +36,12 @@ if not exist "%SETUP_SCRIPT%" (
 )
 
 :run_setup
-:: Ensure UTF-8 with BOM so Windows PowerShell 5.1 correctly parses Japanese characters without syntax errors
-%PS_CMD% -NoProfile -Command "if (Test-Path $env:SETUP_SCRIPT) { $b=[System.IO.File]::ReadAllBytes($env:SETUP_SCRIPT); if ($b.Length -lt 3 -or $b[0] -ne 239 -or $b[1] -ne 187 -or $b[2] -ne 191) { [System.IO.File]::WriteAllBytes($env:SETUP_SCRIPT, [byte[]]@(239, 187, 191) + $b) } }"
+:: Unblock all local files (remove Mark of the Web / Zone.Identifier for Smart App Control & SmartScreen)
+:: and ensure UTF-8 with BOM on .ps1 files so Windows PowerShell 5.1 parses Japanese characters cleanly
+%PS_CMD% -NoProfile -ExecutionPolicy Bypass -Command "try { Get-ChildItem -LiteralPath '%~dp0' -Recurse -File -ErrorAction SilentlyContinue | Unblock-File -ErrorAction SilentlyContinue } catch {}; if (Test-Path $env:SETUP_SCRIPT) { try { Unblock-File -LiteralPath $env:SETUP_SCRIPT -ErrorAction SilentlyContinue } catch {}; $b=[System.IO.File]::ReadAllBytes($env:SETUP_SCRIPT); if ($b.Length -lt 3 -or $b[0] -ne 239 -or $b[1] -ne 187 -or $b[2] -ne 191) { [System.IO.File]::WriteAllBytes($env:SETUP_SCRIPT, [byte[]]@(239, 187, 191) + $b) } }"
 
 echo [*] Launching hayamimi setup GUI...
-%PS_CMD% -NoProfile -ExecutionPolicy Bypass -File "%SETUP_SCRIPT%"
+%PS_CMD% -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%SETUP_SCRIPT%"
 
 :: Clean up temp file if downloaded
 if exist "%TEMP%\hayamimi_setup.ps1" (

@@ -282,6 +282,143 @@ def extract_hashtags_from_metadata(metadata: Any) -> List[str]:
     return combined
 
 
+def _match_collab_keyword(text_lower: str, kw: str) -> bool:
+    """Check if keyword matches in text_lower with boundary protection for short English words."""
+    k = kw.strip().lower()
+    if not k or not text_lower:
+        return False
+    if k in ("with", "w/", "guest", "collab"):
+        pattern = r"(?:^|[\s　【\[（「『(/:：|｜\-])" + re.escape(k) + r"(?:[\s　】\]）」』)/:：|｜!！?？,、.]|$)"
+        return bool(re.search(pattern, text_lower))
+    return k in text_lower
+
+
+def is_collab_title(
+    title: str,
+    filter_enabled: bool = True,
+    exclude_keywords: Optional[List[str]] = None,
+) -> Tuple[bool, str]:
+    """Check if a video title indicates a collaboration or multi-speaker stream.
+    
+    Returns:
+        (is_collab, reason)
+    """
+    if not filter_enabled or not title:
+        return False, ""
+    from tools.profile_builder.profile_model import DEFAULT_COLLAB_KEYWORDS
+    keywords = DEFAULT_COLLAB_KEYWORDS if exclude_keywords is None else exclude_keywords
+    t_lower = title.lower()
+    for kw in keywords:
+        if _match_collab_keyword(t_lower, kw):
+            return True, f"タイトルに除外キーワード '{kw}' を検出"
+    return False, ""
+
+
+def is_collab_or_guest_video(
+    metadata: Any,
+    filter_enabled: bool = True,
+    exclude_keywords: Optional[List[str]] = None,
+    own_channel_url: Optional[str] = None,
+    own_channel_name: Optional[str] = None,
+) -> Tuple[bool, str]:
+    """Check if video metadata (title, description, hashtags, mentions) indicates a collaboration or guest stream.
+    
+    Returns:
+        (is_collab, reason)
+    """
+    if not filter_enabled or not metadata:
+        return False, ""
+
+    from tools.profile_builder.profile_model import DEFAULT_COLLAB_KEYWORDS
+    keywords = DEFAULT_COLLAB_KEYWORDS if exclude_keywords is None else exclude_keywords
+
+    title = getattr(metadata, "title", "") or ""
+    desc = getattr(metadata, "description", "") or ""
+    meta_tags = getattr(metadata, "tags", []) or []
+    chan_url = own_channel_url or getattr(metadata, "channel_url", "") or ""
+    chan_name = own_channel_name or getattr(metadata, "channel", "") or ""
+
+    # 1. Title check
+    is_c, reason = is_collab_title(title, filter_enabled=True, exclude_keywords=keywords)
+    if is_c:
+        return True, reason
+
+    # 2. Hashtags check
+    all_hashtags = extract_hashtags_from_metadata(metadata)
+    for tag in list(all_hashtags) + [str(t) for t in meta_tags]:
+        tag_clean = tag.lstrip("#＃").lower()
+        for kw in keywords:
+            k = kw.strip().lower()
+            if k and k not in ("w/", "with") and k in tag_clean:
+                return True, f"ハッシュタグに除外キーワード '{kw}' を検出 ({tag})"
+
+    # Strip URLs from description before keyword matching to avoid false hits inside URL strings
+    desc_no_urls = re.sub(r"https?://[^\s　]+", " ", desc)
+    desc_lower = desc_no_urls.lower()
+
+    # 3. Participant / Collaboration section headers in description
+    collab_headers = [
+        "【参加者】", "【参加メンバー】", "【コラボ相手】", "【コラボ者】", "【コラボメンバー】",
+        "【ゲスト】", "【出演者】", "【出演】", "【guests】", "【guest】", "【co-stars】",
+        "[参加者]", "[コラボ相手]", "[ゲスト]", "■参加者", "▼参加者", "◆参加者", "▼コラボ相手",
+    ]
+    for h in collab_headers:
+        if h in desc_lower or h in desc:
+            return True, f"概要欄に参加者見出し '{h}' を検出"
+
+    # 4. Description keyword check
+    for kw in keywords:
+        if _match_collab_keyword(desc_lower, kw):
+            return True, f"概要欄に除外キーワード '{kw}' を検出"
+
+    # 5. Other streamer @mentions or channel URLs check
+    own_handles = {"youtube", "twitter", "x", "twitch", "tiktok", "instagram", "bilibili", "gmail", "yahoo", "hotmail"}
+    for u in (chan_url, own_channel_url or ""):
+        if u:
+            m = re.search(r"@([a-zA-Z0-9_.-]+)", u)
+            if m:
+                own_handles.add(m.group(1).lower())
+            m_ch = re.search(r"/channel/([a-zA-Z0-9_-]+)", u)
+            if m_ch:
+                own_handles.add(m_ch.group(1).lower())
+    if chan_name:
+        own_handles.add(chan_name.lower().replace(" ", "").replace("　", ""))
+
+    # Check title for @mentions
+    title_mentions = re.findall(r"(?:^|[\s　【\[(（/])@([a-zA-Z0-9_.-]{3,30})", title)
+    for tm in title_mentions:
+        if tm.lower() not in own_handles:
+            return True, f"タイトルに他配信者メンション '@{tm}' を検出"
+
+    # Check description for other YouTube channel links or non-credit @mentions
+    credit_line_keywords = (
+        "twitter", "x.com", "x(", "連絡", "contact", "mail", "イラスト", "illust",
+        "ママ", "パパ", "live2d", "モデリング", "bgm", "素材", "音源", "効果音",
+        "ロゴ", "サムネ", "thumbnail", "切り抜き", "ファンアート", "タグ",
+    )
+    for line in desc.splitlines():
+        line_l = line.strip().lower()
+        if not line_l:
+            continue
+        if any(ck in line_l for ck in credit_line_keywords):
+            continue
+
+        # Check youtube.com/@Handle in description line
+        yt_handles = re.findall(r"youtube\.com/@([a-zA-Z0-9_.-]{3,30})", line)
+        for yh in yt_handles:
+            if yh.lower() not in own_handles:
+                return True, f"概要欄に他チャンネルURL 'youtube.com/@{yh}' を検出"
+
+        # Check standalone @Handle in description line (excluding email addresses)
+        line_no_urls = re.sub(r"https?://[^\s　]+", " ", line)
+        mentions = re.findall(r"(?:^|[\s　【\[(（:：/])@([a-zA-Z0-9_.-]{3,30})(?![a-zA-Z0-9_.-]*\.[a-z]{2,})", line_no_urls)
+        for m in mentions:
+            if m.lower() not in own_handles:
+                return True, f"概要欄に他配信者メンション '@{m}' を検出"
+
+    return False, ""
+
+
 def discover_working_browser(test_url: str, yt_dlp_cmd: Union[str, List[str]] = "yt-dlp") -> Optional[str]:
     """Probe installed browsers with yt-dlp if opt-in via HAYAMIMI_ALLOW_BROWSER_COOKIES=1."""
     global _WORKING_COOKIE_BROWSER
@@ -570,6 +707,9 @@ class YouTubeFetcher:
         exclude_video_ids: Optional[set[str]] = None,
         sort_by: str = "views",
         log_callback: Optional[Callable[[str, str], None]] = None,
+        filter_collab: bool = True,
+        collab_keywords: Optional[List[str]] = None,
+        skipped_video_ids_out: Optional[List[str]] = None,
     ) -> List[dict]:
         """Fetch recent videos from a channel, filter out duplicates, and sort by views or recency.
         
@@ -580,6 +720,9 @@ class YouTubeFetcher:
             exclude_video_ids: Set of video IDs already trained to prevent duplicate processing.
             sort_by: "views" (most viewed first) or "recent" (latest uploaded first).
             log_callback: Optional callback for streaming log messages.
+            filter_collab: Whether to automatically exclude collaboration/guest videos by title.
+            collab_keywords: Optional custom collaboration keywords list.
+            skipped_video_ids_out: Optional list to collect video IDs skipped due to collab filter.
         """
         exclude_video_ids = exclude_video_ids or set()
         clean_url = validate_youtube_url(channel_url)
@@ -618,9 +761,10 @@ class YouTubeFetcher:
             except Exception as e:
                 logger.warning("Failed to fetch flat playlist from %s: %s", target_url, e)
 
-        # Filter out duplicates and shorts (< 3min)
+        # Filter out duplicates, shorts (< 3min), and collab videos
         valid_videos = []
         seen_ids = set()
+        collab_skip_cnt = 0
         for e in entries:
             vid_id = e.get("id")
             if not vid_id or vid_id in seen_ids:
@@ -637,6 +781,18 @@ class YouTubeFetcher:
             if duration and duration < 180:
                 continue
 
+            title_str = e.get("title", "") or ""
+            if filter_collab:
+                is_c, reason = is_collab_title(title_str, filter_enabled=True, exclude_keywords=collab_keywords)
+                if is_c:
+                    collab_skip_cnt += 1
+                    logger.info("Skipping collab video by title: %s - %s (%s)", vid_id, title_str, reason)
+                    if log_callback:
+                        log_callback("WARN", f"🛡️ コラボ除外フィルターによりスキップ: 『{title_str}』 ({reason})")
+                    if skipped_video_ids_out is not None and vid_id not in skipped_video_ids_out:
+                        skipped_video_ids_out.append(vid_id)
+                    continue
+
             view_count = int(e.get("view_count", 0) or 0)
             video_url = e.get("url")
             if not video_url or not video_url.startswith("http"):
@@ -644,7 +800,7 @@ class YouTubeFetcher:
 
             valid_videos.append({
                 "id": vid_id,
-                "title": e.get("title", ""),
+                "title": title_str,
                 "url": video_url,
                 "view_count": view_count,
                 "duration": duration,
@@ -662,9 +818,10 @@ class YouTubeFetcher:
         if log_callback:
             dup_cnt = len(seen_ids & exclude_video_ids)
             sort_desc = "新着順" if sort_by == "recent" else "再生数上位順"
+            collab_msg = f"、コラボ除外 {collab_skip_cnt} 件" if collab_skip_cnt > 0 else ""
             log_callback(
                 "YTDL",
-                f"スキャン完了: 取得候補 {len(entries)} 件中、既学習 {dup_cnt} 件をスキップし、{sort_desc} {len(chosen)} 件を一括学習対象に決定。"
+                f"スキャン完了: 取得候補 {len(entries)} 件中、既学習 {dup_cnt} 件{collab_msg}をスキップし、{sort_desc} {len(chosen)} 件を一括学習対象に決定。"
             )
         return chosen
 
@@ -675,6 +832,9 @@ class YouTubeFetcher:
         candidate_pool: int = 50,
         exclude_video_ids: Optional[set[str]] = None,
         log_callback: Optional[Callable[[str, str], None]] = None,
+        filter_collab: bool = True,
+        collab_keywords: Optional[List[str]] = None,
+        skipped_video_ids_out: Optional[List[str]] = None,
     ) -> List[dict]:
         """Fetch videos from a YouTube playlist, filter out duplicates and shorts, and return up to limit videos.
         
@@ -684,6 +844,9 @@ class YouTubeFetcher:
             candidate_pool: Number of playlist videos to fetch for evaluation (default: 50)
             exclude_video_ids: Set of video IDs already trained to prevent duplicate processing.
             log_callback: Optional callback for streaming log messages.
+            filter_collab: Whether to automatically exclude collaboration/guest videos by title.
+            collab_keywords: Optional custom collaboration keywords list.
+            skipped_video_ids_out: Optional list to collect video IDs skipped due to collab filter.
         """
         exclude_video_ids = exclude_video_ids or set()
         clean_url = playlist_url.strip()
@@ -719,9 +882,10 @@ class YouTubeFetcher:
             if log_callback:
                 log_callback("WARN", f"再生リストのエントリ取得中に警告: {e}")
 
-        # Filter out duplicates and shorts (< 3min)
+        # Filter out duplicates, shorts (< 3min), and collab videos
         valid_videos = []
         seen_ids = set()
+        collab_skip_cnt = 0
         for e in entries:
             vid_id = e.get("id")
             if not vid_id or vid_id in seen_ids:
@@ -738,6 +902,18 @@ class YouTubeFetcher:
             if duration and duration < 180:
                 continue
 
+            title_str = e.get("title", "") or ""
+            if filter_collab:
+                is_c, reason = is_collab_title(title_str, filter_enabled=True, exclude_keywords=collab_keywords)
+                if is_c:
+                    collab_skip_cnt += 1
+                    logger.info("Skipping collab video by title: %s - %s (%s)", vid_id, title_str, reason)
+                    if log_callback:
+                        log_callback("WARN", f"🛡️ コラボ除外フィルターによりスキップ: 『{title_str}』 ({reason})")
+                    if skipped_video_ids_out is not None and vid_id not in skipped_video_ids_out:
+                        skipped_video_ids_out.append(vid_id)
+                    continue
+
             view_count = int(e.get("view_count", 0) or 0)
             video_url = e.get("url")
             if not video_url or not video_url.startswith("http"):
@@ -745,7 +921,7 @@ class YouTubeFetcher:
 
             valid_videos.append({
                 "id": vid_id,
-                "title": e.get("title", ""),
+                "title": title_str,
                 "url": video_url,
                 "view_count": view_count,
                 "duration": duration,
@@ -755,9 +931,10 @@ class YouTubeFetcher:
         chosen = valid_videos[:limit]
         if log_callback:
             dup_cnt = len(seen_ids & exclude_video_ids)
+            collab_msg = f"、コラボ除外 {collab_skip_cnt} 件" if collab_skip_cnt > 0 else ""
             log_callback(
                 "YTDL",
-                f"再生リストスキャン完了: 取得候補 {len(entries)} 件中、既学習 {dup_cnt} 件をスキップし、{len(chosen)} 件を一括学習対象に決定。"
+                f"再生リストスキャン完了: 取得候補 {len(entries)} 件中、既学習 {dup_cnt} 件{collab_msg}をスキップし、{len(chosen)} 件を一括学習対象に決定。"
             )
         return chosen
 

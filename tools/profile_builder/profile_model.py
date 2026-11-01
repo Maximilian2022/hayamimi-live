@@ -79,6 +79,27 @@ def sanitize_and_trim_rule(pattern: str, replacement: str) -> Optional[tuple[str
 
 CURRENT_SCHEMA_VERSION = '1.2.0'
 
+DEFAULT_COLLAB_KEYWORDS: List[str] = [
+    "コラボ",
+    "collab",
+    "collaboration",
+    "w/",
+    "with",
+    "ゲスト",
+    "guest",
+    "凸待ち",
+    "逆凸",
+    "対談",
+    "参加型",
+    "大会",
+    "カスタム",
+    "スクリム",
+    "among us",
+    "アモアス",
+    "人狼",
+    "feign",
+]
+
 
 class SpeakerProfile(BaseModel):
     """Complete speaker profile model."""
@@ -139,6 +160,22 @@ class SpeakerProfile(BaseModel):
         0,
         description="Total speech segments used to compute/refine this voiceprint centroid",
     )
+    collab_filter_enabled: bool = Field(
+        True,
+        description="Whether to automatically exclude collaboration/guest archives during training & maintenance",
+    )
+    collab_exclude_keywords: List[str] = Field(
+        default_factory=lambda: list(DEFAULT_COLLAB_KEYWORDS),
+        description="Keywords used to detect and exclude collaboration or multi-speaker archives",
+    )
+    lora_adapter_path: Optional[str] = Field(
+        None,
+        description="Relative or absolute path to trained speaker LoRA adapter binary",
+    )
+    lora_trained_video_count: int = Field(
+        0,
+        description="Number of videos used to train/grow the speaker LoRA adapter",
+    )
 
     def get_available_tags(self) -> List[str]:
         """Return sorted list of all unique tags present across active replacements."""
@@ -191,6 +228,13 @@ class SpeakerProfile(BaseModel):
         is_legacy = (self.schema_version != "1.2.0")
         if is_legacy:
             self.schema_version = "1.2.0"
+            changed = True
+
+        if getattr(self, "collab_filter_enabled", None) is None:
+            self.collab_filter_enabled = True
+            changed = True
+        if getattr(self, "collab_exclude_keywords", None) is None:
+            self.collab_exclude_keywords = list(DEFAULT_COLLAB_KEYWORDS)
             changed = True
 
         fallback_dt = self.created_at or self.updated_at or datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -372,6 +416,10 @@ class SpeakerProfile(BaseModel):
                     merged_vec = merged_vec / norm
                 self.voiceprint = merged_vec.tolist()
                 self.voiceprint_sample_count = total_n
+
+        if other.lora_adapter_path:
+            self.lora_adapter_path = other.lora_adapter_path
+            self.lora_trained_video_count = max(self.lora_trained_video_count + 1, other.lora_trained_video_count)
 
         self.updated_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
         return self

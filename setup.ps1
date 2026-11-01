@@ -1,38 +1,9 @@
 ﻿[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
 
-# --- コンソール & Windows Terminal の完全非表示化 (SW_HIDE) ---
-try {
-    $win32Def = @"
-using System;
-using System.Runtime.InteropServices;
-public class SetupConsoleHelper {
-    [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
-    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-}
-"@
-    Add-Type -TypeDefinition $win32Def -ErrorAction SilentlyContinue
-
-    $cWnd = [SetupConsoleHelper]::GetConsoleWindow()
-    if ($cWnd -ne [IntPtr]::Zero) {
-        [SetupConsoleHelper]::ShowWindow($cWnd, 0)
-    }
-
-    $curPid = $PID
-    for ($i = 0; $i -lt 5; $i++) {
-        $parentPid = (Get-CimInstance Win32_Process -Filter "ProcessId = $curPid" -ErrorAction SilentlyContinue).ParentProcessId
-        if (-not $parentPid) { break }
-        $parentProc = Get-Process -Id $parentPid -ErrorAction SilentlyContinue
-        if ($parentProc) {
-            if ($parentProc.ProcessName -match "WindowsTerminal|wt|cmd|conhost") {
-                if ($parentProc.MainWindowHandle -ne [IntPtr]::Zero) {
-                    [SetupConsoleHelper]::ShowWindow($parentProc.MainWindowHandle, 0)
-                }
-            }
-        }
-        $curPid = $parentPid
-    }
-} catch {}
+# --- スマートアプリコントロール (SAC) 対策: 動的 C# コンパイル (Add-Type -TypeDefinition) を排除 ---
+# Add-Type -TypeDefinition は %TEMP% に未署名の一時 .dll を生成するため、Windows 11 の
+# スマートアプリコントロール (SAC) によるブロックの原因となる。
 
 <#
 .SYNOPSIS
@@ -684,6 +655,7 @@ $stepTimer.Add_Tick({
             Write-SetupLog "ZIP アーカイブを展開中..."
             try {
                 if (Test-Path $script:tempExtractDir) { Remove-Item -Path $script:tempExtractDir -Recurse -Force | Out-Null }
+                try { Unblock-File -LiteralPath $script:tempZipPath -ErrorAction SilentlyContinue } catch {}
                 [System.IO.Compression.ZipFile]::ExtractToDirectory($script:tempZipPath, $script:tempExtractDir)
                 Write-SetupLog "アーカイブの展開が完了しました。"
                 $pbInstall.Value = 65
@@ -768,6 +740,23 @@ $stepTimer.Add_Tick({
                 if (-not (Test-Path $modelsDir)) { New-Item -ItemType Directory -Path $modelsDir -Force | Out-Null }
                 $logsDir = Join-Path $script:targetDir "logs"
                 if (-not (Test-Path $logsDir)) { New-Item -ItemType Directory -Path $logsDir -Force | Out-Null }
+
+                # スマートアプリコントロール (SAC) & SmartScreen 対策:
+                # 配置された全ファイルから Zone.Identifier (Mark of the Web) を一括除去し、.ps1 の UTF-8 BOM を保証
+                Write-SetupLog "セキュリティブロック解除 (Unblock-File) を適用しています..."
+                try {
+                    Get-ChildItem -Path $script:targetDir -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
+                        try { Unblock-File -LiteralPath $_.FullName -ErrorAction SilentlyContinue } catch {}
+                    }
+                    Get-ChildItem -Path $script:targetDir -Recurse -Filter "*.ps1" -File -ErrorAction SilentlyContinue | ForEach-Object {
+                        try {
+                            $b = [System.IO.File]::ReadAllBytes($_.FullName)
+                            if ($b.Length -ge 3 -and ($b[0] -ne 239 -or $b[1] -ne 187 -or $b[2] -ne 191)) {
+                                [System.IO.File]::WriteAllBytes($_.FullName, ([byte[]]@(239, 187, 191) + $b))
+                            }
+                        } catch {}
+                    }
+                } catch {}
 
                 $pbInstall.Value = 85
                 $txtPercent.Text = "85%"

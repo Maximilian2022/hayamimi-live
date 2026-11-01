@@ -2083,7 +2083,8 @@ def run_stream(chunks, vad, sample_rate: int, asr: RoutedASR, stats: SessionStat
                history: AudioHistory | None = None,
                translator_worker: "TranslationWorker | None" = None,
                speaker_labeler=None, stop_event: "threading.Event | None" = None,
-               control: "ControlQueue | None" = None):
+               control: "ControlQueue | None" = None,
+               dsp=None):
     """Drive the VAD -> ASR pipeline over `chunks` until it's exhausted or
     `stop_event` is set.
 
@@ -2124,6 +2125,9 @@ def run_stream(chunks, vad, sample_rate: int, asr: RoutedASR, stats: SessionStat
             if refiner is not None:
                 refiner.maybe_refine(int(audio_pos * sample_rate), force=True)
             continue
+
+        if dsp is not None:
+            chunk = dsp.process(chunk)
 
         vad.accept_waveform(chunk)
         history.push(chunk)
@@ -2644,6 +2648,12 @@ def main():
     stop_event = threading.Event()
 
     try:
+        from audio_dsp import get_global_dsp
+        live_dsp = get_global_dsp()
+    except Exception:
+        live_dsp = None
+
+    try:
         hub.publish({"type": "session_start"})
         if input_mode == "wav":
             if not args.wav:
@@ -2662,23 +2672,23 @@ def main():
                   f"(JSON handshake, then binary pcm_s16le frames)", file=sys.stderr)
             run_stream(ws_chunks(ingest), live_vad, SAMPLE_RATE, asr, stats, printer, refiner,
                        history, translator_worker, speaker_labeler, stop_event=stop_event,
-                       control=control)
+                       control=control, dsp=live_dsp)
         elif input_mode == "speaker":
             run_stream(speaker_chunks(stop_event=stop_event, device_name=args.speaker_device),
                        live_vad, SAMPLE_RATE, asr, stats, printer, refiner, history,
                        translator_worker, speaker_labeler, stop_event=stop_event,
-                       control=control)
+                       control=control, dsp=live_dsp)
         elif input_mode == "mix":
             run_stream(mix_chunks(stop_event=stop_event, mic_device_name=args.mic_device,
                                   speaker_device_name=args.speaker_device),
                        live_vad, SAMPLE_RATE, asr, stats, printer, refiner, history,
                        translator_worker, speaker_labeler, stop_event=stop_event,
-                       control=control)
+                       control=control, dsp=live_dsp)
         else:
             run_stream(mic_chunks(stop_event=stop_event, device_name=args.mic_device),
                        live_vad, SAMPLE_RATE, asr, stats,
                        printer, refiner, history, translator_worker, speaker_labeler,
-                       stop_event=stop_event, control=control)
+                       stop_event=stop_event, control=control, dsp=live_dsp)
     except KeyboardInterrupt:
         stop_event.set()
         finish(SAMPLE_RATE)
