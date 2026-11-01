@@ -116,6 +116,33 @@ def test_is_collab_or_guest_video_mentions_and_whitelist():
     assert is_c3 is True
     assert "参加者" in reason3
 
+    # 4. Stream with official game/publisher/music channels in description -> Should NOT be excluded
+    game_promo_meta = VideoMetadata(
+        video_id="game_promo_001",
+        title="【 #ヴァンピール 】2000人登録記念！ガチャ配信 #18 【 #vampir 】",
+        channel="ヴァル閣下",
+        channel_url="https://www.youtube.com/@ValChannel",
+        description=(
+            "クラス：アカシャ\n"
+            "サーバー：フランツ01\n"
+            "プロモーション：ヴァンピール(VAMPIR)\n"
+            "▼公式YouTubeチャンネル\n"
+            "https://www.youtube.com/@VAMPIRofficial_JP\n"
+            "▼公式X\n"
+            "https://x.com/VAMPIR_JP\n"
+            "楽曲提供元: TheFatRat / @thefatrat\n"
+            "#ヴァンピール #VAMPIR #PR\n"
+        ),
+        duration_sec=3600.0,
+        tags=["ヴァンピール", "VAMPIR"],
+    )
+    is_c4, reason4 = is_collab_or_guest_video(
+        game_promo_meta,
+        own_channel_url="https://www.youtube.com/@ValChannel",
+        own_channel_name="ヴァル閣下",
+    )
+    assert is_c4 is False, f"Game official channel should NOT be excluded: {reason4}"
+
 
 def test_fetch_channel_videos_skips_collab_titles(monkeypatch):
     """Verify fetch_channel_videos filters out collab titles and records skipped IDs."""

@@ -314,6 +314,23 @@ def is_collab_title(
     return False, ""
 
 
+def _is_official_or_service_handle(handle: str) -> bool:
+    """Check if a handle indicates an official game, music, publisher, or platform account rather than an individual guest streamer."""
+    h = handle.lower()
+    # Distinct full tokens
+    distinct_tokens = (
+        "official", "公式", "channel", "support", "developer", "netmarble",
+        "nexon", "capcom", "squareenix", "square_enix", "bandainamco", "konami",
+        "nintendo", "playstation", "riotgames", "ubisoft", "blizzard", "thefatrat", "voicevox",
+        "audiostock", "dova-s", "dovas", "freemusic"
+    )
+    if any(tok in h for tok in distinct_tokens):
+        return True
+    # Short tokens protected with boundary checks to prevent false hits like 'streamer' containing 'ea'
+    short_pattern = r"(?:^|[_\-.])(?:pr|info|game|games|sound|music|bgm|corp|inc|staff|studio)(?:$|[_\-.])"
+    return bool(re.search(short_pattern, h))
+
+
 def is_collab_or_guest_video(
     metadata: Any,
     filter_enabled: bool = True,
@@ -384,37 +401,65 @@ def is_collab_or_guest_video(
     if chan_name:
         own_handles.add(chan_name.lower().replace(" ", "").replace("　", ""))
 
-    # Check title for @mentions
+    # Check title for @mentions (excluding official game/service accounts)
     title_mentions = re.findall(r"(?:^|[\s　【\[(（/])@([a-zA-Z0-9_.-]{3,30})", title)
     for tm in title_mentions:
-        if tm.lower() not in own_handles:
+        tm_l = tm.lower()
+        if tm_l not in own_handles and not _is_official_or_service_handle(tm_l):
             return True, f"タイトルに他配信者メンション '@{tm}' を検出"
 
     # Check description for other YouTube channel links or non-credit @mentions
     credit_line_keywords = (
-        "twitter", "x.com", "x(", "連絡", "contact", "mail", "イラスト", "illust",
-        "ママ", "パパ", "live2d", "モデリング", "bgm", "素材", "音源", "効果音",
-        "ロゴ", "サムネ", "thumbnail", "切り抜き", "ファンアート", "タグ",
+        "twitter", "x.com", "x(", "x（", "連絡先", "連絡", "contact", "mail", "メール", "お仕事",
+        "イラスト", "illust", "絵師", "ママ", "パパ", "live2d", "モデリング", "modeler",
+        "ロゴ", "logo", "サムネ", "thumbnail", "切り抜き", "ファンアート", "タグ",
+        "公式サイト", "公式youtube", "公式x", "公式twitter", "公式チャンネル",
+        "ダウンロード", "download", "事前登録", "特設サイト", "提供：", "提供:",
+        "プロモーション", "タイアップ", "スポンサー", "sponsor", "google play", "app store", "steam",
+        "bgm", "素材", "音源", "効果音", "se：", "se:", "楽曲", "music", "sound", "voicevox", "soundtrack",
+        "dova-s", "dovas", "audiostock",
     )
+    collab_context_keywords = (
+        "コラボ", "collab", "ゲスト", "guest", "参加", "出演", "対談", "w/", "with", "vs",
+        "チーム", "pt", "member", "メンバー", "といっしょ", "と一緒に", "デュオ", "duo",
+        "トリオ", "trio", "スクワッド", "squad", "フルパ", "パーティ", "party", "凸"
+    )
+
+    in_collab_block = False
     for line in desc.splitlines():
         line_l = line.strip().lower()
         if not line_l:
+            in_collab_block = False
             continue
-        if any(ck in line_l for ck in credit_line_keywords):
+
+        if any(h.lower() in line_l for h in collab_headers):
+            in_collab_block = True
+            continue
+
+        # If line has explicit collaboration context, prioritize collab detection over credit skipping
+        has_collab_context = in_collab_block or any(ck in line_l for ck in collab_context_keywords)
+        if not has_collab_context and any(ck in line_l for ck in credit_line_keywords):
             continue
 
         # Check youtube.com/@Handle in description line
         yt_handles = re.findall(r"youtube\.com/@([a-zA-Z0-9_.-]{3,30})", line)
         for yh in yt_handles:
-            if yh.lower() not in own_handles:
-                return True, f"概要欄に他チャンネルURL 'youtube.com/@{yh}' を検出"
+            yh_l = yh.lower()
+            if yh_l not in own_handles and not _is_official_or_service_handle(yh_l):
+                # 概要欄の他チャンネルURLは、コラボ見出しブロック内、共演文脈行、またはリスト項目(@主体の行)の場合に他者混入と判定
+                is_list_item = line_l.startswith(("-", "・", "*", "■", "▼", "◆"))
+                if has_collab_context or is_list_item:
+                    return True, f"概要欄に他配信者チャンネルURL 'youtube.com/@{yh}' を検出"
 
         # Check standalone @Handle in description line (excluding email addresses)
         line_no_urls = re.sub(r"https?://[^\s　]+", " ", line)
         mentions = re.findall(r"(?:^|[\s　【\[(（:：/])@([a-zA-Z0-9_.-]{3,30})(?![a-zA-Z0-9_.-]*\.[a-z]{2,})", line_no_urls)
         for m in mentions:
-            if m.lower() not in own_handles:
-                return True, f"概要欄に他配信者メンション '@{m}' を検出"
+            m_l = m.lower()
+            if m_l not in own_handles and not _is_official_or_service_handle(m_l):
+                is_list_item = line_l.startswith(("-", "・", "*", "■", "▼", "◆"))
+                if has_collab_context or is_list_item:
+                    return True, f"概要欄に他配信者メンション '@{m}' を検出"
 
     return False, ""
 

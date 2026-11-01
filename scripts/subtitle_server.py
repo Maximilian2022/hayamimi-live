@@ -1533,6 +1533,10 @@ class SubtitleServer:
                     manual_start = payload.get("manual_start")
                     duration = float(payload.get("duration") or 720.0)
                     max_videos = int(payload.get("max_videos") or 10)
+                    collab_filter_enabled = payload.get("collab_filter_enabled")
+                    collab_exclude_keywords = payload.get("collab_exclude_keywords")
+                    if collab_exclude_keywords is not None and not isinstance(collab_exclude_keywords, list):
+                        collab_exclude_keywords = None
 
                     with _generation_lock:
                         if not _generation_task["done"] and _generation_task["status"] == "running":
@@ -1577,6 +1581,8 @@ class SubtitleServer:
                                 existing_profile_id=existing_profile_id,
                                 status_callback=_cb,
                                 log_callback=_log_cb,
+                                collab_filter_enabled=collab_filter_enabled,
+                                collab_exclude_keywords=collab_exclude_keywords,
                             )
                             with _generation_lock:
                                 _generation_task["status"] = "completed"

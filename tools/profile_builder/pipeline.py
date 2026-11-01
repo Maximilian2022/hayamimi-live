@@ -63,6 +63,8 @@ class ProfileBuilderPipeline:
         existing_profile_id: Optional[str] = None,
         status_callback: Optional[Callable[[str, float, str], None]] = None,
         log_callback: Optional[Callable[[str, str], None]] = None,
+        collab_filter_enabled: Optional[bool] = None,
+        collab_exclude_keywords: Optional[List[str]] = None,
     ) -> SpeakerProfile:
         """Execute end-to-end profile generation or incremental training.
         If youtube_url is a channel or playlist URL, fetches videos and processes them in batch.
@@ -82,6 +84,15 @@ class ProfileBuilderPipeline:
         target_pid = existing_profile_id or speaker_id
         existing_profile = load_profile(target_pid) if target_pid else None
 
+        # Determine effective collab filter settings
+        filter_collab = True if collab_filter_enabled is None else bool(collab_filter_enabled)
+        collab_kws = collab_exclude_keywords
+        if existing_profile:
+            if collab_filter_enabled is None:
+                filter_collab = getattr(existing_profile, "collab_filter_enabled", True)
+            if collab_exclude_keywords is None:
+                collab_kws = getattr(existing_profile, "collab_exclude_keywords", None)
+
         is_channel = is_channel_url(youtube_url)
         is_playlist = is_playlist_url(youtube_url)
 
@@ -92,8 +103,6 @@ class ProfileBuilderPipeline:
 
             # Collect already processed and skipped video IDs to prevent duplicate work
             exclude_ids = set()
-            filter_collab = True
-            collab_kws = None
             if existing_profile:
                 exclude_ids.update(existing_profile.processed_video_ids)
                 exclude_ids.update(existing_profile.skipped_video_ids)
@@ -101,8 +110,6 @@ class ProfileBuilderPipeline:
                     vid = extract_video_id(u)
                     if vid:
                         exclude_ids.add(vid)
-                filter_collab = getattr(existing_profile, "collab_filter_enabled", True)
-                collab_kws = getattr(existing_profile, "collab_exclude_keywords", None)
 
             skipped_collab_ids: list[str] = []
             if is_playlist:
@@ -200,6 +207,8 @@ class ProfileBuilderPipeline:
                         existing_profile=cur_prof,
                         status_callback=_sub_cb,
                         log_callback=log_callback,
+                        collab_filter_enabled=filter_collab,
+                        collab_exclude_keywords=collab_kws,
                     )
                     successful_count += 1
                     consecutive_failures = 0
@@ -262,6 +271,8 @@ class ProfileBuilderPipeline:
             existing_profile=existing_profile,
             status_callback=status_callback,
             log_callback=log_callback,
+            collab_filter_enabled=filter_collab,
+            collab_exclude_keywords=collab_kws,
         )
 
     def _process_single_video(
@@ -274,6 +285,8 @@ class ProfileBuilderPipeline:
         existing_profile: Optional[SpeakerProfile] = None,
         status_callback: Optional[Callable[[str, float, str], None]] = None,
         log_callback: Optional[Callable[[str, str], None]] = None,
+        collab_filter_enabled: Optional[bool] = None,
+        collab_exclude_keywords: Optional[List[str]] = None,
     ) -> SpeakerProfile:
         """Process a single YouTube video end-to-end and merge into existing profile if given."""
         def log(level: str, msg: str):
@@ -295,8 +308,8 @@ class ProfileBuilderPipeline:
             log("INFO", f"メタデータ取得完了: タイトル『{metadata.title}』 / チャンネル: {metadata.channel} / 長さ: {int(metadata.duration_sec)}秒")
 
             # 1.5 Check collaboration / guest exclusion filter
-            filter_enabled = getattr(existing_profile, "collab_filter_enabled", True) if existing_profile else True
-            collab_kws = getattr(existing_profile, "collab_exclude_keywords", None) if existing_profile else None
+            filter_enabled = collab_filter_enabled if collab_filter_enabled is not None else (getattr(existing_profile, "collab_filter_enabled", True) if existing_profile else True)
+            collab_kws = collab_exclude_keywords if collab_exclude_keywords is not None else (getattr(existing_profile, "collab_exclude_keywords", None) if existing_profile else None)
             own_chan_url = (existing_profile.youtube_channel_url if existing_profile else None) or metadata.channel_url
             own_chan_name = (existing_profile.display_name if existing_profile else None) or display_name or metadata.channel
 
@@ -439,6 +452,10 @@ class ProfileBuilderPipeline:
             profile.source_video_url = youtube_url
             if metadata.channel_url:
                 profile.youtube_channel_url = metadata.channel_url
+            if filter_enabled is not None:
+                profile.collab_filter_enabled = bool(filter_enabled)
+            if collab_kws is not None:
+                profile.collab_exclude_keywords = list(collab_kws)
 
             # Track video ID for duplicate prevention
             vid_id = metadata.video_id or extract_video_id(youtube_url)
