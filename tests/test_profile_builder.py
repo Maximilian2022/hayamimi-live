@@ -661,6 +661,10 @@ def test_bot_detection_cookie_fallback(monkeypatch):
             # Retry succeeds with cookie
             assert "--cookies-from-browser" in cmd
             assert "firefox" in cmd
+            if "--" in cmd:
+                dash_idx = cmd.index("--")
+                cookie_idx = cmd.index("--cookies-from-browser")
+                assert cookie_idx < dash_idx, f"Cookie arg must be BEFORE '--' separator: {cmd}"
             return subprocess.CompletedProcess(
                 args=cmd,
                 returncode=0,

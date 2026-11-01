@@ -112,10 +112,19 @@ _CACHED_STORAGE_DIR = None
 
 def _get_storage_dir() -> str:
     """Return a persistent storage directory.
-    Checks /app/config, /app/models, project root config/, or falls back to system tempdir.
+    Priority:
+    1. HAYAMIMI_CONFIG_DIR environment variable (used for test isolation / custom config)
+    2. /app/config or /app/models (Docker/container environment)
+    3. project root config/
+    4. system tempdir fallback
     Cached after the first probe to avoid repetitive disk write testing.
     """
     global _CACHED_STORAGE_DIR
+    env_dir = os.environ.get("HAYAMIMI_CONFIG_DIR")
+    if env_dir:
+        os.makedirs(env_dir, exist_ok=True)
+        return env_dir
+
     if _CACHED_STORAGE_DIR and os.path.isdir(_CACHED_STORAGE_DIR):
         return _CACHED_STORAGE_DIR
 
@@ -492,7 +501,8 @@ def _sanitize_overlay_style(style: dict) -> dict:
     if "bottom" in s:
         s["bottom"] = round(_clamp_num(s["bottom"], 0.0, 100.0, 4.0), 1)
     if "bgOpacity" in s:
-        s["bgOpacity"] = round(_clamp_num(s["bgOpacity"], 0.0, 1.0, 0.0), 2)
+        # bgOpacity is percentage (0% to 100%)
+        s["bgOpacity"] = round(_clamp_num(s["bgOpacity"], 0.0, 100.0, 0.0), 1)
     if "radius" in s:
         s["radius"] = int(_clamp_num(s["radius"], 0, 50, 8))
     if "mode" in s and s["mode"] not in ("unified", "split"):
@@ -509,6 +519,16 @@ def _sanitize_overlay_style(style: dict) -> dict:
                 sub_d["size"] = int(_clamp_num(sub_d["size"], 8, 200, 42 if sub == "main" else 32))
             if "strokeWidth" in sub_d:
                 sub_d["strokeWidth"] = round(_clamp_num(sub_d["strokeWidth"], 0.0, 30.0, 3.0 if sub == "main" else 2.5), 1)
+
+    # Sanitize langOverrides (M-5: prevent giant strokeWidth crashing OBS via (2w+1)^2 shadows)
+    if "langOverrides" in s and isinstance(s["langOverrides"], dict):
+        for lang_code, lang_d in list(s["langOverrides"].items()):
+            if not isinstance(lang_d, dict):
+                continue
+            if "size" in lang_d:
+                lang_d["size"] = int(_clamp_num(lang_d["size"], 8, 200, 32))
+            if "strokeWidth" in lang_d:
+                lang_d["strokeWidth"] = round(_clamp_num(lang_d["strokeWidth"], 0.0, 30.0, 2.5), 1)
             if "effect" in sub_d and sub_d["effect"] not in ("stroke", "double", "glow"):
                 sub_d["effect"] = "stroke"
 
@@ -584,10 +604,27 @@ def _get_mic_html() -> str:
             pass
     return "<!doctype html><title>Mic</title><p>mic_page.html not found</p>"
 
+import ipaddress
 import re
 import urllib.parse
 
-def _get_safe_origin(origin: str | None, host_header: str | None) -> str | None:
+def is_safe_host_or_ip(host_str: str) -> bool:
+    """Validate that host_str is a legitimate loopback, localhost, or private RFC1918 IPv4/IPv6 literal.
+    Rejects attacker domains like '10.evil.example' or '192.168.attacker.com'.
+    """
+    if not host_str or not isinstance(host_str, str):
+        return False
+    h = host_str.strip().lower().strip("[]")
+    if h in ("localhost", "127.0.0.1", "::1"):
+        return True
+    try:
+        ip = ipaddress.ip_address(h)
+        return ip.is_private or ip.is_loopback
+    except ValueError:
+        return False
+
+
+def _get_safe_origin(origin: str | None, host_header: str | None = None) -> str | None:
     """Validate and sanitize Origin header against CRLF injection and untrusted hosts.
 
     Returns reconstructed safe origin string ('scheme://hostname[:port]') if valid, else None.
@@ -606,26 +643,10 @@ def _get_safe_origin(origin: str | None, host_header: str | None) -> str | None:
         if not ohost:
             return None
 
-        is_allowed = False
-        if ohost in ("localhost", "127.0.0.1", "::1"):
-            is_allowed = True
-        elif ohost.startswith("192.168.") or ohost.startswith("10."):
-            is_allowed = True
-        elif ohost.startswith("172."):
-            try:
-                parts = ohost.split(".")
-                if len(parts) >= 2 and 16 <= int(parts[1]) <= 31:
-                    is_allowed = True
-            except Exception:
-                pass
-        elif host_header:
-            req_host = host_header.split(":")[0].lower()
-            if ohost == req_host:
-                is_allowed = True
-
-        if is_allowed:
+        if is_safe_host_or_ip(ohost):
             port_suffix = f":{parsed.port}" if parsed.port else ""
-            res = f"{scheme}://{ohost}{port_suffix}"
+            fmt_host = f"[{ohost}]" if ":" in ohost and not ohost.startswith("[") else ohost
+            res = f"{scheme}://{fmt_host}{port_suffix}"
             return re.sub(r"[\r\n\0]", "", res)
     except Exception:
         pass
@@ -1220,20 +1241,20 @@ class SubtitleServer:
                 host_hdr = self.headers.get("Host")
                 if not host_hdr:
                     return True
-                req_host = host_hdr.split(":")[0].strip().lower()
-                allowed = {"localhost", "127.0.0.1", "::1"}
+                try:
+                    parsed_h = urllib.parse.urlsplit(f"//{host_hdr}")
+                    req_host = (parsed_h.hostname or "").lower()
+                except Exception:
+                    req_host = host_hdr.split(":")[0].strip().lower().strip("[]")
+
                 bound_host = (server.host or "").lower()
-                if bound_host and bound_host != "0.0.0.0":
-                    allowed.add(bound_host)
-                if bound_host == "0.0.0.0":
-                    if req_host.startswith("192.168.") or req_host.startswith("10."):
+                if bound_host and bound_host not in ("0.0.0.0", "127.0.0.1", "::1", "localhost"):
+                    if req_host == bound_host:
                         return True
-                    if req_host.startswith("172."):
-                        parts = req_host.split(".")
-                        if len(parts) >= 2 and parts[1].isdigit() and 16 <= int(parts[1]) <= 31:
-                            return True
-                if req_host in allowed:
+
+                if is_safe_host_or_ip(req_host):
                     return True
+
                 self.send_response(403)
                 self.send_header("Content-Type", "text/plain; charset=utf-8")
                 self.end_headers()
@@ -1666,8 +1687,13 @@ class SubtitleServer:
                     if server.asr is not None and syncer.on_dictionary_updated is None:
                         syncer.on_dictionary_updated = lambda m: server.asr.set_dynamic_comment_replacements(m)
                     status = save_global_comment_sync_config(payload)
-                    if status.get("enabled") and "PYTEST_CURRENT_TEST" not in os.environ:
-                        syncer.start()
+                    if status.get("enabled"):
+                        if "PYTEST_CURRENT_TEST" not in os.environ:
+                            syncer.start()
+                    else:
+                        syncer.stop()
+                        if server.asr is not None:
+                            server.asr.set_dynamic_comment_replacements({})
                     self._json(200, {"ok": True, **status})
                     return
                 if req_path == "/api/profiles/apply":

@@ -404,6 +404,9 @@ def test_get_safe_origin_header_sanitization():
 
     # Disallowed external origins
     assert _get_safe_origin("http://evil-attacker.com", "localhost:8833") is None
+    assert _get_safe_origin("http://10.evil.example", "localhost:8833") is None
+    assert _get_safe_origin("http://192.168.evil.example", "localhost:8833") is None
+    assert _get_safe_origin("http://172.16.evil.example", "localhost:8833") is None
     assert _get_safe_origin("javascript:alert(1)", "localhost") is None
     assert _get_safe_origin(None, "localhost") is None
 

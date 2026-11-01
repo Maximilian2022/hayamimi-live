@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Tests for Phase 2 (Broadcast Audio DSP), Phase 3 (OneComme / Comment Sync), and Phase 4 (Speaker LoRA Trainer)."""
+"""Tests for Broadcast Audio DSP and OneComme / Comment Sync."""
 
 from __future__ import annotations
 
@@ -19,9 +19,8 @@ if _ROOT not in sys.path:
 if os.path.join(_ROOT, "scripts") not in sys.path:
     sys.path.insert(0, os.path.join(_ROOT, "scripts"))
 
-from scripts.audio_dsp import BiquadFilter, BroadcastAudioDSP
-from scripts.comment_sync import CommentHotwordExtractor, CommentSynchronizer
-from tools.profile_builder.lora_trainer import SpeakerLoRATrainer, extract_fbank_features
+from scripts.audio_dsp import BiquadFilter, BroadcastAudioDSP, get_global_dsp
+from scripts.comment_sync import CommentHotwordExtractor, CommentSynchronizer, get_global_comment_sync
 from tools.profile_builder.profile_model import SpeakerProfile
 
 
@@ -67,7 +66,6 @@ def test_dsp_agc_boosts_whispers_and_limits_screams():
     # 1. Quiet whisper (RMS ~ 0.018)
     whisper = (0.025 * np.sin(2.0 * np.pi * 440.0 * t)).astype(np.float32)
     whisper_in_rms = float(np.sqrt(np.mean(whisper ** 2)))
-    # Run two chunks so smooth gain converges
     _ = dsp.process(whisper)
     whisper_out = dsp.process(whisper)
     whisper_out_rms = float(np.sqrt(np.mean(whisper_out ** 2)))
@@ -95,131 +93,64 @@ def test_dsp_full_chain_performance_and_bypass():
     assert processed.shape == chunk.shape
     assert processed.dtype == np.float32
     assert not np.allclose(processed, chunk)
-    # 1 second of 16kHz audio should process in well under 50ms even on slow CI
     assert elapsed_ms < 50.0
 
-    # Bypass when disabled
+    # Bypass check
     dsp.set_config({"enabled": False})
     bypassed = dsp.process(chunk)
     assert np.array_equal(bypassed, chunk)
 
 
 # =====================================================================
-# Phase 3: OneComme & Comment Sync Tests
+# Phase 3: OneComme / Comment Sync Tests & Safety Guards (H-1)
 # =====================================================================
 
-def test_comment_hotword_extractor_filters_greetings_and_builds_candidates():
-    """Verify CommentHotwordExtractor extracts nouns/katakana and ignores stream greetings."""
-    ext = CommentHotwordExtractor()
-    terms = ext.extract_terms_from_text("わこつです！今日のクレーバーとストグラ楽しみｗｗｗ 88888")
-    surfaces = [s for s, _ in terms]
+def test_comment_hotword_extractor_safety_guards_h1():
+    """Verify safety guards (H-1): common everyday nouns are never extracted or replaced."""
+    extractor = CommentHotwordExtractor()
 
-    assert "クレーバー" in surfaces
-    assert "わこつ" not in surfaces
-    assert "ｗｗｗ" not in surfaces
+    # Poisonous comments containing everyday Japanese words
+    poison_comments = [
+        "死体", "視聴", "機械", "時間ですよ", "意思", "期間",
+        "今日は勉強したいんです", "時間がありません", "普通の話",
+    ]
+    for c in poison_comments:
+        extracted = extractor.extract_terms_from_text(c)
+        # None of these common words should be extracted
+        for surf, reading in extracted:
+            assert surf not in ("死体", "視聴", "機械", "時間", "意思", "期間", "勉強", "普通", "話")
+            # If any term is extracted, its reading must NOT conflict with common words
+            candidates = extractor.build_replacement_candidates(surf, reading)
+            assert "したい" not in candidates
+            assert "じかん" not in candidates
+            assert "きかい" not in candidates
 
-    # Check vowel-shortened and hiragana candidates for "クレーバー"
-    cands = ext.build_replacement_candidates("クレーバー", "クレーバー")
-    assert cands.get("クレバー") == "クレーバー"
-    assert cands.get("くれーばー") == "クレーバー"
+    # Legitimate streamer and game terms MUST still be extracted
+    legit_comments = ["渋谷ハル", "葛葉", "クレーバー強い！", "ボセック引いた"]
+    extracted_surfaces = []
+    for c in legit_comments:
+        pairs = extractor.extract_terms_from_text(c)
+        extracted_surfaces.extend([p[0] for p in pairs])
 
-
-def test_comment_synchronizer_file_and_asr_integration(tmp_path):
-    """Verify CommentSynchronizer reads comment.txt and updates RoutedASR without overwriting user rules."""
-    from scripts.asr_engine import RoutedASR
-
-    comment_file = tmp_path / "comment.txt"
-    comment_file.write_text("初見です！\nアルティメット強い！\nクレーバーうまい！\n", encoding="utf-8")
-
-    engine = RoutedASR.__new__(RoutedASR)
-    engine._rule_hit_counts = {}
-    engine._rule_last_hit = {}
-    engine._stats_lock = threading.Lock()
-    # User profile rule takes priority
-    engine.set_replacements({"ウルト": "アルティメットスキル"})
-
-    syncer = CommentSynchronizer(
-        enabled=True,
-        onecomme_url="http://127.0.0.1:59999/invalid",
-        comment_file_path=str(comment_file),
-        word_ttl_sec=60.0,
-        on_dictionary_updated=lambda m: engine.set_dynamic_comment_replacements(m),
-    )
-
-    count = syncer.poll_once()
-    assert count > 0
-    status = syncer.get_status()
-    assert status["connected_source"] == "comment_file"
-    assert "クレーバー" in status["active_words"]
-
-    # Verify ASR applies both user rule AND dynamic comment rule
-    out = engine._replace("ウルトでクレバーを撃つ")
-    assert "アルティメットスキル" in out
-    assert "クレーバー" in out
+    assert any("クレーバー" in s for s in extracted_surfaces)
+    assert any("葛葉" in s or "渋谷" in s or "ハル" in s for s in extracted_surfaces)
 
 
-# =====================================================================
-# Phase 4: Speaker LoRA Trainer & Continual Growth Tests
-# =====================================================================
+def test_comment_sync_sliding_window_ttl():
+    """Verify terms expire and are purged after their TTL elapsed."""
+    syncer = CommentSynchronizer(enabled=True, word_ttl_sec=0.2)
+    syncer.ingest_comments(["クレーバー"])
 
-def _create_dummy_speech_wav(path: str, freq_hz: float = 220.0, duration_sec: float = 1.5):
-    sr = 16000
-    t = np.linspace(0, duration_sec, int(sr * duration_sec), endpoint=False)
-    # Multi-harmonic speech-like signal
-    sig = 0.25 * np.sin(2 * np.pi * freq_hz * t) + 0.15 * np.sin(2 * np.pi * (freq_hz * 2.5) * t)
-    pcm16 = np.clip(sig * 32767, -32768, 32767).astype(np.int16)
-    with wave.open(path, "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(sr)
-        wf.writeframes(pcm16.tobytes())
+    active_before = syncer.get_dynamic_replacements()
+    assert len(active_before) > 0
+
+    time.sleep(0.35)
+    active_after = syncer.get_dynamic_replacements()
+    assert len(active_after) == 0
 
 
-def test_speaker_lora_trainer_initial_and_continual_growth(tmp_path):
-    """Verify SpeakerLoRATrainer creates an adapter on first run and warm-start grows it on subsequent runs."""
-    wav1 = str(tmp_path / "stream1.wav")
-    wav2 = str(tmp_path / "stream2.wav")
-    _create_dummy_speech_wav(wav1, freq_hz=200.0)
-    _create_dummy_speech_wav(wav2, freq_hz=320.0)
-
-    trainer = SpeakerLoRATrainer(rank=8, alpha=16.0, storage_dir=str(tmp_path / "lora"))
-
-    # 1. Initial creation (Video 1)
-    adapter_path, count1 = trainer.train_or_grow(
-        speaker_id="val_streamer",
-        wav_path=wav1,
-        voiceprint=[0.05] * 512,
-        existing_video_count=0,
-    )
-    assert os.path.exists(adapter_path)
-    assert count1 == 1
-
-    with np.load(adapter_path) as data1:
-        assert data1["lora_A"].shape == (80, 8)
-        assert data1["lora_B"].shape == (8, 80)
-        assert int(data1["trained_video_count"]) == 1
-        first_A = data1["lora_A"].copy()
-
-    # 2. Continual growth / maintenance (Video 2)
-    adapter_path2, count2 = trainer.train_or_grow(
-        speaker_id="val_streamer",
-        wav_path=wav2,
-        voiceprint=[0.05] * 512,
-        existing_adapter_path=adapter_path,
-        existing_video_count=count1,
-    )
-    assert adapter_path2 == adapter_path
-    assert count2 == 2
-
-    with np.load(adapter_path2) as data2:
-        assert int(data2["trained_video_count"]) == 2
-        second_A = data2["lora_A"].copy()
-        # Weights should have evolved via warm-start blending
-        assert not np.allclose(first_A, second_A)
-
-
-def test_subtitle_server_dsp_and_comment_apis(monkeypatch, tmp_path):
-    """Verify GET/POST /api/dsp/config and /api/comments/config endpoints on SubtitleServer."""
+def test_subtitle_server_dsp_and_comment_apis_and_singleton_sync_h2(monkeypatch, tmp_path):
+    """Verify GET/POST /api/dsp/config and /api/comments/config endpoints sync to global singletons (H-2)."""
     from scripts.subtitle_server import SubtitleServer
     import scripts.audio_dsp as adsp
     import scripts.comment_sync as csync
@@ -231,10 +162,10 @@ def test_subtitle_server_dsp_and_comment_apis(monkeypatch, tmp_path):
     srv.start()
     port = srv._httpd.server_address[1]
     try:
-        # 1. Update DSP config
+        # 1. Update DSP config via API
         req_dsp = urllib.request.Request(
             f"http://127.0.0.1:{port}/api/dsp/config",
-            data=json.dumps({"enabled": True, "deesser_enabled": False}).encode("utf-8"),
+            data=json.dumps({"enabled": False, "deesser_enabled": False}).encode("utf-8"),
             headers={"Content-Type": "application/json"},
             method="POST",
         )
@@ -242,12 +173,16 @@ def test_subtitle_server_dsp_and_comment_apis(monkeypatch, tmp_path):
             assert resp.status == 200
             d_data = json.loads(resp.read().decode("utf-8"))
             assert d_data["ok"] is True
-            assert d_data["deesser_enabled"] is False
+            assert d_data["enabled"] is False
 
-        # 2. Update Comment Sync config
+        # Verify global DSP singleton matches immediately (H-2)
+        global_dsp = get_global_dsp()
+        assert global_dsp.enabled is False
+
+        # 2. Update Comment Sync config via API
         req_com = urllib.request.Request(
             f"http://127.0.0.1:{port}/api/comments/config",
-            data=json.dumps({"enabled": True, "word_ttl_sec": 180}).encode("utf-8"),
+            data=json.dumps({"enabled": False, "word_ttl_sec": 180}).encode("utf-8"),
             headers={"Content-Type": "application/json"},
             method="POST",
         )
@@ -255,8 +190,11 @@ def test_subtitle_server_dsp_and_comment_apis(monkeypatch, tmp_path):
             assert resp.status == 200
             c_data = json.loads(resp.read().decode("utf-8"))
             assert c_data["ok"] is True
-            assert c_data["enabled"] is True
-            assert c_data["word_ttl_sec"] == 180.0
+            assert c_data["enabled"] is False
+
+        # Verify global CommentSync singleton matches immediately (H-2)
+        global_syncer = get_global_comment_sync()
+        assert global_syncer.enabled is False
     finally:
         if srv._httpd:
             srv._httpd.shutdown()

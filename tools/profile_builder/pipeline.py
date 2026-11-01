@@ -14,9 +14,8 @@ from typing import Callable, Optional
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from tools.profile_builder.gemini_analyzer import GeminiProfileAnalyzer, load_gemini_api_key
+from tools.profile_builder.gemini_analyzer import DEFAULT_GEMINI_MODEL, GeminiProfileAnalyzer, load_gemini_api_key
 from tools.profile_builder.local_transcribe import LocalTranscriber
-from tools.profile_builder.lora_trainer import SpeakerLoRATrainer
 from tools.profile_builder.profile_exporter import load_profile, save_profile
 from tools.profile_builder.profile_model import ExtractedSection, SpeakerProfile
 from tools.profile_builder.voiceprint_extractor import VoiceprintExtractor
@@ -46,7 +45,7 @@ class ProfileBuilderPipeline:
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model_name: str = "gemini-3.8-flash",
+        model_name: str = DEFAULT_GEMINI_MODEL,
     ):
         self.api_key = load_gemini_api_key(api_key)
         self.model_name = model_name
@@ -480,27 +479,6 @@ class ProfileBuilderPipeline:
                 logger.warning("Voiceprint extraction failed: %s", e)
                 log("WARN", f"声紋抽出で例外が発生したためスキップしました: {e}")
 
-            # 5.8 Speaker LoRA Acoustic Adapter Training / Continual Growth
-            report("lora", 0.90, "話者専用 LoRA 音響モデルを学習・育成中...")
-            try:
-                lora_trainer = SpeakerLoRATrainer()
-                prev_lora_path = existing_profile.lora_adapter_path if existing_profile else None
-                prev_lora_cnt = existing_profile.lora_trained_video_count if existing_profile else 0
-                adapter_path, updated_lora_cnt = lora_trainer.train_or_grow(
-                    speaker_id=speaker_id,
-                    wav_path=wav_path,
-                    voiceprint=profile.voiceprint or (existing_profile.voiceprint if existing_profile else None),
-                    existing_adapter_path=prev_lora_path,
-                    existing_video_count=prev_lora_cnt,
-                    status_callback=lambda msg: report("lora", 0.91, msg),
-                    log_callback=log_callback,
-                )
-                profile.lora_adapter_path = adapter_path
-                profile.lora_trained_video_count = updated_lora_cnt
-            except Exception as lora_err:
-                logger.warning("Speaker LoRA training skipped due to error: %s", lora_err)
-                log("WARN", f"LoRA 音響学習はスキップされました: {lora_err}")
-
             # 6. Save Profile (with merge if growing)
             if existing_profile:
                 report("save", 0.92, "既存プロファイルに新動画の知見（辞書・活舌・声紋）を統合・マージ中...")
@@ -530,7 +508,7 @@ def main():
     parser.add_argument("--start", type=float, default=None, help="Manual start offset in seconds")
     parser.add_argument("--duration", type=float, default=720.0, help="Duration in seconds (default: 720 = 12min)")
     parser.add_argument("--key", default=None, help="Gemini API Key")
-    parser.add_argument("--model", default="gemini-3.8-flash", help="Gemini model name")
+    parser.add_argument("--model", default=DEFAULT_GEMINI_MODEL, help="Gemini model name")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")

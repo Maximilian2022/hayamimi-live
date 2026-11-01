@@ -671,11 +671,21 @@ class YouTubeFetcher:
         """Run yt-dlp command with automatic bot-detection recovery, FileNotFoundError handling, and cookie injection."""
         global _WORKING_COOKIE_BROWSER
 
+        def _inject_options(command_tokens: List[str], options: List[str]) -> List[str]:
+            if not options:
+                return list(command_tokens)
+            tokens = list(command_tokens)
+            if any(opt in tokens for opt in ("--cookies", "--cookies-from-browser")):
+                return tokens
+            # Insert BEFORE the '--' separator if present to prevent yt-dlp interpreting options as URLs
+            if "--" in tokens:
+                idx = tokens.index("--")
+                return tokens[:idx] + options + tokens[idx:]
+            # Otherwise insert before the last argument (URL)
+            return tokens[:-1] + options + tokens[-1:]
+
         cookie_args = get_cookie_args()
-        full_cmd = list(cmd)
-        if cookie_args and not any(arg in full_cmd for arg in ("--cookies", "--cookies-from-browser")):
-            # Insert before target URL (last argument)
-            full_cmd = full_cmd[:-1] + cookie_args + [full_cmd[-1]]
+        full_cmd = _inject_options(cmd, cookie_args)
 
         try:
             res = subprocess.run(
@@ -697,9 +707,7 @@ class YouTubeFetcher:
                 if a.startswith("-"):
                     opt_idx = idx
                     break
-            repaired_cmd = list(fallback_tokens) + cmd[opt_idx:]
-            if cookie_args and not any(arg in repaired_cmd for arg in ("--cookies", "--cookies-from-browser")):
-                repaired_cmd = repaired_cmd[:-1] + cookie_args + [repaired_cmd[-1]]
+            repaired_cmd = _inject_options(list(fallback_tokens) + cmd[opt_idx:], cookie_args)
             res = subprocess.run(
                 repaired_cmd,
                 capture_output=True,
@@ -726,7 +734,7 @@ class YouTubeFetcher:
                     arg for arg in cmd
                     if arg not in ("--cookies", "--cookies-from-browser") and arg not in _KNOWN_BROWSERS
                 ]
-                retry_cmd = clean_cmd[:-1] + ["--cookies-from-browser", working_browser] + [clean_cmd[-1]]
+                retry_cmd = _inject_options(clean_cmd, ["--cookies-from-browser", working_browser])
                 res = subprocess.run(
                     retry_cmd,
                     capture_output=True,

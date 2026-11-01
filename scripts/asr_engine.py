@@ -52,9 +52,16 @@ try:
     else:
         _SUDACHI_TOKENIZER = _SUDACHI_DICT.create()
     _SUDACHI_SPLIT_MODE = tokenizer.Tokenizer.SplitMode.C
+    _SUDACHI_LOCK = threading.Lock()
 except Exception:
     _SUDACHI_TOKENIZER = None
     _SUDACHI_SPLIT_MODE = None
+    _SUDACHI_LOCK = threading.Lock()
+
+
+def get_sudachi_tokenizer():
+    """Return shared singleton (tokenizer, split_mode, lock) to avoid duplicating ~79MB dictionary memory (P-2)."""
+    return _SUDACHI_TOKENIZER, _SUDACHI_SPLIT_MODE, _SUDACHI_LOCK
 
 MODELS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models")
 V3_MODEL_DIR = os.path.join(MODELS_DIR, "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8")
@@ -855,6 +862,7 @@ class RoutedASR:
         self._hotwords_file = hotwords_file
         self._warn_hotwords_encodability(hotwords_file)
         self._replacements = _load_replacements(replace_file)
+        self._user_replacements = self._replacements
         self._rule_hit_counts: dict[str, int] = {}
         self._rule_last_hit: dict[str, str] = {}
         self._stats_lock = threading.Lock()
@@ -1562,7 +1570,8 @@ class RoutedASR:
         if _SUDACHI_TOKENIZER and self._replacements:
             try:
                 rule_dict = dict(self._replacements)
-                morphemes = _SUDACHI_TOKENIZER.tokenize(text, _SUDACHI_SPLIT_MODE)
+                with _SUDACHI_LOCK:
+                    morphemes = _SUDACHI_TOKENIZER.tokenize(text, _SUDACHI_SPLIT_MODE)
                 replaced_tokens = []
                 changed = False
                 for m in morphemes:

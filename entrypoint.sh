@@ -56,4 +56,4 @@ echo "  ダッシュボード:        http://0.0.0.0:8833/dashboard"
 echo "  WebSocket 音声入力:    ws://0.0.0.0:8766/ingest"
 
 echo "[entrypoint] realtime_transcribe.py を起動中..."
-exec python scripts/realtime_transcribe.py --input ws --serve 8833 --ws-host 0.0.0.0 --ws-port 8766 "$@"
+exec python scripts/realtime_transcribe.py --input ws --serve 8833 --serve-host 0.0.0.0 --ws-host 0.0.0.0 --ws-port 8766 "$@"

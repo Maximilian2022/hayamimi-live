@@ -17,10 +17,17 @@ import json
 import logging
 import os
 import re
+import sys
 import threading
 import time
 import urllib.request
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+
+# Guarantee canonical module aliasing between 'comment_sync' and 'scripts.comment_sync'
+if __name__ == "scripts.comment_sync":
+    sys.modules["comment_sync"] = sys.modules[__name__]
+elif __name__ == "comment_sync":
+    sys.modules["scripts.comment_sync"] = sys.modules[__name__]
 
 logger = logging.getLogger("hayamimi.comment_sync")
 
@@ -57,6 +64,20 @@ class CommentHotwordExtractor:
 
     def _init_sudachi(self) -> None:
         try:
+            try:
+                from scripts.asr_engine import get_sudachi_tokenizer
+            except ImportError:
+                from asr_engine import get_sudachi_tokenizer
+            tok, mode, lock = get_sudachi_tokenizer()
+            if tok is not None:
+                self._tokenizer = tok
+                self._mode = mode
+                self._lock = lock
+                return
+        except Exception:
+            pass
+
+        try:
             from sudachipy import dictionary, tokenizer
             dic = dictionary.Dictionary()
             if hasattr(dic, "tokenizer"):
@@ -64,8 +85,10 @@ class CommentHotwordExtractor:
             else:
                 self._tokenizer = dic.create()
             self._mode = tokenizer.Tokenizer.SplitMode.C
+            self._lock = threading.Lock()
         except Exception as e:
             logger.debug("SudachiPy not available in CommentHotwordExtractor: %s", e)
+            self._lock = threading.Lock()
 
     def extract_terms_from_text(self, text: str) -> List[Tuple[str, str]]:
         """Extract (surface_word, katakana_reading) pairs from a comment string."""
@@ -85,7 +108,8 @@ class CommentHotwordExtractor:
 
         if self._tokenizer is not None:
             try:
-                morphemes = self._tokenizer.tokenize(clean, self._mode)
+                with getattr(self, '_lock', threading.Lock()):
+                    morphemes = self._tokenizer.tokenize(clean, self._mode)
                 for m in morphemes:
                     surf = m.surface().strip()
                     if len(surf) < 2 or len(surf) > 12:
@@ -99,11 +123,11 @@ class CommentHotwordExtractor:
                     pos = m.part_of_speech()
                     if not pos or pos[0] != "名詞":
                         continue
-                    # Keep proper nouns (固有名詞) or general nouns (普通名詞) that aren't non-independent
-                    if len(pos) > 1 and pos[1] in ("代名詞", "非自立可能", "数詞"):
-                        continue
-                    # Avoid pure single-kanji or common 2-char hiragana words unless proper noun
-                    if re.fullmatch(r"[ぁ-ん]{2,3}", surf) and (len(pos) < 2 or pos[1] != "固有名詞"):
+                    # SAFETY GUARD (H-1): ONLY accept Proper Nouns (固有名詞) or OOV (新語・未知語)
+                    # Exclude general common nouns (普通名詞) e.g. "死体", "時間", "機械", "視聴" to prevent transcript poisoning!
+                    is_proper = len(pos) > 1 and pos[1] == "固有名詞"
+                    is_oov = hasattr(m, "is_oov") and m.is_oov()
+                    if not (is_proper or is_oov):
                         continue
 
                     reading = m.reading_form() or ""
@@ -112,13 +136,31 @@ class CommentHotwordExtractor:
             except Exception as e:
                 logger.debug("Sudachi tokenize error in comment: %s", e)
 
-        # Fallback / supplement: Katakana words >= 3 chars
+        # Fallback / supplement: Katakana words >= 3 chars (excluding common words)
         for km in re.findall(r"[ァ-ヶー]{3,12}", clean):
             if km not in seen and km not in _STOPWORDS:
                 seen.add(km)
                 results.append((km, km))
 
         return results
+
+    def is_common_japanese_reading(self, reading_hira: str) -> bool:
+        """Check if a reading form conflicts with common everyday Japanese words/grammar."""
+        if not reading_hira or len(reading_hira) < 3:
+            return True
+        if self._tokenizer is not None:
+            try:
+                morphemes = self._tokenizer.tokenize(reading_hira, self._mode)
+                for m in morphemes:
+                    pos = m.part_of_speech()
+                    # If reading splits into common verbs, auxiliaries, particles, adjectives, or common nouns
+                    if pos[0] in ("動詞", "助動詞", "助詞", "形容詞", "副詞", "接続詞"):
+                        return True
+                    if pos[0] == "名詞" and len(pos) > 1 and pos[1] in ("普通名詞", "代名詞", "非自立可能", "数詞"):
+                        return True
+            except Exception:
+                pass
+        return False
 
     def build_replacement_candidates(self, surface: str, reading_katakana: str) -> Dict[str, str]:
         """Generate safe ASR misrecognition -> correct surface mappings from a term and its reading."""
@@ -128,13 +170,14 @@ class CommentHotwordExtractor:
             return candidates
 
         # 1. If surface contains Kanji/Alphabet and reading is >= 3 chars, map Hiragana & Katakana readings -> surface
+        # BUT ONLY IF the reading is not a common Japanese word!
         has_kanji_or_alpha = bool(re.search(r"[一-龥A-Za-z0-9]", surf))
         if reading_katakana and len(reading_katakana) >= 3:
             hira = _katakana_to_hiragana(reading_katakana)
             if has_kanji_or_alpha:
-                if hira != surf and len(hira) >= 3:
+                if hira != surf and len(hira) >= 3 and not self.is_common_japanese_reading(hira):
                     candidates[hira] = surf
-                if reading_katakana != surf and len(reading_katakana) >= 3:
+                if reading_katakana != surf and len(reading_katakana) >= 3 and not self.is_common_japanese_reading(hira):
                     candidates[reading_katakana] = surf
 
         # 2. If surface is Katakana with long vowel 'ー' (>= 4 chars), map vowel-shortened variants -> surface
@@ -171,8 +214,8 @@ class CommentSynchronizer:
         self.enabled = bool(enabled)
         self.onecomme_url = onecomme_url.strip() or "http://127.0.0.1:11180/api/comments"
         self.comment_file_path = comment_file_path.strip()
-        self.poll_interval_sec = max(1.0, float(poll_interval_sec))
-        self.word_ttl_sec = max(30.0, float(word_ttl_sec))
+        self.poll_interval_sec = max(0.5, float(poll_interval_sec))
+        self.word_ttl_sec = max(0.1, float(word_ttl_sec))
         self.on_dictionary_updated = on_dictionary_updated
 
         self._extractor = CommentHotwordExtractor()

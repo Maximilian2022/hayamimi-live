@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     早耳 (hayamimi) - デスクトップ透過オーバーレイ字幕ウィンドウ
 .DESCRIPTION
@@ -14,63 +14,86 @@ param(
 
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Drawing, System.Windows.Forms
 
-# Win32 API Helper
-$win32Code = @"
+# Win32 API Helper (Smart App Control 完全対応: Add-Type による動的 C# コンパイルを排除)
+if (-not ([System.Management.Automation.PSTypeName]'OverlayWin32').Type) {
+    try {
+        $dynAssembly = [AppDomain]::CurrentDomain.DefineDynamicAssembly(
+            [System.Reflection.AssemblyName]::new("OverlayWin32Dyn"),
+            [System.Reflection.Emit.AssemblyBuilderAccess]::Run
+        )
+        $dynModule = $dynAssembly.DefineDynamicModule("OverlayWin32Module")
+        $dynType = $dynModule.DefineType("OverlayWin32", "Public, BeforeFieldInit")
+
+        $mSetFg = $dynType.DefinePInvokeMethod("SetForegroundWindow", "user32.dll", "Public, Static",
+            [System.Reflection.CallingConventions]::Standard, [bool], @([IntPtr]),
+            [System.Runtime.InteropServices.CallingConvention]::Winapi, [System.Runtime.InteropServices.CharSet]::Auto)
+        $mSetFg.SetImplementationFlags("PreserveSig")
+
+        $mRegHotKey = $dynType.DefinePInvokeMethod("RegisterHotKey", "user32.dll", "Public, Static",
+            [System.Reflection.CallingConventions]::Standard, [bool], @([IntPtr], [int], [uint32], [uint32]),
+            [System.Runtime.InteropServices.CallingConvention]::Winapi, [System.Runtime.InteropServices.CharSet]::Auto)
+        $mRegHotKey.SetImplementationFlags("PreserveSig")
+
+        $mUnregHotKey = $dynType.DefinePInvokeMethod("UnregisterHotKey", "user32.dll", "Public, Static",
+            [System.Reflection.CallingConventions]::Standard, [bool], @([IntPtr], [int]),
+            [System.Runtime.InteropServices.CallingConvention]::Winapi, [System.Runtime.InteropServices.CharSet]::Auto)
+        $mUnregHotKey.SetImplementationFlags("PreserveSig")
+
+        if ([IntPtr]::Size -eq 8) {
+            $mGetLong = $dynType.DefinePInvokeMethod("GetWindowLongPtr", "user32.dll", "Public, Static",
+                [System.Reflection.CallingConventions]::Standard, [IntPtr], @([IntPtr], [int]),
+                [System.Runtime.InteropServices.CallingConvention]::Winapi, [System.Runtime.InteropServices.CharSet]::Auto)
+            $mGetLong.SetImplementationFlags("PreserveSig")
+
+            $mSetLong = $dynType.DefinePInvokeMethod("SetWindowLongPtr", "user32.dll", "Public, Static",
+                [System.Reflection.CallingConventions]::Standard, [IntPtr], @([IntPtr], [int], [IntPtr]),
+                [System.Runtime.InteropServices.CallingConvention]::Winapi, [System.Runtime.InteropServices.CharSet]::Auto)
+            $mSetLong.SetImplementationFlags("PreserveSig")
+        } else {
+            $mGetLong = $dynType.DefinePInvokeMethod("GetWindowLong", "user32.dll", "Public, Static",
+                [System.Reflection.CallingConventions]::Standard, [int], @([IntPtr], [int]),
+                [System.Runtime.InteropServices.CallingConvention]::Winapi, [System.Runtime.InteropServices.CharSet]::Auto)
+            $mGetLong.SetImplementationFlags("PreserveSig")
+
+            $mSetLong = $dynType.DefinePInvokeMethod("SetWindowLong", "user32.dll", "Public, Static",
+                [System.Reflection.CallingConventions]::Standard, [int], @([IntPtr], [int], [int]),
+                [System.Runtime.InteropServices.CallingConvention]::Winapi, [System.Runtime.InteropServices.CharSet]::Auto)
+            $mSetLong.SetImplementationFlags("PreserveSig")
+        }
+
+        [void]$dynType.CreateType()
+    } catch {
+        try {
+            Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
-
 public class OverlayWin32 {
-    public const int WS_EX_TRANSPARENT = 0x00000020;
-    public const int WS_EX_LAYERED = 0x00080000;
-    public const int GWL_EXSTYLE = -20;
-
-    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtr")]
-    private static extern IntPtr GetWindowLongPtr64(IntPtr hWnd, int nIndex);
-
-    [DllImport("user32.dll", EntryPoint = "GetWindowLong")]
-    private static extern int GetWindowLong32(IntPtr hWnd, int nIndex);
-
-    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtr")]
-    private static extern IntPtr SetWindowLongPtr64(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
-
-    [DllImport("user32.dll", EntryPoint = "SetWindowLong")]
-    private static extern int SetWindowLong32(IntPtr hWnd, int nIndex, int dwNewLong);
-
-    [DllImport("user32.dll")]
-    [DllImport("user32.dll")]
-    public static extern bool SetForegroundWindow(IntPtr hWnd);
-
-    [DllImport("user32.dll")]
-    public static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
-
-    [DllImport("user32.dll")]
-    public static extern bool UnregisterHotKey(IntPtr hWnd, int id);
-
-    public static long GetWindowLong(IntPtr hWnd, int nIndex) {
-        if (IntPtr.Size == 8) {
-            return (long)GetWindowLongPtr64(hWnd, nIndex);
-        } else {
-            return (long)GetWindowLong32(hWnd, nIndex);
-        }
-    }
-
-    public static void SetClickThrough(IntPtr hWnd, bool enable) {
-        long current = GetWindowLong(hWnd, GWL_EXSTYLE);
-        if (enable) {
-            current |= WS_EX_TRANSPARENT;
-        } else {
-            current &= ~WS_EX_TRANSPARENT;
-        }
-        if (IntPtr.Size == 8) {
-            SetWindowLongPtr64(hWnd, GWL_EXSTYLE, (IntPtr)current);
-        } else {
-            SetWindowLong32(hWnd, GWL_EXSTYLE, (int)current);
-        }
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+    [DllImport("user32.dll")] public static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtr")] public static extern IntPtr GetWindowLongPtr(IntPtr hWnd, int nIndex);
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtr")] public static extern IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
+}
+"@ -ErrorAction SilentlyContinue
+        } catch {}
     }
 }
-"@
-if (-not ([System.Management.Automation.PSTypeName]'OverlayWin32').Type) {
-    try { Add-Type -TypeDefinition $win32Code -ErrorAction SilentlyContinue } catch {}
+
+function Set-ClickThroughHelper([IntPtr]$hWnd, [bool]$enable) {
+    if ($hWnd -eq [IntPtr]::Zero) { return }
+    try {
+        $GWL_EXSTYLE = -20
+        $WS_EX_TRANSPARENT = 0x00000020
+        if ([IntPtr]::Size -eq 8) {
+            $cur = [OverlayWin32]::GetWindowLongPtr($hWnd, $GWL_EXSTYLE).ToInt64()
+            $newVal = if ($enable) { $cur -bor $WS_EX_TRANSPARENT } else { $cur -band (-bnot $WS_EX_TRANSPARENT) }
+            [OverlayWin32]::SetWindowLongPtr($hWnd, $GWL_EXSTYLE, [IntPtr]$newVal) | Out-Null
+        } else {
+            $cur = [OverlayWin32]::GetWindowLong($hWnd, $GWL_EXSTYLE)
+            $newVal = if ($enable) { $cur -bor $WS_EX_TRANSPARENT } else { $cur -band (-bnot $WS_EX_TRANSPARENT) }
+            [OverlayWin32]::SetWindowLong($hWnd, $GWL_EXSTYLE, [int]$newVal) | Out-Null
+        }
+    } catch {}
 }
 
 # ログファイルパス & ロギング関数 (logs/launcher.log へ集約)
@@ -445,7 +468,7 @@ $updateClickThroughUI = {
     param([bool]$enabled)
     $script:isClickThrough = $enabled
     if ($script:hWnd -ne [IntPtr]::Zero) {
-        [OverlayWin32]::SetClickThrough($script:hWnd, $enabled)
+        Set-ClickThroughHelper $script:hWnd $enabled
     }
     if ($enabled) {
         $btnClickThrough.Content = "📌 マウス透過: ON"

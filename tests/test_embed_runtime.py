@@ -900,6 +900,32 @@ def test_audio_history_clear_empties_buffer_and_offsets():
     assert history.last_seg_end == 0
 
 
+def test_audio_history_ring_buffer_wrapping_and_preroll():
+    history = rt.AudioHistory(sample_rate=10, keep_s=1.0)
+    assert history.keep == 10
+
+    # Push 6 samples [0..5]
+    history.push(np.arange(6, dtype=np.float32))
+    assert len(history.buf) == 6
+    assert history.offset == 0
+    np.testing.assert_array_equal(history.buf, np.arange(6))
+
+    # Push 8 samples [6..13] -> total 14, capacity 10
+    # Oldest 4 dropped, keeping [4..13]
+    history.push(np.arange(6, 14, dtype=np.float32))
+    assert len(history.buf) == 10
+    assert history.offset == 4
+    np.testing.assert_array_equal(history.buf, np.arange(4, 14))
+
+    # Test get_range across circular boundary
+    sub = history.get_range(5, 12)
+    np.testing.assert_array_equal(sub, np.arange(5, 12))
+
+    # Test with_preroll
+    res = history.with_preroll(12, np.array([14.0, 15.0], dtype=np.float32))
+    np.testing.assert_array_equal(res, np.array([4, 5, 6, 7, 8, 9, 10, 11, 14, 15], dtype=np.float32))
+
+
 def test_refiner_reset_drops_spans_and_clears_history():
     sr = 16000
     history = rt.AudioHistory(sr, keep_s=5.0)

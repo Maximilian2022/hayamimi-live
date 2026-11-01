@@ -16,8 +16,15 @@ import json
 import logging
 import math
 import os
+import sys
 import threading
 from typing import Any, Dict, Optional
+
+# Guarantee canonical module aliasing between 'audio_dsp' and 'scripts.audio_dsp'
+if __name__ == "scripts.audio_dsp":
+    sys.modules["audio_dsp"] = sys.modules[__name__]
+elif __name__ == "audio_dsp":
+    sys.modules["scripts.audio_dsp"] = sys.modules[__name__]
 
 import numpy as np
 

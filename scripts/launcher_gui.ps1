@@ -1,5 +1,5 @@
-# --- バージョン管理 (version.txt を Single Source of Truth として動的同期) ---
-$script:AppVersion = "1.6.3"
+﻿﻿﻿# --- バージョン管理 (version.txt を Single Source of Truth として動的同期) ---
+$script:AppVersion = "1.6.4"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $versionTxtFile = Join-Path $repoRoot "version.txt"
 if (Test-Path $versionTxtFile) {
@@ -171,15 +171,19 @@ function Unblock-ProjectFiles {
     try {
         if (-not $RootDir -or -not (Test-Path $RootDir)) { return }
         # ルート直下および主要サブフォルダのスクリプト・バイナリから Zone.Identifier ストリームを除去
-        $targetDirs = @(
-            $RootDir,
+        # ルート直下ファイルのみ (Recurse なしで .venv の約9,000ファイルを完全スキップ: P-1)
+        Get-ChildItem -LiteralPath $RootDir -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Extension -in @(".ps1", ".bat", ".vbs", ".py", ".cmd") } |
+            ForEach-Object { try { Unblock-File -LiteralPath $_.FullName -ErrorAction SilentlyContinue } catch {} }
+
+        $subDirs = @(
             (Join-Path $RootDir "scripts"),
             (Join-Path $RootDir "tools"),
             (Join-Path $RootDir ".venv\Scripts")
         )
-        foreach ($d in $targetDirs) {
+        foreach ($d in $subDirs) {
             if (Test-Path $d) {
-                Get-ChildItem -Path $d -Recurse -File -ErrorAction SilentlyContinue |
+                Get-ChildItem -LiteralPath $d -Recurse -File -ErrorAction SilentlyContinue |
                     Where-Object { $_.Extension -in @(".ps1", ".bat", ".vbs", ".py", ".exe", ".dll", ".pyd") } |
                     ForEach-Object {
                         try { Unblock-File -LiteralPath $_.FullName -ErrorAction SilentlyContinue } catch {}
@@ -530,7 +534,7 @@ function Update-ContainerLogFile {
 [xml]$xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Hayamimi Live ランチャー (GUI v1.6.3)"
+        Title="Hayamimi Live ランチャー (GUI v1.6.4)"
         Height="780" Width="780"
         MinHeight="680" MinWidth="720"
         WindowStartupLocation="CenterScreen"
@@ -608,7 +612,7 @@ function Update-ContainerLogFile {
                         <TextBlock x:Name="GpuBadge" Text="⚡ GPU: 検出中..." FontSize="11" Foreground="#10B981" FontWeight="SemiBold"/>
                     </Border>
                     <Border Background="#1E1B4B" CornerRadius="12" Padding="10,5" Margin="0,0,8,0" BorderBrush="#4338CA" BorderThickness="1">
-                        <TextBlock x:Name="VersionBadge" Text="GUI v1.6.3" FontSize="11" Foreground="#A5B4FC" FontWeight="Bold" FontFamily="{StaticResource MonoFont}"/>
+                        <TextBlock x:Name="VersionBadge" Text="GUI v1.6.4" FontSize="11" Foreground="#A5B4FC" FontWeight="Bold" FontFamily="{StaticResource MonoFont}"/>
                     </Border>
                     <Border Background="#141B2D" CornerRadius="12" Padding="10,5" BorderBrush="#253350" BorderThickness="1">
                         <TextBlock x:Name="RuntimeBadge" Text="Python venv" FontSize="11" Foreground="#38BDF8" FontWeight="SemiBold"/>
@@ -2056,7 +2060,7 @@ function Cleanup-ResidualProcesses {
         }
     } catch {}
 
-    # 2. ポート 8833 (HTTP) および 8766 (WebSocket) を占有しているプロセスの特定と強制終了
+    # 2. ポート 8833 (HTTP) および 8766 (WebSocket) を占有しているプロセスの特定と安全な解放 (M-11)
     try {
         $ports = @(8833, 8766)
         if (Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue) {
@@ -2066,10 +2070,29 @@ function Cleanup-ResidualProcesses {
                     $pids = $conns | Select-Object -ExpandProperty OwningProcess -Unique
                     foreach ($procId in $pids) {
                         if ($procId -gt 4 -and $procId -ne $PID) {
-                            if ($LogOutput) {
-                                Write-AppLog "ポート $p を占有しているプロセス (PID: $procId) を解放します..." "INFO"
+                            $targetProc = Get-Process -Id $procId -ErrorAction SilentlyContinue
+                            if ($targetProc) {
+                                $procName = $targetProc.ProcessName.ToLower()
+                                $isHayamimiProcess = $false
+                                if ($procName -match 'python|cmd') {
+                                    $cim = Get-CimInstance Win32_Process -Filter "ProcessId = $procId" -ErrorAction SilentlyContinue
+                                    if ($cim -and ($cim.CommandLine -match 'hayamimi|realtime_transcribe|subtitle_server')) {
+                                        $isHayamimiProcess = $true
+                                    } elseif ($procName -match 'python' -and $targetProc.Path -like '*hayamimi*') {
+                                        $isHayamimiProcess = $true
+                                    }
+                                }
+                                if ($isHayamimiProcess) {
+                                    if ($LogOutput) {
+                                        Write-AppLog "hayamimi の残留プロセス ($($targetProc.ProcessName), PID: $procId) を解放します..." "INFO"
+                                    }
+                                    Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
+                                } else {
+                                    if ($LogOutput) {
+                                        Write-AppLog "警告: ポート $p は別プロセス ($($targetProc.ProcessName), PID: $procId) に使用されています（安全のため自動終了は行いません）。" "WARN"
+                                    }
+                                }
                             }
-                            Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
                         }
                     }
                 }

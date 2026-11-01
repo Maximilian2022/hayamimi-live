@@ -64,25 +64,25 @@ FLUSH = object()
 AUDIO_QUEUE_MAXSIZE = 200
 
 
-def _is_safe_origin(origin: str | None, host: str | None) -> bool:
+import ipaddress
+
+def _is_safe_origin(origin: str | None, host: str | None = None) -> bool:
     """Allow connections without an Origin header (non-browser clients like ESP32/curl)
-    or matching localhost, 127.0.0.1, LAN private IPs, or matching Host header.
-    Rejects cross-site WebSocket hijacking from third-party websites.
+    or matching localhost, 127.0.0.1, or RFC1918 private IP literals.
+    Rejects cross-site WebSocket hijacking from third-party websites (e.g. 10.evil.example).
     """
     if not origin:
         return True
     from urllib.parse import urlparse
-    parsed = urlparse(origin)
-    ohost = (parsed.hostname or "").lower()
-    if ohost in ("localhost", "127.0.0.1", "::1"):
-        return True
-    if ohost.startswith("192.168.") or ohost.startswith("10.") or (ohost.startswith("172.") and 16 <= int(ohost.split(".")[1] or 0) <= 31):
-        return True
-    if host:
-        req_host = host.split(":")[0].lower()
-        if ohost == req_host:
+    try:
+        parsed = urlparse(origin)
+        ohost = (parsed.hostname or "").lower().strip("[]")
+        if ohost in ("localhost", "127.0.0.1", "::1"):
             return True
-    return False
+        ip = ipaddress.ip_address(ohost)
+        return ip.is_private or ip.is_loopback
+    except Exception:
+        return False
 
 
 class IngestServer:

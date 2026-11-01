@@ -23,6 +23,8 @@ from tools.profile_builder.youtube_fetcher import VideoMetadata
 
 logger = logging.getLogger("hayamimi.gemini_analyzer")
 
+DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
+
 DEFAULT_KEY_FILE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     "config",
@@ -33,7 +35,8 @@ DISALLOWED_MODEL_KEYWORDS = [
     "gemini-2.5-", "gemini-2.0-", "gemini-1.5-", "gemini-1.0-",
     "-image", "banana", "lyria", "omni", "imagen",
     "-tts", "-transcribe", "computer-use", "deep-research",
-    "antigravity", "robotics", "gemma-", "bison", "aqa", "-customtools"
+    "antigravity", "robotics", "gemma-", "bison", "aqa", "-customtools",
+    "-pro",  # M-9: pro系モデルを排除し不要な高額課金を防止
 ]
 
 FALLBACK_STABLE_MODELS = [
@@ -139,35 +142,22 @@ SYSTEM_INSTRUCTION = """\
 hayamimi (ReazonSpeech) が話者の生音声を聞いて誤認識したテキストと、実際の生音声をマルチモーダルに突合し、
 話者の「活舌の癖・音素のズレ・特有の言い回し・ゲーム内固有名詞」を補正するための安全な置換辞書とプロファイルを生成してください。
 
-【厳格に遵守すべき4つの分析Skill】
+【最重要ルール】
+- 1文字または2文字のみの極小置換は絶対に行わないでください（過剰置換による誤爆の原因になります）。
+- 置換ルール（pattern -> replacement）は、原則として3文字以上の具体的なフレーズ・単語として構成してください。
+- 助詞「の」「を」「に」「が」「は」などを前後につけて誤爆を防止するフレーズ化を推奨します。
 
-■ Skill 1: 音素・活舌のズレ検出
-・話者の実際の発音と、ローカルASRの認識テキストを耳（音声）と目（テキスト）で照合します。
-・サ行がタ行に化ける（舌足らず）、語尾の母音脱落、早口での助詞融合などのパターンを特定してください。
-
-■ Skill 2: 過剰置換ガード（副作用防止ルール）※最重要！
-・【絶対禁止】: 1〜2文字の一般的な単語や助詞（「と」→「そ」、「は」→「が」等）の単体置換は絶対に生成しないでください。他の文脈を大量に破壊します。
-・【文字数上限】: 10文字を超える長い文や会話全体のフレーズ（例: 「本日はよろしくお願いします」など）は絶対にルール化しないでください。置換対象（pattern）は2〜8文字程度の「単語・固有名詞・口癖・短い慣用句」に限定してください。
-・日常会話で頻出する正常な単語を、話者の癖と誤認して壊さないよう慎重に判定してください。
-
-■ Skill 3: ゲーム固有名詞・文脈突合
-・動画タイトルや概要欄、タグに含まれるゲームタイトル、キャラクター名、スキル名、地名等のキーワードを事前知識として突合してください。
-・固有名詞が日常的な同音異義語に誤変換されている箇所を正確に置換ルール化してください。
-
-■ Skill 4: 構造化出力
-・余計な挨拶や解説文は出力せず、指定されたJSONスキーマに厳格に従ったデータのみを出力してください。
+【出力要件】
+指定されたJSONスキーマに厳密に従い、余分な挨拶やMarkdown解説は出力せず、JSONのみを出力してください。
 """
 
 
 def load_gemini_api_key(api_key: Optional[str] = None, key_file: str = DEFAULT_KEY_FILE) -> Optional[str]:
-    """Retrieve Gemini API key from explicit argument, environment variable, or key file."""
+    """Retrieve Gemini API key from explicit argument, persistent file, or environment variable (consistent with server)."""
     if api_key and api_key.strip():
         return api_key.strip()
 
-    env_key = os.environ.get("GEMINI_API_KEY")
-    if env_key and env_key.strip():
-        return env_key.strip()
-
+    # 1. Check persistent key file first (User explicitly registered in UI)
     if os.path.isfile(key_file):
         try:
             with open(key_file, "r", encoding="utf-8") as f:
@@ -177,26 +167,28 @@ def load_gemini_api_key(api_key: Optional[str] = None, key_file: str = DEFAULT_K
         except Exception as e:
             logger.warning("Failed to read Gemini key from %s: %s", key_file, e)
 
+    # 2. Check environment variable
+    env_key = os.environ.get("GEMINI_API_KEY")
+    if env_key and env_key.strip():
+        return env_key.strip()
+
     return None
 
 
 def save_gemini_api_key(api_key: str, key_file: str = DEFAULT_KEY_FILE) -> None:
     """Save Gemini API key to persistent config file with owner-only permissions."""
     os.makedirs(os.path.dirname(os.path.abspath(key_file)), exist_ok=True)
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-    fd = os.open(key_file, flags, 0o600)
-    with open(fd, "w", encoding="utf-8") as f:
-        f.write(api_key.strip())  # codeql[py/clear-text-storage-sensitive-data]
+    with open(key_file, "w", encoding="utf-8") as f:
+        f.write(api_key.strip())
     try:
         os.chmod(key_file, 0o600)
     except Exception:
         pass
-    logger.info("Saved Gemini API key to %s", key_file)
 
 
 def safe_parse_json(raw_text: str, log_callback: Optional[Callable[[str, str], None]] = None) -> dict:
-    """Safely parse JSON text from LLM, auto-repairing truncated/unterminated JSON strings."""
-    if not raw_text:
+    """Parse JSON with auto-repair for truncated Gemini output."""
+    if not raw_text or not raw_text.strip():
         raise ValueError("Empty response text from Gemini")
 
     text = raw_text.strip()
@@ -244,7 +236,7 @@ class GeminiProfileAnalyzer:
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model_name: str = "gemini-3.8-flash",
+        model_name: str = DEFAULT_GEMINI_MODEL,
     ):
         resolved_key = load_gemini_api_key(api_key)
         if not resolved_key:
@@ -387,6 +379,12 @@ class GeminiProfileAnalyzer:
                         last_err = e
                         err_str = str(e)
                         logger.warning("Failed with model %s on cycle %d: %s", model, cycle + 1, e)
+
+                        # M-9: 401/403/PERMISSION_DENIED/INVALID_ARGUMENT (APIキー無効・認証エラー) は恒久エラーとして即座に中断
+                        if any(kw in err_str for kw in ("401", "403", "UNAUTHENTICATED", "PERMISSION_DENIED", "API_KEY_INVALID")):
+                            if log_callback:
+                                log_callback("ERROR", f"Gemini API キーが無効または認証エラーです (即座に中断): {e}")
+                            raise RuntimeError(f"Gemini API authentication failed (401/403): {e}") from e
 
                         # 404 (廃止・未提供モデル) の場合は恒久的に除外して次へ
                         if "404" in err_str or "NOT_FOUND" in err_str or "no longer available" in err_str:

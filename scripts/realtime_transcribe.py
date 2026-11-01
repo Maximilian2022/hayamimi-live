@@ -993,40 +993,82 @@ PREROLL_S = 1.0  # audio to prepend before the VAD's detected speech onset
 
 
 class AudioHistory:
-    """Rolling buffer of recent audio so finals can include pre-onset context."""
+    """Ring buffer of recent audio avoiding per-push reallocations (P-3).
+    Preallocates keep_s buffer so finals can include pre-onset context with zero memory churn.
+    """
 
     def __init__(self, sample_rate: int, keep_s: float = 30.0):
         self.sr = sample_rate
         self.keep = int(keep_s * sample_rate)
-        self.buf = np.zeros(0, dtype=np.float32)
-        self.offset = 0  # absolute sample index of buf[0]
+        self._capacity = max(1, self.keep)
+        self._buf = np.zeros(self._capacity, dtype=np.float32)
+        self._write_pos = 0
+        self._total_written = 0
         self.last_seg_end = 0  # don't let preroll bleed into the previous utterance
 
+    @property
+    def offset(self) -> int:
+        """Absolute sample index of the oldest available sample in buffer."""
+        return max(0, self._total_written - self._capacity)
+
+    @property
+    def buf(self) -> np.ndarray:
+        """Return continuous view of currently buffered samples for compatibility."""
+        if self._total_written == 0:
+            return np.zeros(0, dtype=np.float32)
+        buffered_len = min(self._total_written, self._capacity)
+        idx = (self._write_pos - buffered_len) % self._capacity
+        if idx + buffered_len <= self._capacity:
+            return self._buf[idx : idx + buffered_len]
+        return np.concatenate([self._buf[idx:], self._buf[: (idx + buffered_len) % self._capacity]])
+
     def push(self, chunk: np.ndarray):
-        self.buf = np.concatenate([self.buf, chunk])
-        if len(self.buf) > self.keep:
-            drop = len(self.buf) - self.keep
-            self.buf = self.buf[drop:]
-            self.offset += drop
+        n = len(chunk)
+        if n == 0:
+            return
+        if n >= self._capacity:
+            self._buf[:] = chunk[-self._capacity:]
+            self._write_pos = 0
+        else:
+            tail = self._capacity - self._write_pos
+            if n <= tail:
+                self._buf[self._write_pos : self._write_pos + n] = chunk
+                self._write_pos = (self._write_pos + n) % self._capacity
+            else:
+                self._buf[self._write_pos:] = chunk[:tail]
+                self._buf[: n - tail] = chunk[tail:]
+                self._write_pos = n - tail
+        self._total_written += n
+
+    def get_range(self, start: int, end: int) -> np.ndarray:
+        """Extract samples in absolute sample range [start, end)."""
+        if end <= start or self._total_written == 0:
+            return np.zeros(0, dtype=np.float32)
+        off = self.offset
+        start = max(start, off)
+        end = min(end, self._total_written)
+        length = end - start
+        if length <= 0:
+            return np.zeros(0, dtype=np.float32)
+
+        idx = (self._write_pos - (self._total_written - start)) % self._capacity
+        if idx + length <= self._capacity:
+            return self._buf[idx : idx + length].copy()
+        first = self._capacity - idx
+        return np.concatenate([self._buf[idx:], self._buf[: length - first]])
 
     def with_preroll(self, seg_start: int, seg_samples: np.ndarray) -> np.ndarray:
         want = max(seg_start - int(PREROLL_S * self.sr), self.last_seg_end, self.offset)
-        pre = self.buf[want - self.offset:seg_start - self.offset]
+        pre = self.get_range(want, seg_start)
         self.last_seg_end = seg_start + len(seg_samples)
         if len(pre) == 0:
             return seg_samples
         return np.concatenate([pre, seg_samples])
 
     def clear(self) -> None:
-        """Drop all buffered audio, e.g. for reset_live_session(). The VAD
-        driving run_stream() keeps counting samples from stream start
-        regardless of this reset (rebuilding it is a separate, unrelated
-        concern -- see LiveVad), so the first with_preroll() call after a
-        clear() naturally finds nothing to prepend (its `want` bound falls
-        outside the now-empty buf) rather than raising: numpy clamps an
-        out-of-range slice to empty instead of erroring."""
-        self.buf = np.zeros(0, dtype=np.float32)
-        self.offset = 0
+        """Drop all buffered audio."""
+        self._write_pos = 0
+        self._total_written = 0
         self.last_seg_end = 0
 
 
