@@ -668,10 +668,15 @@
       <div class="card-desc">Google AI Studio の API キー (無料枠で利用可能)</div>
     </div>
     <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
-      <input type="password" id="inputApiKey" class="input-text" placeholder="AIzaSy... から始まる API キーを入力" style="flex: 1; min-width: 260px;">
+      <div style="display: flex; gap: 6px; flex: 1; min-width: 260px; align-items: center;">
+        <input type="password" id="inputApiKey" class="input-text" placeholder="AIzaSy... から始まる API キーを入力" style="flex: 1;">
+        <button type="button" id="btnToggleApiKey" class="btn btn-secondary" style="padding: 7px 11px;" title="キーの表示/非表示">👁</button>
+      </div>
       <button id="btnSaveKey" class="btn btn-primary">保存する</button>
+      <button id="btnValidateKey" class="btn btn-secondary" style="border-color: #3B82F6; color: #60A5FA;">🔍 有効性テスト</button>
       <button id="btnDeleteKey" class="btn btn-secondary">削除</button>
     </div>
+    <div id="keyFeedbackMsg" style="font-size: 0.82rem; margin-top: 6px; min-height: 1.2rem;"></div>
     <div style="font-size: 0.75rem; color: var(--paper-muted); font-family: var(--mono);">
       ※ 入力されたキーはローカル環境（<code>config/gemini_key.txt</code>）に安全に保存され、Gitリポジトリ等へ外部送信されることはありません。
     </div>
@@ -1123,21 +1128,92 @@
     }
   }
 
+  const inputKeyEl = document.getElementById("inputApiKey");
+  const btnToggleKey = document.getElementById("btnToggleApiKey");
+  const keyFeedback = document.getElementById("keyFeedbackMsg");
+
+  if (btnToggleKey && inputKeyEl) {
+    btnToggleKey.onclick = () => {
+      const isPwd = inputKeyEl.type === "password";
+      inputKeyEl.type = isPwd ? "text" : "password";
+      btnToggleKey.textContent = isPwd ? "🙈" : "👁";
+    };
+  }
+
+  if (inputKeyEl) {
+    inputKeyEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        document.getElementById("btnSaveKey").click();
+      }
+    });
+  }
+
+  async function validateKeyRemote(keyToValidate = "") {
+    if (keyFeedback) {
+      keyFeedback.innerHTML = '<span style="color: #60A5FA;">🔍 Google AI Studio と通信してキーを検証中...</span>';
+    }
+    try {
+      const res = await fetch("/api/gemini-key/validate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key: keyToValidate }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.valid) {
+          if (keyFeedback) keyFeedback.innerHTML = `<span style="color: #34D399;">${escapeHtml(data.message)}</span>`;
+        } else {
+          if (keyFeedback) keyFeedback.innerHTML = `<span style="color: #F87171;">${escapeHtml(data.message)}</span>`;
+        }
+        return data.valid;
+      }
+    } catch (err) {
+      if (keyFeedback) keyFeedback.innerHTML = `<span style="color: #F87171;">通信エラー: ${escapeHtml(err.message)}</span>`;
+    }
+    return false;
+  }
+
+  const btnValKey = document.getElementById("btnValidateKey");
+  if (btnValKey) {
+    btnValKey.onclick = () => {
+      const key = inputKeyEl ? inputKeyEl.value.trim() : "";
+      validateKeyRemote(key);
+    };
+  }
+
   document.getElementById("btnSaveKey").onclick = async () => {
-    const key = document.getElementById("inputApiKey").value.trim();
-    if (!key) return alert("API キーを入力してください。");
+    const rawKey = inputKeyEl ? inputKeyEl.value.trim() : "";
+    const cleanKey = rawKey.replace(/^["']|["']$/g, '').trim();
+    if (!cleanKey) return alert("API キーを入力してください。");
+
+    if (keyFeedback) {
+      keyFeedback.innerHTML = '<span style="color: #60A5FA;">💾 キーを保存中...</span>';
+    }
+
     try {
       const res = await fetch("/api/gemini-key", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key }),
+        body: JSON.stringify({ key: cleanKey }),
       });
       if (res.ok) {
-        document.getElementById("inputApiKey").value = "";
-        alert("Gemini API キーを安全に保存しました。");
-        checkApiKey();
+        const data = await res.json();
+        inputKeyEl.value = "";
+        inputKeyEl.placeholder = `設定済み (${data.masked || "登録完了"})`;
+        await checkApiKey();
+        if (data.validation) {
+          if (data.validation.valid) {
+            if (keyFeedback) keyFeedback.innerHTML = `<span style="color: #34D399;">✔ Gemini API キーを保存しました！${escapeHtml(data.validation.message)}</span>`;
+          } else {
+            if (keyFeedback) keyFeedback.innerHTML = `<span style="color: #FBBF24;">⚠️ キーを保存しましたが検証で警告: ${escapeHtml(data.validation.message)}</span>`;
+          }
+        } else {
+          if (keyFeedback) keyFeedback.innerHTML = '<span style="color: #34D399;">✔ Gemini API キーを安全に保存しました。</span>';
+        }
       } else {
-        alert("保存に失敗しました。");
+        const errData = await res.json().catch(() => ({}));
+        alert("保存に失敗しました: " + (errData.error || res.statusText));
       }
     } catch (e) {
       alert("通信エラー: " + e.message);
@@ -1152,7 +1228,8 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ key: "" }),
       });
-      alert("キーを削除しました。");
+      if (inputKeyEl) inputKeyEl.placeholder = "AIzaSy... から始まる API キーを入力";
+      if (keyFeedback) keyFeedback.innerHTML = '<span style="color: #9CA3AF;">キーを削除しました。</span>';
       checkApiKey();
     } catch (e) {
       alert("削除失敗: " + e.message);

@@ -81,10 +81,22 @@ def _append_generation_log(level: str, text: str) -> None:
 def _get_gemini_key() -> str:
     storage_dir = _get_storage_dir()
     p = os.path.join(storage_dir, _GEMINI_KEY_FILENAME)
+    # 1. tools.profile_builder.gemini_analyzer.load_gemini_api_key (DPAPI / B64 復号対応)
+    try:
+        from tools.profile_builder.gemini_analyzer import load_gemini_api_key
+        k = load_gemini_api_key(key_file=p)
+        if k and k.strip():
+            return k.strip()
+    except Exception:
+        pass
+
+    # 2. 直読 fallback
     if os.path.isfile(p):
         try:
             with open(p, "r", encoding="utf-8") as f:
-                return f.read().strip()
+                c = f.read().strip()
+                if c and not c.startswith(("DPAPI:", "B64:")):
+                    return c
         except Exception:
             pass
     return os.environ.get("GEMINI_API_KEY", "").strip()
@@ -92,25 +104,58 @@ def _get_gemini_key() -> str:
 def _save_gemini_key(key: str) -> None:
     storage_dir = _get_storage_dir()
     p = os.path.join(storage_dir, _GEMINI_KEY_FILENAME)
-    if not key or not key.strip():
+    clean = (key or "").strip().strip('"').strip("'").strip()
+    if not clean:
         if os.path.isfile(p):
             try:
                 os.remove(p)
             except Exception:
                 pass
         return
+
+    # tools.profile_builder.gemini_analyzer.save_gemini_api_key (DPAPI 暗号化保存)
+    try:
+        from tools.profile_builder.gemini_analyzer import save_gemini_api_key
+        save_gemini_api_key(clean, key_file=p)
+        return
+    except Exception:
+        pass
+
+    # fallback
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
     try:
         fd = os.open(p, flags, 0o600)
         with open(fd, "w", encoding="utf-8") as f:
-            f.write(key.strip())  # codeql[py/clear-text-storage-sensitive-data]
+            f.write(clean)
     except OSError:
         with open(p, "w", encoding="utf-8") as f:
-            f.write(key.strip())  # codeql[py/clear-text-storage-sensitive-data]
+            f.write(clean)
     try:
         os.chmod(p, 0o600)
     except Exception:
         pass
+
+def validate_gemini_key(api_key: str) -> dict:
+    """Google Generative Language API によるキーの即時疎通検証"""
+    import urllib.request
+    import urllib.error
+    clean = (api_key or "").strip().strip('"').strip("'").strip()
+    if not clean:
+        return {"valid": False, "message": "API キーが空です。"}
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models?key={clean}&pageSize=1"
+    req = urllib.request.Request(url, headers={"User-Agent": "hayamimi/2.2.4"})
+    try:
+        with urllib.request.urlopen(req, timeout=5.0) as resp:
+            if resp.status == 200:
+                return {"valid": True, "message": "✔ Google AI Studio との疎通確認に成功しました！キーは有効です。"}
+            return {"valid": False, "message": f"予期しないステータスコード: {resp.status}"}
+    except urllib.error.HTTPError as e:
+        if e.code in (400, 403):
+            return {"valid": False, "message": "❌ API キーが無効です。Google AI Studio で正しいキーを確認してください。"}
+        return {"valid": False, "message": f"Google AI サーバーエラー (HTTP {e.code}): {e.reason}"}
+    except Exception as e:
+        return {"valid": False, "message": f"ネットワーク接続エラー: {e}"}
 
 def _get_profiles_dir() -> str:
     storage_dir = _get_storage_dir()
@@ -1768,11 +1813,28 @@ class SubtitleServer:
                     if not isinstance(payload, dict):
                         self._json(400, {"error": "body must be a JSON object"})
                         return
+                    raw_k = payload.get("key", "")
+                    clean_k = (raw_k or "").strip().strip('"').strip("'").strip()
                     try:
-                        _save_gemini_key(payload.get("key", ""))
-                        self._json(200, {"ok": True})
+                        _save_gemini_key(clean_k)
+                        val_res = validate_gemini_key(clean_k) if clean_k else {"valid": False, "message": "キーが削除されました"}
+                        k = _get_gemini_key()
+                        masked = (k[:6] + "..." + k[-4:]) if len(k) > 10 else ("設定済み" if k else "")
+                        self._json(200, {
+                            "ok": True,
+                            "configured": bool(k),
+                            "masked": masked,
+                            "validation": val_res,
+                        })
                     except Exception as exc:
                         self._json(400, {"error": str(exc)})
+                    return
+                if req_path == "/api/gemini-key/validate":
+                    code, payload = self._read_json_body()
+                    req_dict = payload if (code == 200 and isinstance(payload, dict)) else {}
+                    k = req_dict.get("key") or _get_gemini_key()
+                    val_res = validate_gemini_key(k)
+                    self._json(200, val_res)
                     return
                 if req_path == "/api/profiles/generate":
                     code, payload = self._read_json_body()

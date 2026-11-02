@@ -89,6 +89,19 @@ def test_gemini_key_api(running_server):
         data = json.loads(res.read().decode("utf-8"))
         assert data["configured"] is False
 
+    # 5. Validate key endpoint
+    val_payload = json.dumps({"key": ""}).encode("utf-8")
+    req_val = urllib.request.Request(
+        f"{base_url}/api/gemini-key/validate",
+        data=val_payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req_val) as res:
+        assert res.status == 200
+        val_data = json.loads(res.read().decode("utf-8"))
+        assert val_data["valid"] is False
+
 
 def test_profiles_crud_api(running_server):
     base_url, server = running_server
