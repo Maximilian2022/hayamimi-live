@@ -1,4 +1,4 @@
-﻿$script:AppVersion = "2.0.0"
+﻿$script:AppVersion = "2.2.1"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $versionTxtFile = Join-Path $repoRoot "version.txt"
 if (Test-Path $versionTxtFile) {
@@ -540,7 +540,7 @@ function Update-ContainerLogFile {
 [xml]$xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Hayamimi Live ランチャー (GUI v2.2.0)"
+        Title="Hayamimi Live ランチャー (GUI v2.2.1)"
         Height="780" Width="780"
         MinHeight="680" MinWidth="720"
         WindowStartupLocation="CenterScreen"
@@ -618,7 +618,7 @@ function Update-ContainerLogFile {
                         <TextBlock x:Name="GpuBadge" Text="⚡ GPU: 検出中..." FontSize="11" Foreground="#10B981" FontWeight="SemiBold"/>
                     </Border>
                     <Border Background="#1E1B4B" CornerRadius="12" Padding="10,5" Margin="0,0,8,0" BorderBrush="#4338CA" BorderThickness="1">
-                        <TextBlock x:Name="VersionBadge" Text="GUI v2.2.0" FontSize="11" Foreground="#A5B4FC" FontWeight="Bold" FontFamily="{StaticResource MonoFont}"/>
+                        <TextBlock x:Name="VersionBadge" Text="GUI v2.2.1" FontSize="11" Foreground="#A5B4FC" FontWeight="Bold" FontFamily="{StaticResource MonoFont}"/>
                     </Border>
                     <Border Background="#141B2D" CornerRadius="12" Padding="10,5" BorderBrush="#253350" BorderThickness="1">
                         <TextBlock x:Name="RuntimeBadge" Text="Python venv" FontSize="11" Foreground="#38BDF8" FontWeight="SemiBold"/>
@@ -974,6 +974,7 @@ $script:GpuShortName = ""
 $script:ConfigFile = Join-Path $ProjectRoot "config\launcher_config.json"
 $script:ProcPython = $null
 $script:PythonLogFile = Join-Path $LogsDir "python.log"
+$script:PythonExe = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
 $script:LastPythonLogLineCount = 0
 $script:LastPythonLogByteOffset = 0L
 
@@ -1802,7 +1803,8 @@ function Ensure-PythonVenvUpToDate {
 function Test-GpuVenvHealth {
     param([switch]$Silent)
     $checkScript = Join-Path $ProjectRoot "scripts\check_gpu_env.py"
-    $pyRunner = if (Test-Path $script:PythonExe) { $script:PythonExe } else { "python.exe" }
+    $venvPy = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
+    $pyRunner = if (Test-Path $venvPy) { $venvPy } elseif ($script:PythonExe -and (Test-Path $script:PythonExe)) { $script:PythonExe } else { "python.exe" }
     try {
         $jsonStr = & $pyRunner -B $checkScript 2>$null | Out-String
         if ($jsonStr) {
@@ -3218,7 +3220,7 @@ function Invoke-UpdateAppCode {
                         Start-Process "cmd.exe" -ArgumentList "/c `"$startBat`""
                     }
                 }
-                $window.Close()
+                Safe-CloseWindow
                 return
             }
         }
@@ -3898,6 +3900,15 @@ function Show-MaintenanceExitDialog {
 
 $script:IsShuttingDown = $false
 
+function Safe-CloseWindow {
+    try {
+        $script:IsClosing = $true
+        if ($window -and $window.IsLoaded) {
+            $window.Close()
+        }
+    } catch {}
+}
+
 function Invoke-ShutdownApp {
     param([bool]$Force = $false)
 
@@ -3907,8 +3918,7 @@ function Invoke-ShutdownApp {
     try {
         $isRunning = Test-AppRunning
         if (-not $isRunning -or $Force) {
-            $script:IsClosing = $true
-            $window.Close()
+            Safe-CloseWindow
             return
         }
 
@@ -3971,12 +3981,10 @@ function Invoke-ShutdownApp {
 
         Cleanup-ResidualProcesses -LogOutput $false
 
-        $script:IsClosing = $true
-        $window.Close()
+        Safe-CloseWindow
     } catch {
         Write-AppLog "終了処理中にエラーが発生しました: $_" "ERROR"
-        $script:IsClosing = $true
-        $window.Close()
+        Safe-CloseWindow
     }
 }
 
