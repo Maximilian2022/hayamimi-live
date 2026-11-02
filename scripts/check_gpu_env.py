@@ -18,7 +18,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 
-CURRENT_GPU_ENV_VERSION = "cuda_v2.2.0"
+CURRENT_GPU_ENV_VERSION = "cuda_v2.2.1"
 
 
 def get_project_root() -> str:
@@ -77,7 +77,12 @@ def run_gpu_env_probe() -> dict:
         }
 
     probe_code = (
-        "import sys, json\n"
+        "import sys, os, json\n"
+        "try:\n"
+        "    from scripts.cuda_utils import setup_cuda_dll_path\n"
+        "    setup_cuda_dll_path()\n"
+        "except Exception:\n"
+        "    pass\n"
         "res = {}\n"
         "res['python_version'] = f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}'\n"
         "res['python_major_minor'] = f'{sys.version_info.major}.{sys.version_info.minor}'\n"
@@ -192,6 +197,8 @@ def run_gpu_env_probe() -> dict:
         missing.append("peft")
     if not diag.get("ctranslate2"):
         missing.append("ctranslate2")
+    elif diag.get("cuda_available") and not diag.get("ctranslate2_cuda"):
+        missing.append("nvidia-cublas-cu12 (CUDA 12 DLLs)")
 
     if missing:
         return {

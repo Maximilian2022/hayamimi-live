@@ -22,6 +22,12 @@ from typing import Callable, Optional
 import numpy as np
 
 try:
+    from scripts.cuda_utils import setup_cuda_dll_path
+    setup_cuda_dll_path()
+except Exception:
+    pass
+
+try:
     import psutil
 except ImportError:
     psutil = None

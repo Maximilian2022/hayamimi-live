@@ -20,7 +20,18 @@ Design notes:
 from __future__ import annotations
 
 import os
+import sys
 import time
+
+try:
+    from scripts.cuda_utils import setup_cuda_dll_path
+    setup_cuda_dll_path()
+except Exception:
+    try:
+        from cuda_utils import setup_cuda_dll_path
+        setup_cuda_dll_path()
+    except Exception:
+        pass
 
 import ctranslate2
 import sentencepiece as spm

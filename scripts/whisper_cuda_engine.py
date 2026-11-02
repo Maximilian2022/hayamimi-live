@@ -22,6 +22,12 @@ from typing import Callable, Optional
 import numpy as np
 
 try:
+    from scripts.cuda_utils import setup_cuda_dll_path
+    setup_cuda_dll_path()
+except Exception:
+    pass
+
+try:
     import itn_cjk
 except ImportError:
     itn_cjk = None
@@ -42,7 +48,8 @@ except ImportError:
 
 logger = logging.getLogger("whisper_cuda_engine")
 
-DEFAULT_MODEL_SIZE = "kotoba-tech/kotoba-whisper-v2.2"
+# CTranslate2 / Faster-Whisper 形式の最適化済みモデル ID
+DEFAULT_MODEL_SIZE = "kotoba-tech/kotoba-whisper-v2.0-faster"
 FALLBACK_MODEL_SIZE = "large-v3-turbo"
 
 
@@ -112,30 +119,51 @@ class WhisperCUDAEngine:
                 self.model_path = merged_ct2
 
         if HAVE_FASTER_WHISPER:
-            try:
-                logger.info(f"Loading WhisperModel({self.model_path}, device={self.device}, compute_type={self.compute_type})...")
-                self.model = WhisperModel(
-                    self.model_path,
-                    device=self.device,
-                    device_index=self.device_index,
-                    compute_type=self.compute_type,
-                    cpu_threads=threads,
-                )
-                logger.info(f"WhisperCUDAEngine loaded successfully on {self.device_name}")
-            except Exception as e:
-                logger.warning(f"Failed to load Faster-Whisper on {self.device}: {e}. Retrying on CPU...")
-                try:
-                    self.device = "cpu"
-                    self.compute_type = "int8"
-                    self.model = WhisperModel(
-                        self.model_path,
-                        device="cpu",
-                        compute_type="int8",
-                        cpu_threads=threads,
-                    )
-                except Exception as e2:
-                    logger.error(f"Failed to load fallback WhisperModel on CPU: {e2}")
-                    self.model = None
+            candidate_models = [self.model_path]
+            for fb in [DEFAULT_MODEL_SIZE, FALLBACK_MODEL_SIZE]:
+                if fb not in candidate_models:
+                    candidate_models.append(fb)
+
+            # 1. CUDA でのロード試行 (候補モデル順)
+            if self.device == "cuda":
+                for cand in candidate_models:
+                    try:
+                        logger.info(f"Loading WhisperModel({cand}, device=cuda, compute_type={self.compute_type})...")
+                        self.model = WhisperModel(
+                            cand,
+                            device="cuda",
+                            device_index=self.device_index,
+                            compute_type=self.compute_type,
+                            cpu_threads=threads,
+                        )
+                        self.model_path = cand
+                        logger.info(f"WhisperCUDAEngine loaded successfully on {self.device_name} ({cand})")
+                        break
+                    except Exception as e:
+                        logger.warning(f"Failed to load Faster-Whisper on cuda with {cand}: {e}")
+
+            # 2. CUDA で全滅または CPU 指定時の CPU フォールバック試行
+            if self.model is None:
+                self.device = "cpu"
+                self.compute_type = "int8"
+                self.device_name = "CPU (Fallback)"
+                for cand in candidate_models:
+                    try:
+                        logger.info(f"Retrying WhisperModel({cand}) on CPU...")
+                        self.model = WhisperModel(
+                            cand,
+                            device="cpu",
+                            compute_type="int8",
+                            cpu_threads=threads,
+                        )
+                        self.model_path = cand
+                        logger.info(f"WhisperCUDAEngine loaded successfully on CPU fallback ({cand})")
+                        break
+                    except Exception as e2:
+                        logger.warning(f"Failed to load Faster-Whisper on CPU with {cand}: {e2}")
+
+            if self.model is None:
+                logger.error("Failed to load any Faster-Whisper model on either CUDA or CPU.")
         else:
             logger.warning("faster-whisper is not installed. Running in mock/fallback mode.")
 

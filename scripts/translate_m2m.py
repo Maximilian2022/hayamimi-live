@@ -46,6 +46,16 @@ import threading
 import time
 
 
+try:
+    from scripts.cuda_utils import setup_cuda_dll_path
+    setup_cuda_dll_path()
+except Exception:
+    try:
+        from cuda_utils import setup_cuda_dll_path
+        setup_cuda_dll_path()
+    except Exception:
+        pass
+
 _MODEL_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models", "mojicast-m2m100-ct2")
 
 SOURCE_LANG_TOKEN = "__ja__"

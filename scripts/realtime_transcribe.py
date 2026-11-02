@@ -26,6 +26,17 @@ if hasattr(sys.stderr, "reconfigure"):
     except Exception:
         pass
 
+# Windows CUDA DLL パス (cublas64_12.dll / cudnn) の自動探索 & 登録
+try:
+    from cuda_utils import setup_cuda_dll_path
+    setup_cuda_dll_path()
+except Exception:
+    try:
+        from scripts.cuda_utils import setup_cuda_dll_path
+        setup_cuda_dll_path()
+    except Exception:
+        pass
+
 import argparse
 import os
 import queue
