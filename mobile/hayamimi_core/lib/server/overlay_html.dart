@@ -166,37 +166,112 @@ const String overlayHtml = '''
     el.style.textShadow = generateTextShadow(strokeColor, parseInt(strokeWidth != null ? strokeWidth : 2.5), effect);
   }
 
-  fetch("/overlay-style").then(r => r.json()).then(applyStyle).catch(() => {});
-
   let clearTimer = null;
-  const es = new EventSource("/events");
-  es.onmessage = (e) => {
-    const ev = JSON.parse(e.data);
-    if (ev.type === "style_update") {
-      applyStyle(ev.style);
+  let es = null;
+  let heartbeatTimer = null;
+  let reconnectTimer = null;
+  let retryCount = 0;
+
+  function resetHeartbeat() {
+    if (heartbeatTimer) clearTimeout(heartbeatTimer);
+    // サーバーは15秒ごとに keepalive を送るため、25秒間無音・無通信なら再接続
+    heartbeatTimer = setTimeout(() => {
+      connectEventSource();
+    }, 25000);
+  }
+
+  function connectEventSource() {
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+    if (es) {
+      try { es.close(); } catch (_) {}
+      es = null;
+    }
+    resetHeartbeat();
+
+    try {
+      es = new EventSource("/events?_t=" + Date.now());
+    } catch (_) {
+      scheduleReconnect();
       return;
     }
-    if (clearTimer) { clearTimeout(clearTimer); clearTimer = null; }
-    if (ev.type === "partial") {
-      par.textContent = ev.text;
-    } else if (ev.type === "final") {
-      fin.textContent = ev.text;
-      par.textContent = "";
-      trans.innerHTML = "";
-    } else if (ev.type === "translation") {
-      const line = document.createElement("div");
-      line.dataset.lang = ev.lang;
-      line.textContent = `→ [${ev.lang}] ${ev.text}`;
-      applyTransLineStyle(line);
-      trans.appendChild(line);
+
+    es.onopen = () => {
+      retryCount = 0;
+      resetHeartbeat();
+      fetch("/overlay-style?_t=" + Date.now()).then(r => r.json()).then(applyStyle).catch(() => {});
+    };
+
+    es.onmessage = (e) => {
+      resetHeartbeat();
+      let ev;
+      try {
+        ev = JSON.parse(e.data);
+      } catch (_) {
+        return;
+      }
+      if (ev.type === "style_update") {
+        applyStyle(ev.style);
+        return;
+      }
+      if (clearTimer) { clearTimeout(clearTimer); clearTimer = null; }
+      if (ev.type === "partial") {
+        par.textContent = ev.text;
+      } else if (ev.type === "final") {
+        fin.textContent = ev.text;
+        par.textContent = "";
+        trans.innerHTML = "";
+      } else if (ev.type === "translation") {
+        const line = document.createElement("div");
+        line.dataset.lang = ev.lang;
+        line.textContent = `→ [${ev.lang}] ${ev.text}`;
+        applyTransLineStyle(line);
+        trans.appendChild(line);
+      }
+      clearTimer = setTimeout(() => {
+        fin.textContent = "";
+        trans.innerHTML = "";
+      }, 6000);
+    };
+
+    es.onerror = () => {
+      scheduleReconnect();
+    };
+  }
+
+  function scheduleReconnect() {
+    if (reconnectTimer) return;
+    if (es) {
+      try { es.close(); } catch (_) {}
+      es = null;
     }
-    clearTimer = setTimeout(() => {
-      fin.textContent = "";
-      trans.innerHTML = "";
-    }, 6000);
-  };
+    retryCount++;
+    const delay = Math.min(1000 * Math.pow(1.5, retryCount - 1), 5000);
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      connectEventSource();
+    }, delay);
+  }
+
+  // シーン復帰時（OBSでシーンがアクティブになった時）の即時ヘルスチェック
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") {
+      if (!es || es.readyState !== 1) { // 1 = OPEN
+        connectEventSource();
+      }
+    }
+  });
+
+  // 初回スタイル取得 & SSE接続
+  fetch("/overlay-style?_t=" + Date.now()).then(r => r.json()).then(applyStyle).catch(() => {});
+  connectEventSource();
 </script>
 </body>
 </html>
+
+
+
 
 ''';

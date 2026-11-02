@@ -1023,6 +1023,14 @@
           </div>
         </div>
 
+        <!-- OBS 操作アクションバー -->
+        <div style="display: flex; gap: 0.6rem; align-items: center; margin-top: 0.6rem; flex-wrap: wrap;">
+          <button id="btn-obs-refresh-overlay" class="btn-copy" style="padding: 0.4rem 0.9rem; background: #1C2333; border-color: #3B475F; color: #7BED9F; display: flex; align-items: center; gap: 0.35rem;" title="OBS内の早耳字幕ブラウザソースのキャッシュを強制クリアして再読み込みします">
+            <span>🔄</span> OBS字幕オーバーレイを強制リフレッシュ
+          </button>
+          <span style="font-size: 0.72rem; color: var(--paper-dim);">※字幕がOBSに出ない時に一撃で再読み込みできます</span>
+        </div>
+
         <!-- ミュート警告バナー（ミュート中のみ表示） -->
         <div id="obs-mute-banner" class="obs-mute-banner" style="display: none;">
           <span class="mute-icon">🔇</span>
@@ -1886,6 +1894,11 @@
 
           loadAudioDevices();
           updateMeter();
+
+          // OBS WebSocket接続中の場合、早耳ブラウザソースのキャッシュクリア再読み込みを自動実行
+          if (window.obsMuteSync && window.obsMuteSync.enabled) {
+            window.obsMuteSync.refreshBrowserSources(false);
+          }
         } catch (mediaErr) {
           console.error("マイク取得例外:", mediaErr);
           let errorMsg = "マイクの取得に失敗しました: " + mediaErr.message;
@@ -3118,6 +3131,13 @@
           this.determineActiveMic();
         });
       }
+
+      const btnRefreshOverlay = document.getElementById("btn-obs-refresh-overlay");
+      if (btnRefreshOverlay) {
+        btnRefreshOverlay.addEventListener("click", () => {
+          this.refreshBrowserSources(true);
+        });
+      }
     }
 
     updateStatus(type, text) {
@@ -3282,6 +3302,51 @@
         if (d.requestStatus && d.requestStatus.result && d.responseData) {
           this.setMuteState(Boolean(d.responseData.inputMuted));
         }
+      } else if (d.requestId && d.requestId.startsWith("req-find-browser-")) {
+        if (d.requestStatus && d.requestStatus.result && d.responseData && d.responseData.inputs) {
+          const browserInputs = d.responseData.inputs;
+          let checkedCount = 0;
+          browserInputs.forEach(inp => {
+            this.send(6, {
+              requestType: "GetInputSettings",
+              requestId: "req-check-url-" + encodeURIComponent(inp.inputName) + "-" + Date.now(),
+              requestData: { inputName: inp.inputName }
+            });
+            checkedCount++;
+          });
+          if (checkedCount === 0 && this.pendingBrowserRefresh && this.pendingBrowserRefresh.showFeedback) {
+            const saveMsg = document.getElementById("save-msg");
+            if (saveMsg) {
+              saveMsg.textContent = "ℹ️ OBS 内にブラウザソースが見つかりませんでした";
+              saveMsg.style.display = "block";
+              setTimeout(() => { if (saveMsg) saveMsg.style.display = "none"; }, 3000);
+            }
+          }
+        }
+      } else if (d.requestId && d.requestId.startsWith("req-check-url-")) {
+        if (d.requestStatus && d.requestStatus.result && d.responseData && d.responseData.inputSettings) {
+          const settings = d.responseData.inputSettings;
+          const url = (settings.url || "").toLowerCase();
+          const inputName = d.responseData.inputName || decodeURIComponent(d.requestId.split("-")[3] || "");
+          if (inputName && (url.includes("8833") || url.includes("hayamimi"))) {
+            this.send(6, {
+              requestType: "PressInputPropertiesButton",
+              requestId: "req-refresh-done-" + Date.now(),
+              requestData: {
+                inputName: inputName,
+                propertyName: "refreshnocache"
+              }
+            });
+            if (this.pendingBrowserRefresh && this.pendingBrowserRefresh.showFeedback) {
+              const saveMsg = document.getElementById("save-msg");
+              if (saveMsg) {
+                saveMsg.textContent = `🔄 OBSブラウザソース「${inputName}」のキャッシュをクリアして再読み込みしました！`;
+                saveMsg.style.display = "block";
+                setTimeout(() => { if (saveMsg) saveMsg.style.display = "none"; }, 3500);
+              }
+            }
+          }
+        }
       }
     }
 
@@ -3338,6 +3403,29 @@
         requestId: "req-get-mute",
         requestData: { inputName: this.activeMicName }
       });
+    }
+
+    async refreshBrowserSources(showFeedback = true) {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+        if (showFeedback) {
+          const saveMsg = document.getElementById("save-msg");
+          if (saveMsg) {
+            saveMsg.textContent = "⚠️ OBS WebSocket 未接続のためリフレッシュできません (OBSを起動・接続してください)";
+            saveMsg.style.display = "block";
+            setTimeout(() => { if (saveMsg) saveMsg.style.display = "none"; }, 3500);
+          }
+        }
+        return false;
+      }
+
+      this.pendingBrowserRefresh = { showFeedback, time: Date.now() };
+      // OBS内の全ブラウザソースを探索
+      this.send(6, {
+        requestType: "GetInputList",
+        requestId: "req-find-browser-" + Date.now(),
+        requestData: { inputKind: "browser_source" }
+      });
+      return true;
     }
 
     send(op, d) {
