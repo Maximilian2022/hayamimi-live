@@ -18,7 +18,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 
-CURRENT_GPU_ENV_VERSION = "cuda_v2.2.2"
+CURRENT_GPU_ENV_VERSION = "cuda_v2.2.3"
 
 
 def get_project_root() -> str:
@@ -136,7 +136,7 @@ def run_gpu_env_probe() -> dict:
             [python_exe, "-B", "-c", probe_code],
             capture_output=True,
             text=True,
-            timeout=8,
+            timeout=30,
             creationflags=0x08000000 if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
         )
         if proc.returncode != 0:
@@ -190,10 +190,11 @@ def run_gpu_env_probe() -> dict:
 
     # 2. CUDA 利用可否チェック
     if not diag.get("cuda_available"):
+        torch_ver = diag.get("torch_version", "")
         return {
             "status": "no_cuda",
             "ready": False,
-            "message": "PyTorch で CUDA が利用できません (CPU版またはCUDAドライバ未検出)。再構築が必要です。",
+            "message": f"PyTorch で CUDA が利用できません (検出: {torch_ver or 'CPU版'})。CUDA 12.4 版 (torch==2.6.0+cu124) の再セットアップが必要です。",
             "diag": diag,
             "installed_version": installed_version,
             "current_version": CURRENT_GPU_ENV_VERSION,

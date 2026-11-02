@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     早耳 (hayamimi) - デスクトップ透過オーバーレイ字幕ウィンドウ
 .DESCRIPTION

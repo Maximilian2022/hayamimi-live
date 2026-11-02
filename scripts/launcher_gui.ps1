@@ -1990,6 +1990,8 @@ function Ensure-GpuVenvReady {
         $msg = "⚠️ GPU仮想環境の Python バージョンが PyTorch CUDA 未対応です。`r`n`r`n安定した Python 3.12 環境へ自動再構築しますか？"
     } elseif ($diag.status -eq "incomplete") {
         $msg = "⚠️ GPU環境に不足パッケージが検出されました: $($diag.message)`r`n`r`n差分パッケージを高速インストール（約10〜30秒）して修復しますか？"
+    } elseif ($diag.status -eq "no_cuda") {
+        $msg = "⚠️ GPU環境で CUDA が利用できません: $($diag.message)`r`n`r`nCUDA 12.4 対応環境へ自動再構築しますか？"
     } else {
         $msg = "⚠️ GPU環境に不整合または不足パッケージが検出されました: $($diag.message)`r`n`r`nGPU環境を修復・再セットアップしますか？"
     }
@@ -2339,7 +2341,7 @@ function Start-PythonVenvApp {
         $gpuPython = Join-Path $ProjectRoot ".venv_gpu\Scripts\python.exe"
         if (Test-Path $gpuPython) {
             $venvPython = $gpuPython
-            $venvDir = Split-Path $venvPython
+            $venvDir = Split-Path (Split-Path $venvPython)
             $venvScripts = Join-Path $venvDir "Scripts"
         }
         Write-AppLog "推論デバイス: GPU (CUDA) 起動 (Whisper+LoRA / 高精度)" "INFO"

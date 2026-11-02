@@ -76,7 +76,8 @@ class WhisperCUDAEngine:
         forced_lang: str = "ja",
         on_event: Callable[[dict], None] | None = None,
     ):
-        self.device = device if (HAVE_TORCH and torch.cuda.is_available()) else "cpu"
+        cuda_requested = (device == "cuda")
+        self.device = "cuda" if cuda_requested else "cpu"
         self.compute_type = compute_type if self.device == "cuda" else "int8"
         self.device_index = device_index
         self.forced_lang = forced_lang
@@ -103,8 +104,10 @@ class WhisperCUDAEngine:
         self.ko_spacer_ok = False
 
         # デバイス名の取得
-        if self.device == "cuda" and HAVE_TORCH and torch.cuda.is_available():
+        if HAVE_TORCH and torch.cuda.is_available():
             self.device_name = torch.cuda.get_device_name(self.device_index)
+        elif cuda_requested:
+            self.device_name = "NVIDIA CUDA (CTranslate2)"
         else:
             self.device_name = "CPU (Fallback)"
 
@@ -129,7 +132,7 @@ class WhisperCUDAEngine:
                     candidate_models.append(fb)
 
             # 1. CUDA でのロード試行 (候補モデル順 & compute_type 自動探索)
-            if self.device == "cuda":
+            if cuda_requested:
                 # 指定の compute_type を最優先し、フォールバック候補を試行
                 compute_types = [self.compute_type]
                 for ct_fb in ["default", "int8_float16", "int8", "float32"]:
@@ -153,6 +156,9 @@ class WhisperCUDAEngine:
                             )
                             self.model_path = cand
                             self.compute_type = ct
+                            self.device = "cuda"
+                            if not self.device_name or self.device_name == "CPU (Fallback)":
+                                self.device_name = "NVIDIA CUDA (CTranslate2)"
                             success_msg = f"WhisperCUDAEngine loaded successfully on {self.device_name} ({cand}, compute_type={ct})"
                             logger.info(success_msg)
                             print(f"[whisper_cuda] ✔ {success_msg}", file=sys.stderr, flush=True)
