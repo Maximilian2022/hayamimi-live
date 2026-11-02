@@ -2024,8 +2024,23 @@
             } else if (ev.tier) {
               const engVal = document.getElementById("engine-val");
               const engChip = document.getElementById("engine-chip");
-              if (ev.device === "NPU" || (serverCfgLoaded && window._currentDevice === "NPU")) {
+              if (ev.tier === "cuda_whisper" || (serverCfgLoaded && (window._currentEngine === "whisper_cuda" || window._currentDevice === "gpu" || window._currentDevice === "GPU"))) {
+                const devName = window._currentDeviceName ? window._currentDeviceName.replace("NVIDIA ", "").replace("GeForce ", "") : "Kotoba-Whisper";
+                if (engVal) engVal.textContent = `🔥 GPU (${devName})`;
+                if (engChip) {
+                  engChip.style.background = "rgba(16, 185, 129, 0.15)";
+                  engChip.style.color = "#10B981";
+                  engChip.style.borderColor = "rgba(16, 185, 129, 0.3)";
+                }
+              } else if (ev.device === "NPU" || (serverCfgLoaded && window._currentDevice === "NPU")) {
                 if (engVal) engVal.textContent = "⚡ NPU (ReazonSpeech)";
+                if (engChip) {
+                  engChip.style.background = "rgba(16, 185, 129, 0.15)";
+                  engChip.style.color = "#10B981";
+                  engChip.style.borderColor = "rgba(16, 185, 129, 0.3)";
+                }
+              } else if (ev.tier === "whisper_dml" || (serverCfgLoaded && window._currentEngine === "whisper_dml")) {
+                if (engVal) engVal.textContent = "⚡ iGPU (Kotoba-Whisper)";
                 if (engChip) {
                   engChip.style.background = "rgba(16, 185, 129, 0.15)";
                   engChip.style.color = "#10B981";
@@ -2200,10 +2215,21 @@
       if (res.ok) {
         const cfg = await res.json();
         serverCfgLoaded = true;
-        if (cfg.engine) {
+        if (cfg.engine || cfg.device_name) {
+          window._currentEngine = cfg.engine;
+          window._currentDevice = cfg.device || cfg.device_name;
+          window._currentDeviceName = cfg.device_name;
           const engVal = document.getElementById("engine-val");
           const engChip = document.getElementById("engine-chip");
-          if (cfg.device_name === "NPU" || (cfg.device && cfg.device === "npu")) {
+          if (cfg.engine === "whisper_cuda" || cfg.device === "gpu" || (cfg.device_name && (cfg.device_name.includes("GeForce") || cfg.device_name.includes("RTX") || cfg.device_name.includes("CUDA")))) {
+            const shortName = cfg.device_name ? cfg.device_name.replace("NVIDIA ", "").replace("GeForce ", "") : "Kotoba-Whisper";
+            if (engVal) engVal.textContent = `🔥 GPU (${shortName})`;
+            if (engChip) {
+              engChip.style.background = "rgba(16, 185, 129, 0.15)";
+              engChip.style.color = "#10B981";
+              engChip.style.borderColor = "rgba(16, 185, 129, 0.3)";
+            }
+          } else if (cfg.device_name === "NPU" || (cfg.device && cfg.device === "npu")) {
             if (engVal) engVal.textContent = "⚡ NPU (ReazonSpeech)";
             if (engChip) {
               engChip.style.background = "rgba(16, 185, 129, 0.15)";

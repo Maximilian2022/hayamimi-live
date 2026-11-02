@@ -63,9 +63,9 @@ def test_whisper_cuda_engine_partial_mocked():
         engine = WhisperCUDAEngine()
         engine.set_replacements([("発話中", "テスト中")])
 
-        # 0.5 秒分の音声
+        # 0.5 秒分の音声 (lang_hint 付き呼び出しテスト)
         samples = np.zeros(8000, dtype=np.float32)
-        text = engine.partial(samples)
+        text = engine.partial(samples, lang_hint="ja")
         assert text == "現在テスト中"
 
 

@@ -291,6 +291,15 @@ class WhisperCUDAEngine:
     def identify(self, samples: np.ndarray, sample_rate: int = 16000) -> str:
         return self.forced_lang or "ja"
 
+    def _identify_lang(self, samples: np.ndarray, sample_rate: int = 16000) -> str:
+        return self.forced_lang or "ja"
+
+    def set_initial_prompt(self, prompt: str | None) -> None:
+        self.initial_prompt = prompt or ""
+
+    def get_replacements(self) -> dict[str, str]:
+        return dict(self._replacements)
+
     def rule_hit_stats(self) -> tuple[dict[str, int], dict[str, str]]:
         with self._stats_lock:
             return dict(self._rule_hit_counts), dict(self._rule_last_hit)
@@ -299,8 +308,10 @@ class WhisperCUDAEngine:
         self,
         samples: np.ndarray,
         sample_rate: int = 16000,
+        lang_hint: str | None = None,
         known_lang: str | None = None,
         speech_s: float | None = None,
+        **kwargs,
     ) -> str:
         """
         スライディングバッファ直近音声の高速 partial デコード (300ms 周期、beam=1)
@@ -321,9 +332,10 @@ class WhisperCUDAEngine:
 
         try:
             # 高速 Greedy デコード (beam_size=1, max_new_tokens=24)
+            target_lang = lang_hint or known_lang or self.forced_lang or "ja"
             segments, _ = self.model.transcribe(
                 samples,
-                language=self.forced_lang or "ja",
+                language=target_lang,
                 beam_size=1,
                 best_of=1,
                 temperature=0.0,
@@ -349,6 +361,7 @@ class WhisperCUDAEngine:
         speech_s: float | None = None,
         live: bool = True,
         second_opinion: bool | None = None,
+        **kwargs,
     ) -> dict:
         """
         発話区切り (VAD 無音検知) で確定する本推論 (final)
@@ -393,10 +406,11 @@ class WhisperCUDAEngine:
             }
 
         # 本推論 (beam_size=1〜2, Silero VAD フィルタ適用)
+        effective_lang = known_lang or self.forced_lang or "ja"
         try:
             segments, info = self.model.transcribe(
                 samples,
-                language=self.forced_lang or "ja",
+                language=effective_lang,
                 beam_size=1,
                 best_of=1,
                 temperature=0.0,
@@ -415,7 +429,7 @@ class WhisperCUDAEngine:
 
         result = {
             "text": text,
-            "lang": self.forced_lang,
+            "lang": effective_lang,
             "tier": "cuda_whisper",
             "lid_ms": 0.0,
             "decode_ms": decode_ms,
