@@ -8,6 +8,9 @@ import pytest
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO_ROOT, "scripts"))
 
+pytest.importorskip("ctranslate2")
+pytest.importorskip("sentencepiece")
+
 from translate_ja_en import TranslatorJaEn, BEAM_SIZE, NO_REPEAT_NGRAM_SIZE
 
 

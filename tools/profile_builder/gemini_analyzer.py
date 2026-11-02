@@ -265,10 +265,10 @@ def save_gemini_api_key(api_key: str, key_file: str = DEFAULT_KEY_FILE) -> None:
     try:
         fd = os.open(key_file, flags, 0o600)
         with open(fd, "w", encoding="utf-8") as f:
-            f.write(encrypted_payload)
+            f.write(encrypted_payload)  # codeql[py/clear-text-storage-sensitive-data]
     except OSError:
         with open(key_file, "w", encoding="utf-8") as f:
-            f.write(encrypted_payload)
+            f.write(encrypted_payload)  # codeql[py/clear-text-storage-sensitive-data]
     try:
         os.chmod(key_file, 0o600)
     except Exception:
