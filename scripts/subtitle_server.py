@@ -268,10 +268,11 @@ def _scan_channels_for_maintenance(server):
                     try:
                         exclude = set(prof.processed_video_ids) | set(prof.skipped_video_ids)
                         skipped_in_scan: list[str] = []
+                        # 1. 新作動画 (直近新着) を最大3本取得
                         try:
                             new_vids = fetcher.fetch_channel_videos(
                                 channel_url=chan_url,
-                                limit=2,
+                                limit=3,
                                 candidate_pool=15,
                                 exclude_video_ids=exclude,
                                 sort_by="recent",
@@ -282,16 +283,37 @@ def _scan_channels_for_maintenance(server):
                         except TypeError:
                             new_vids = fetcher.fetch_channel_videos(
                                 channel_url=chan_url,
-                                limit=2,
+                                limit=3,
                                 candidate_pool=15,
                                 exclude_video_ids=exclude,
                                 sort_by="recent",
                             )
+
+                        # 2. 新作が3本未満の場合、直近半年以内 (180日以内) の未実施アーカイブから合計3本になるよう補充
+                        if len(new_vids) < 3:
+                            needed_archive = 3 - len(new_vids)
+                            already_queued = exclude | {v["id"] for v in new_vids}
+                            try:
+                                archive_vids = fetcher.fetch_maintenance_candidates(
+                                    channel_url=chan_url,
+                                    target_count=needed_archive,
+                                    max_age_days=180,
+                                    exclude_video_ids=already_queued,
+                                    candidate_pool=60,
+                                    filter_collab=getattr(prof, "collab_filter_enabled", True),
+                                    collab_keywords=getattr(prof, "collab_exclude_keywords", None),
+                                    skipped_video_ids_out=skipped_in_scan,
+                                )
+                                new_vids.extend(archive_vids)
+                            except Exception as ae:
+                                logger.warning("Failed to fetch archive candidates for %s: %s", chan_url, ae)
+
                         if skipped_in_scan:
                             for svid in skipped_in_scan:
                                 if svid not in prof.skipped_video_ids:
                                     prof.skipped_video_ids.append(svid)
                             save_profile(prof, pdir)
+
                         for nv in new_vids:
                             pending_vids.append({
                                 "id": nv["id"],
@@ -300,6 +322,7 @@ def _scan_channels_for_maintenance(server):
                                 "channel": nv["channel"],
                                 "speaker_id": prof.speaker_id,
                                 "display_name": prof.display_name,
+                                "is_archive": nv.get("is_archive", False),
                             })
                     except Exception as fe:
                         logger.warning("Failed to scan channel %s: %s", chan_url, fe)
@@ -348,7 +371,8 @@ def _execute_maintenance(server, log_callback=None):
         if vids_to_process and key:
             pipeline = ProfileBuilderPipeline(api_key=key)
             for idx, v_info in enumerate(vids_to_process):
-                msg = f"新着動画を自動学習中 [{idx+1}/{len(vids_to_process)}]: {v_info['title']}"
+                kind_label = "未実施アーカイブ" if v_info.get("is_archive") else "新着動画"
+                msg = f"{kind_label}を自動学習中 [{idx+1}/{len(vids_to_process)}]: {v_info['title']}"
                 if log_callback:
                     log_callback(msg)
                 with _maintenance_lock:

@@ -484,6 +484,74 @@ def test_maintenance_status_and_sync_stats_api(running_server, monkeypatch, tmp_
                 break
         time.sleep(0.1)
 
+def test_scan_channels_for_maintenance_archive_replenish(monkeypatch, tmp_path):
+    """Verify _scan_channels_for_maintenance replenishes up to 3 total videos from unperformed archives within 180 days."""
+    import datetime
+    from tools.profile_builder.profile_model import SpeakerProfile
+    from tools.profile_builder.profile_exporter import save_profile
+    from tools.profile_builder.youtube_fetcher import VideoMetadata
+    from scripts.subtitle_server import _scan_channels_for_maintenance, _maintenance_status, _maintenance_lock
 
+    pdir = str(tmp_path / "profiles")
+    prof = SpeakerProfile(
+        speaker_id="scan_replenish_spk",
+        display_name="Scan Replenish Speaker",
+        youtube_channel_url="https://youtube.com/@replenish-ch",
+        processed_video_ids=["vid_done"],
+    )
+    save_profile(prof, storage_dir=pdir)
+    monkeypatch.setattr("scripts.subtitle_server._get_profiles_dir", lambda: pdir)
 
+    now = datetime.datetime.now(datetime.timezone.utc)
+    date_recent = (now - datetime.timedelta(days=2)).strftime("%Y%m%d")
+    date_archive1 = (now - datetime.timedelta(days=20)).strftime("%Y%m%d")
+    date_archive2 = (now - datetime.timedelta(days=40)).strftime("%Y%m%d")
+    date_old = (now - datetime.timedelta(days=210)).strftime("%Y%m%d")
+
+    # Mock fetch_channel_videos (returns 1 new video)
+    def mock_fetch_channel_videos(self, channel_url, limit=3, **kwargs):
+        return [{
+            "id": "vid_new1", "title": "New Video 1", "url": "https://youtube.com/watch?v=vid_new1",
+            "channel": "Ch", "duration": 600, "view_count": 100,
+        }]
+
+    # Mock fetch_maintenance_candidates (returns up to target_count archive videos within 180 days)
+    def mock_fetch_maintenance_candidates(self, channel_url, target_count=3, max_age_days=180, exclude_video_ids=None, **kwargs):
+        assert target_count == 2  # 3 - 1 new video = 2 needed
+        assert "vid_new1" in exclude_video_ids
+        assert "vid_done" in exclude_video_ids
+        return [
+            {"id": "vid_arc1", "title": "Archive 1", "url": "https://youtube.com/watch?v=vid_arc1", "channel": "Ch", "is_archive": True},
+            {"id": "vid_arc2", "title": "Archive 2", "url": "https://youtube.com/watch?v=vid_arc2", "channel": "Ch", "is_archive": True},
+        ]
+
+    from tools.profile_builder.youtube_fetcher import YouTubeFetcher
+    monkeypatch.setattr(YouTubeFetcher, "fetch_channel_videos", mock_fetch_channel_videos)
+    monkeypatch.setattr(YouTubeFetcher, "fetch_maintenance_candidates", mock_fetch_maintenance_candidates)
+
+    class FakeServer:
+        pass
+
+    # Trigger scan
+    _scan_channels_for_maintenance(FakeServer())
+
+    # Wait for thread to finish
+    import time
+    for _ in range(30):
+        with _maintenance_lock:
+            if not _maintenance_status["scanning"]:
+                break
+        time.sleep(0.1)
+
+    with _maintenance_lock:
+        assert _maintenance_status["pending_count"] == 3
+        pending = _maintenance_status["pending_videos"]
+        assert len(pending) == 3
+        # 1 new video + 2 replenished archives
+        assert pending[0]["id"] == "vid_new1"
+        assert pending[0].get("is_archive") is False
+        assert pending[1]["id"] == "vid_arc1"
+        assert pending[1].get("is_archive") is True
+        assert pending[2]["id"] == "vid_arc2"
+        assert pending[2].get("is_archive") is True
 

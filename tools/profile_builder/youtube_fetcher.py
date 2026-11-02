@@ -518,6 +518,8 @@ class VideoMetadata:
     tags: List[str]
     channel_url: Optional[str] = None
     url: Optional[str] = None
+    upload_date: Optional[str] = None
+    timestamp: Optional[float] = None
 
 
 def parse_vtt_timestamp(ts: str) -> float:
@@ -878,6 +880,141 @@ class YouTubeFetcher:
             )
         return chosen
 
+    def fetch_maintenance_candidates(
+        self,
+        channel_url: str,
+        target_count: int = 3,
+        max_age_days: int = 180,
+        exclude_video_ids: Optional[set[str]] = None,
+        candidate_pool: int = 60,
+        filter_collab: bool = True,
+        collab_keywords: Optional[List[str]] = None,
+        skipped_video_ids_out: Optional[List[str]] = None,
+        log_callback: Optional[Callable[[str, str], None]] = None,
+    ) -> List[dict]:
+        """Fetch unperformed archive videos from a channel within max_age_days (e.g. 180 days).
+        
+        Prioritizes latest unperformed archives, automatically falls back to older archives
+        up to max_age_days (excluding videos older than max_age_days / 6 months).
+        """
+        if target_count <= 0:
+            return []
+
+        exclude_video_ids = exclude_video_ids or set()
+        clean_url = validate_youtube_url(channel_url)
+
+        candidate_urls = []
+        if "/streams" not in clean_url and "/videos" not in clean_url:
+            base = clean_url.rstrip("/")
+            candidate_urls = [f"{base}/streams", f"{base}/videos", base]
+        else:
+            candidate_urls = [clean_url]
+
+        entries = []
+        for target_url in candidate_urls:
+            if log_callback:
+                log_callback("YTDL", f"アーカイブ候補をスキャン中: {target_url} (最大{candidate_pool}件)")
+            cmd = list(self.yt_dlp_cmd) + [
+                "--flat-playlist",
+                "--dump-json",
+                "--playlist-end", str(candidate_pool),
+                target_url,
+            ]
+            try:
+                res = self._run_ytdl_command(cmd, log_callback=log_callback, test_url=target_url)
+                if res.returncode == 0 and res.stdout and res.stdout.strip():
+                    for line in res.stdout.splitlines():
+                        line = line.strip()
+                        if line:
+                            try:
+                                data = json.loads(line)
+                                entries.append(data)
+                            except Exception:
+                                pass
+                if len(entries) >= 10:
+                    break
+            except Exception as e:
+                logger.warning("Failed to fetch flat playlist from %s: %s", target_url, e)
+
+        import datetime
+        now = datetime.datetime.now(datetime.timezone.utc)
+        cutoff_dt = now - datetime.timedelta(days=max_age_days)
+        cutoff_yyyymmdd = cutoff_dt.strftime("%Y%m%d")
+
+        chosen_videos: List[dict] = []
+        seen_ids = set()
+
+        for e in entries:
+            vid_id = e.get("id")
+            if not vid_id or vid_id in seen_ids:
+                continue
+            seen_ids.add(vid_id)
+
+            if vid_id in exclude_video_ids:
+                continue
+
+            duration = float(e.get("duration", 0) or 0)
+            if duration and duration < 180:
+                continue
+
+            title_str = e.get("title", "") or ""
+            if filter_collab:
+                is_c, reason = is_collab_title(title_str, filter_enabled=True, exclude_keywords=collab_keywords)
+                if is_c:
+                    if skipped_video_ids_out is not None and vid_id not in skipped_video_ids_out:
+                        skipped_video_ids_out.append(vid_id)
+                    continue
+
+            video_url = e.get("url")
+            if not video_url or not video_url.startswith("http"):
+                video_url = f"https://www.youtube.com/watch?v={vid_id}"
+
+            try:
+                meta = self.fetch_metadata(video_url, log_callback=log_callback)
+                if filter_collab:
+                    is_collab, _ = is_collab_or_guest_video(
+                        meta, filter_enabled=True, exclude_keywords=collab_keywords
+                    )
+                    if is_collab:
+                        if skipped_video_ids_out is not None and vid_id not in skipped_video_ids_out:
+                            skipped_video_ids_out.append(vid_id)
+                        continue
+
+                is_too_old = False
+                if meta.upload_date:
+                    if meta.upload_date < cutoff_yyyymmdd:
+                        is_too_old = True
+                elif meta.timestamp:
+                    v_dt = datetime.datetime.fromtimestamp(meta.timestamp, tz=datetime.timezone.utc)
+                    if v_dt < cutoff_dt:
+                        is_too_old = True
+
+                if is_too_old:
+                    logger.info("Video %s is older than %d days (%s), stopping archive scan.", vid_id, max_age_days, meta.upload_date)
+                    break
+
+                chosen_videos.append({
+                    "id": vid_id,
+                    "title": meta.title or title_str,
+                    "url": meta.url or video_url,
+                    "view_count": int(e.get("view_count", 0) or 0),
+                    "duration": meta.duration_sec or duration,
+                    "channel": meta.channel or e.get("channel") or "",
+                    "upload_date": meta.upload_date,
+                    "is_archive": True,
+                })
+
+                if len(chosen_videos) >= target_count:
+                    break
+            except Exception as me:
+                logger.warning("Failed to verify candidate metadata %s: %s", vid_id, me)
+                continue
+
+        if log_callback and chosen_videos:
+            log_callback("YTDL", f"直近半年以内の未実施アーカイブから {len(chosen_videos)} 件を選定しました。")
+
+        return chosen_videos
+
     def fetch_playlist_videos(
         self,
         playlist_url: str,
@@ -1009,6 +1146,8 @@ class YouTubeFetcher:
             raise RuntimeError(f"yt-dlp metadata fetch failed (code {res.returncode}): {err_msg}")
         data = json.loads(res.stdout)
         chan_url = data.get("channel_url") or data.get("uploader_url")
+        raw_ts = data.get("timestamp") or data.get("release_timestamp")
+        ts_val = float(raw_ts) if raw_ts is not None else None
         return VideoMetadata(
             video_id=data.get("id", ""),
             title=data.get("title", ""),
@@ -1018,6 +1157,8 @@ class YouTubeFetcher:
             tags=data.get("tags", []) or [],
             channel_url=chan_url,
             url=data.get("webpage_url") or url,
+            upload_date=data.get("upload_date"),
+            timestamp=ts_val,
         )
 
     def fetch_subtitles(self, url: str, temp_dir: str, log_callback: Optional[Callable[[str, str], None]] = None) -> List[SubtitleSegment]:

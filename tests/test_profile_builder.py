@@ -1063,6 +1063,94 @@ def test_legacy_profile_migration():
     assert prof.replacements[0].added_at == "2026-01-01T00:00:00Z"
     assert prof.replacements[0].is_archived is False
 
+def test_fetch_maintenance_candidates_and_180_day_filter(monkeypatch):
+    """Verify fetch_maintenance_candidates fetches unperformed archives within 180 days and stops on older videos."""
+    import datetime
+    import json
+    from tools.profile_builder.youtube_fetcher import YouTubeFetcher, VideoMetadata
 
+    fetcher = YouTubeFetcher()
+    now = datetime.datetime.now(datetime.timezone.utc)
 
+    # 6 dummy videos:
+    # vid1: 10 days ago (within 180d, already trained -> excluded)
+    # vid2: 30 days ago (within 180d, unperformed -> accepted)
+    # vid3: 60 days ago (within 180d, collab -> excluded)
+    # vid4: 90 days ago (within 180d, unperformed -> accepted)
+    # vid5: 200 days ago (>180d -> triggers cutoff!)
+    # vid6: 250 days ago (>180d -> should never be reached)
+    date_30d = (now - datetime.timedelta(days=30)).strftime("%Y%m%d")
+    date_90d = (now - datetime.timedelta(days=90)).strftime("%Y%m%d")
+    date_200d = (now - datetime.timedelta(days=200)).strftime("%Y%m%d")
+
+    dummy_entries = [
+        {"id": "vid1", "title": "Vid 1 (Trained)", "duration": 600, "url": "https://youtube.com/watch?v=vid1"},
+        {"id": "vid2", "title": "Vid 2 (Solo Archive)", "duration": 600, "url": "https://youtube.com/watch?v=vid2"},
+        {"id": "vid3", "title": "Vid 3 【コラボ】with ゲスト", "duration": 600, "url": "https://youtube.com/watch?v=vid3"},
+        {"id": "vid4", "title": "Vid 4 (Solo Archive 2)", "duration": 600, "url": "https://youtube.com/watch?v=vid4"},
+        {"id": "vid5", "title": "Vid 5 (Too Old)", "duration": 600, "url": "https://youtube.com/watch?v=vid5"},
+        {"id": "vid6", "title": "Vid 6 (Never Reached)", "duration": 600, "url": "https://youtube.com/watch?v=vid6"},
+    ]
+
+    def mock_run_ytdl(cmd, **kwargs):
+        class MockResult:
+            returncode = 0
+            stdout = "\n".join(json.dumps(e) for e in dummy_entries)
+            stderr = ""
+        return MockResult()
+
+    monkeypatch.setattr(fetcher, "_run_ytdl_command", mock_run_ytdl)
+
+    metadata_map = {
+        "https://youtube.com/watch?v=vid2": VideoMetadata(
+            video_id="vid2", title="Vid 2 (Solo Archive)", channel="Ch", description="",
+            duration_sec=600.0, tags=[], upload_date=date_30d,
+        ),
+        "https://youtube.com/watch?v=vid4": VideoMetadata(
+            video_id="vid4", title="Vid 4 (Solo Archive 2)", channel="Ch", description="",
+            duration_sec=600.0, tags=[], upload_date=date_90d,
+        ),
+        "https://youtube.com/watch?v=vid5": VideoMetadata(
+            video_id="vid5", title="Vid 5 (Too Old)", channel="Ch", description="",
+            duration_sec=600.0, tags=[], upload_date=date_200d,
+        ),
+    }
+
+    fetched_urls = []
+    def mock_fetch_metadata(url, **kwargs):
+        fetched_urls.append(url)
+        if url in metadata_map:
+            return metadata_map[url]
+        raise RuntimeError(f"Unexpected url: {url}")
+
+    monkeypatch.setattr(fetcher, "fetch_metadata", mock_fetch_metadata)
+
+    skipped_collabs = []
+    candidates = fetcher.fetch_maintenance_candidates(
+        channel_url="https://youtube.com/@test-ch",
+        target_count=3,
+        max_age_days=180,
+        exclude_video_ids={"vid1"},
+        skipped_video_ids_out=skipped_collabs,
+    )
+
+    # Should select vid2 and vid4, then stop at vid5 (>180d)
+    assert len(candidates) == 2
+    assert [c["id"] for c in candidates] == ["vid2", "vid4"]
+    assert all(c.get("is_archive") is True for c in candidates)
+
+    # Collab vid3 must be recorded in skipped_collabs
+    assert "vid3" in skipped_collabs
+
+    # vid6 (>250d) must never have been reached
+    assert "https://youtube.com/watch?v=vid6" not in fetched_urls
+
+    # Test all-performed / all-excluded scenario
+    empty_candidates = fetcher.fetch_maintenance_candidates(
+        channel_url="https://youtube.com/@test-ch",
+        target_count=3,
+        max_age_days=180,
+        exclude_video_ids={"vid1", "vid2", "vid4"},
+    )
+    assert len(empty_candidates) == 0
 
