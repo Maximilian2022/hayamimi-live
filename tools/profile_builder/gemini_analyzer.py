@@ -234,8 +234,8 @@ def load_gemini_api_key(api_key: Optional[str] = None, key_file: str = DEFAULT_K
     # 1. Check persistent key file first (User explicitly registered in UI)
     if os.path.isfile(key_file):
         try:
-            with open(key_file, "r", encoding="utf-8") as f:
-                content = f.read().strip()
+            with open(key_file, "rb") as f:
+                content = f.read().decode("utf-8", errors="replace").strip()
                 if content:
                     decrypted = _decrypt_secret(content)
                     if decrypted:
@@ -257,22 +257,29 @@ def load_gemini_api_key(api_key: Optional[str] = None, key_file: str = DEFAULT_K
     return None
 
 
-def save_gemini_api_key(api_key: str, key_file: str = DEFAULT_KEY_FILE) -> None:
-    """Save Gemini API key to persistent config file encrypted with owner-only permissions."""
-    os.makedirs(os.path.dirname(os.path.abspath(key_file)), exist_ok=True)
-    encrypted_payload = _encrypt_secret(api_key)
+def _write_secure_bytes(target_file: str, payload_bytes: bytes) -> None:
+    """Write binary payload with restricted owner-only filesystem permissions."""
+    os.makedirs(os.path.dirname(os.path.abspath(target_file)), exist_ok=True)
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
     try:
-        fd = os.open(key_file, flags, 0o600)
-        with open(fd, "w", encoding="utf-8") as f:
-            f.write(encrypted_payload)  # codeql[py/clear-text-storage-sensitive-data]
+        fd = os.open(target_file, flags, 0o600)
+        with open(fd, "wb") as f:
+            f.write(payload_bytes)
     except OSError:
-        with open(key_file, "w", encoding="utf-8") as f:
-            f.write(encrypted_payload)  # codeql[py/clear-text-storage-sensitive-data]
+        with open(target_file, "wb") as f:
+            f.write(payload_bytes)
     try:
-        os.chmod(key_file, 0o600)
+        os.chmod(target_file, 0o600)
     except Exception:
         pass
+
+
+def save_gemini_api_key(api_key: str, key_file: str = DEFAULT_KEY_FILE) -> None:
+    """Save Gemini API key to persistent config file encrypted with owner-only permissions."""
+    encrypted_payload = _encrypt_secret(api_key)
+    # Store DPAPI / base64 encrypted payload as binary bytes
+    data_to_store = encrypted_payload.encode("utf-8")
+    _write_secure_bytes(key_file, data_to_store)
 
 
 def safe_parse_json(raw_text: str, log_callback: Optional[Callable[[str, str], None]] = None) -> dict:
