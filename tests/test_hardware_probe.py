@@ -138,17 +138,55 @@ def test_npu_does_not_match_usb_input_devices():
         "Status": "OK"
     })
     
-    # 正常なフィルタリング条件の検証
+    # 正常なフィルタリング条件の検証 (Intel NPU のみ許可、AMD NPU は除外)
     import re
-    def is_npu(name: str, pnp_class: str) -> bool:
+    def is_npu(name: str, pnp_class: str, pnp_id: str = "") -> bool:
         has_npu_kw = bool(re.search(r"AI Boost|\bNPU\b|\bIPU\b", name)) or pnp_class == "ComputeAccelerator"
         is_not_input = not bool(re.search(r"Mouse|Keyboard|HIDClass|Media", pnp_class)) and not bool(re.search(r"Input|Receiver|Mouse|Keyboard|Audio|Controller", name))
-        return has_npu_kw and is_not_input
+        is_intel = "8086" in pnp_id or "Intel" in name or "AI Boost" in name
+        is_not_amd = "AMD" not in name and "1002" not in pnp_id
+        return has_npu_kw and is_not_input and is_intel and is_not_amd
 
     assert not is_npu("Logitech USB Input Device", "HIDClass")
     assert not is_npu("USB Input Device", "HIDClass")
-    assert is_npu("Intel(R) AI Boost", "ComputeAccelerator")
-    assert is_npu("AMD NPU Device", "ComputeAccelerator")
+    assert is_npu("Intel(R) AI Boost", "ComputeAccelerator", "PCI\\VEN_8086&DEV_7D1D")
+    assert not is_npu("AMD NPU Device", "ComputeAccelerator", "PCI\\VEN_1002&DEV_1502")
+    assert not is_npu("AMD IPU Device", "ComputeAccelerator", "PCI\\VEN_1002&DEV_17F0")
+
+
+def test_amd_npu_suppressed_in_summary():
+    """AMD NPU (AMD IPU / Ryzen AI) は OpenVINO 非対応のため has_npu=False となり CPU 推論が推奨されること"""
+    amd_npu = NpuDevice(
+        name="AMD IPU Device",
+        vendor_name="AMD",
+        device_id="PCI\\VEN_1002&DEV_17F0",
+        status="Unsupported (AMD NPU is not supported by OpenVINO)",
+        is_available=False,
+    )
+    devices = [
+        GpuDevice(index=0, name="AMD Radeon 780M", vendor_id=0x1002, vendor_name="AMD",
+                  device_id=0x15BF, is_integrated=True, is_discrete=False, is_software=False, vram_mb=512),
+    ]
+    with patch("scripts.hardware_probe.probe_gpu_devices", return_value=devices), \
+         patch("scripts.hardware_probe.probe_npu_device", return_value=amd_npu):
+        summary = get_hardware_summary()
+        assert summary["has_npu"] is False
+        assert summary["has_nvidia_gpu"] is False
+        assert summary["recommended_device"] == "cpu"
+
+
+def test_amd_gpu_only_environment():
+    """AMD Radeon GPU のみの環境では has_nvidia_gpu=False となり CPU 推論が推奨されること"""
+    devices = [
+        GpuDevice(index=0, name="AMD Radeon RX 7900 XTX", vendor_id=0x1002, vendor_name="AMD",
+                  device_id=0x744C, is_integrated=False, is_discrete=True, is_software=False, vram_mb=24576),
+    ]
+    with patch("scripts.hardware_probe.probe_gpu_devices", return_value=devices), \
+         patch("scripts.hardware_probe.probe_npu_device", return_value=None):
+        summary = get_hardware_summary()
+        assert summary["has_nvidia_gpu"] is False
+        assert summary["has_npu"] is False
+        assert summary["recommended_device"] == "cpu"
 
 
 

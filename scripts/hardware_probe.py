@@ -365,13 +365,21 @@ def probe_npu_device() -> Optional[NpuDevice]:
                 name = data.get("Name", "NPU Device")
                 status = data.get("Status", "OK")
                 dev_id = data.get("DeviceID", "")
-                vendor = "Intel" if "8086" in dev_id else ("AMD" if "1002" in dev_id else "Unknown")
+                name_upper = name.upper()
+                dev_id_upper = dev_id.upper()
+                is_intel = "8086" in dev_id_upper or "INTEL" in name_upper or "AI BOOST" in name_upper
+                is_amd = "1002" in dev_id_upper or "AMD" in name_upper
+
+                vendor = "Intel" if is_intel else ("AMD" if is_amd else "Unknown")
+                # OpenVINO NPU は Intel Core Ultra (AI Boost) 専用。
+                # AMD NPU (XDNA / Ryzen AI) は OpenVINO 非対応のため、Hayamimi Live では動作不可 (is_available=False)。
+                is_avail = (status == "OK") and is_intel and not is_amd
                 return NpuDevice(
                     name=name,
                     vendor_name=vendor,
                     device_id=dev_id,
-                    status=status,
-                    is_available=(status == "OK"),
+                    status="OK" if is_avail else ("Unsupported (AMD NPU is not supported by OpenVINO)" if is_amd else status),
+                    is_available=is_avail,
                 )
         except Exception as e:
             logger.debug(f"PnP NPU query error: {e}")
@@ -398,13 +406,13 @@ def get_hardware_summary() -> dict:
         "igpu_directml_id": igpu_id,
         "igpu_name": igpu_dev.name if igpu_dev else None,
         "igpu_vendor": igpu_dev.vendor_name if igpu_dev else None,
-        "has_npu": npu_dev is not None and npu_dev.is_available,
-        "npu_name": npu_dev.name if npu_dev else None,
+        "has_npu": npu_dev is not None and npu_dev.is_available and npu_dev.vendor_name == "Intel",
+        "npu_name": npu_dev.name if (npu_dev and npu_dev.is_available and npu_dev.vendor_name == "Intel") else None,
         "npu_device": asdict(npu_dev) if npu_dev else None,
         "has_nvidia_gpu": nvidia_gpu is not None,
         "nvidia_gpu_name": nvidia_gpu.name if nvidia_gpu else None,
         "main_gpu_name": main_gpu.name if main_gpu else None,
-        "recommended_device": "npu" if (npu_dev and npu_dev.is_available) else "cpu",
+        "recommended_device": "npu" if (npu_dev and npu_dev.is_available and npu_dev.vendor_name == "Intel") else "cpu",
         "recommended_engine": "reazonspeech",
         "devices": [asdict(d) for d in devices],
     }

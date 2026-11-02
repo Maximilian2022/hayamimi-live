@@ -79,6 +79,8 @@ def run_gpu_env_probe() -> dict:
     probe_code = (
         "import sys, json\n"
         "res = {}\n"
+        "res['python_version'] = f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}'\n"
+        "res['python_major_minor'] = f'{sys.version_info.major}.{sys.version_info.minor}'\n"
         "try:\n"
         "    import torch\n"
         "    res['torch_version'] = torch.__version__\n"
@@ -147,6 +149,18 @@ def run_gpu_env_probe() -> dict:
         }
 
     installed_version = read_marker_version()
+
+    # 0. Python バージョン互換性チェック (PyTorch CUDA は 3.9〜3.13 のみ対応。3.14+ は wheel なし)
+    py_ver = diag.get("python_major_minor", "")
+    if py_ver and (py_ver not in ["3.9", "3.10", "3.11", "3.12", "3.13"]):
+        return {
+            "status": "incompatible_python",
+            "ready": False,
+            "message": f"GPU 仮想環境の Python バージョン ({py_ver}) は PyTorch CUDA 未対応です。Python 3.12 で再構築が必要です。",
+            "diag": diag,
+            "installed_version": installed_version,
+            "current_version": CURRENT_GPU_ENV_VERSION,
+        }
 
     # 1. 旧 DirectML 残留チェック
     if diag.get("directml_detected"):

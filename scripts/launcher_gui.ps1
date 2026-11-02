@@ -1034,12 +1034,26 @@ function Update-DeviceBadgeDisplay {
 function Update-GpuDeviceBadge {
     try {
         # 1. NPU (Neural Processing Unit) の検出
-        # 注意: "Input" などの単語に "npu" が含まれる USB 入力デバイス (Logitech USB Input Device 等) を誤検知しないよう厳格に判定
+        # 注意: OpenVINO NPU は Intel AI Boost (VEN_8086) 専用です。
+        # AMD NPU (AMD IPU / VEN_1002 / XDNA) は OpenVINO 非対応のため、AMD 環境では NPU 起動モードを非表示 (Collapsed) にします。
+        # また "Input" 等の USB デバイス誤検知を完全に防止します。
         $npu = Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue | Where-Object {
             ($_.Name -match "AI Boost|\bNPU\b|\bIPU\b" -or $_.PNPClass -eq "ComputeAccelerator") -and
+            $_.Name -notmatch "AMD" -and
+            $_.PNPDeviceID -notmatch "VEN_1002" -and
+            ($_.Name -match "Intel" -or $_.PNPDeviceID -match "VEN_8086" -or $_.Name -match "AI Boost") -and
             $_.PNPClass -notmatch "Mouse|Keyboard|HIDClass|Media" -and
             $_.Name -notmatch "Input|Receiver|Mouse|Keyboard|Audio|Controller"
         } | Select-Object -First 1
+
+        # AMD NPU (XDNA) の検知とログ案内 (非表示理由をログに記録)
+        $amdNpu = Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue | Where-Object {
+            ($_.Name -match "AMD.*(NPU|IPU)" -or ($_.PNPDeviceID -match "VEN_1002" -and $_.Name -match "\bNPU\b|\bIPU\b")) -and
+            $_.PNPClass -notmatch "Mouse|Keyboard|HIDClass|Media"
+        } | Select-Object -First 1
+        if ($amdNpu) {
+            Write-AppLog "ℹ AMD NPU 検出 ($($amdNpu.Name)): OpenVINO 未対応のため NPU 起動は非表示とし、高速な CPU 起動 (ReazonSpeech) を適用します" "INFO"
+        }
 
         if ($npu -and $npu.Status -eq "OK") {
             $script:HasNpu = $true
@@ -1059,19 +1073,32 @@ function Update-GpuDeviceBadge {
             $script:NpuName = ""
             if ($rbDeviceNpu) {
                 $rbDeviceNpu.IsEnabled = $false
-                # NPU 非搭載環境では完全非表示にして UI をすっきり整理
+                # NPU 非搭載または AMD 環境では完全非表示にして UI をすっきり整理
                 $rbDeviceNpu.Visibility = [System.Windows.Visibility]::Collapsed
             }
             if ($rbDeviceCpu) {
                 $rbDeviceCpu.IsChecked = $true
             }
             $script:CurrentDeviceMode = "Cpu"
-            Write-AppLog "ℹ NPU 未検出: CPU 起動モード (ReazonSpeech) で動作します" "INFO"
+            Write-AppLog "ℹ NPU 未検出 (または非対応): CPU 起動モード (ReazonSpeech) で動作します" "INFO"
         }
 
-        # 2. メイン GPU の検出と保護確認 / GPU 起動オプション制御
+        # 2. メイン GPU の検出と保護確認 / GPU 起動オプション制御 (NVIDIA CUDA 専用)
+        # AMD Radeon GPU は Windows 版 CUDA / LoRA 非対応のため、GPU 起動モードを非表示 (Collapsed) にします。
         $gpus = Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue
-        $nvidiaGpu = $gpus | Where-Object { $_.Name -match "NVIDIA|GeForce|RTX" } | Select-Object -First 1
+        $nvidiaGpu = $gpus | Where-Object {
+            ($_.Name -match "NVIDIA|GeForce|RTX|GTX|Quadro|Tesla") -and
+            ($_.PNPDeviceID -match "VEN_10DE" -or $_.AdapterCompatibility -match "NVIDIA") -and
+            ($_.Name -notmatch "AMD|Radeon|Intel")
+        } | Select-Object -First 1
+
+        $amdGpu = $gpus | Where-Object {
+            ($_.Name -match "AMD|Radeon" -or $_.PNPDeviceID -match "VEN_1002")
+        } | Select-Object -First 1
+        if ($amdGpu -and -not $nvidiaGpu) {
+            Write-AppLog "ℹ AMD GPU 検出 ($($amdGpu.Name)): CUDA / LoRA 非対応のため GPU 起動は非表示とし、超低遅延な CPU 起動 (ReazonSpeech) を適用します" "INFO"
+        }
+
         if ($nvidiaGpu) {
             $script:HasNvidiaGpu = $true
             $script:GpuShortName = $nvidiaGpu.Name -replace "NVIDIA\s*", ""
@@ -1804,6 +1831,15 @@ function Invoke-SetupGpuVenv {
     $gpuVenvDir = Join-Path $ProjectRoot ".venv_gpu"
     $gpuVenvPython = Join-Path $gpuVenvDir "Scripts\python.exe"
 
+    # 既存の .venv_gpu の Python バージョンを確認し、PyTorch CUDA 未対応 (3.14 等) の場合は自動クリーンアップ
+    if (Test-Path $gpuVenvPython) {
+        $existingVer = (& $gpuVenvPython -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null)
+        if ($existingVer -and $existingVer -notin @("3.9", "3.10", "3.11", "3.12", "3.13")) {
+            Write-AppLog "⚠️ 既存の GPU 仮想環境 (.venv_gpu) は PyTorch CUDA 未対応バージョン (Python $existingVer) です。互換性のある Python 3.12 で再構築します。" "WARN"
+            $ForceRecreate = $true
+        }
+    }
+
     if ($ForceRecreate -and (Test-Path $gpuVenvDir)) {
         Write-AppLog "既存の不整合な GPU 仮想環境 (.venv_gpu) をクリーンアップしています..." "INFO"
         try {
@@ -1816,13 +1852,14 @@ function Invoke-SetupGpuVenv {
     $uvCmd = Get-SafeUvCommand
 
     if ($ForceRecreate -or -not (Test-Path $gpuVenvPython)) {
-        Write-AppLog "GPU 仮想環境 (.venv_gpu) を作成しています..." "INFO"
+        Write-AppLog "GPU 仮想環境 (.venv_gpu) を作成しています (Python 3.12)..." "INFO"
         $created = $false
         if ($uvCmd) {
             try {
                 $pinfoVenv = [System.Diagnostics.ProcessStartInfo]::new()
                 $pinfoVenv.FileName = $uvCmd
-                $pinfoVenv.Arguments = "venv .venv_gpu --python 3.14"
+                # PyTorch CUDA 12.4+ に最も安定して対応する Python 3.12 を指定 (--seed で pip 同梱)
+                $pinfoVenv.Arguments = "venv .venv_gpu --python 3.12 --seed"
                 $pinfoVenv.WorkingDirectory = $ProjectRoot
                 $pinfoVenv.RedirectStandardOutput = $true
                 $pinfoVenv.RedirectStandardError = $true
@@ -1836,11 +1873,18 @@ function Invoke-SetupGpuVenv {
             } catch {}
         }
         if (-not $created) {
-            $sysPython = (where.exe python 2>$null | Select-Object -First 1)
-            if ($sysPython) {
+            # py ランチャーから 3.12 / 3.11 を優先探索
+            $targetPy = (py -3.12 -c "import sys; print(sys.executable)" 2>$null)
+            if (-not $targetPy) {
+                $targetPy = (py -3.11 -c "import sys; print(sys.executable)" 2>$null)
+            }
+            if (-not $targetPy) {
+                $targetPy = (where.exe python 2>$null | Select-Object -First 1)
+            }
+            if ($targetPy) {
                 try {
                     $pinfoSys = [System.Diagnostics.ProcessStartInfo]::new()
-                    $pinfoSys.FileName = $sysPython
+                    $pinfoSys.FileName = $targetPy
                     $pinfoSys.Arguments = "-m venv .venv_gpu"
                     $pinfoSys.WorkingDirectory = $ProjectRoot
                     $pinfoSys.RedirectStandardOutput = $true
@@ -1872,7 +1916,7 @@ function Invoke-SetupGpuVenv {
         try {
             $pinfoPip = [System.Diagnostics.ProcessStartInfo]::new()
             $pinfoPip.FileName = $uvCmd
-            $pinfoPip.Arguments = "pip install --extra-index-url https://download.pytorch.org/whl/cu124 -r `"$reqFile`" --python `"$gpuVenvPython`""
+            $pinfoPip.Arguments = "pip install --extra-index-url https://download.pytorch.org/whl/cu124 --index-strategy unsafe-best-match -r `"$reqFile`" --python `"$gpuVenvPython`""
             $pinfoPip.WorkingDirectory = $ProjectRoot
             $pinfoPip.RedirectStandardOutput = $true
             $pinfoPip.RedirectStandardError = $true
@@ -1886,6 +1930,7 @@ function Invoke-SetupGpuVenv {
             $uvCmd = $null
         }
     }
+
     if (-not $installed -and (Test-Path $gpuVenvPython)) {
         try {
             Unblock-File -LiteralPath $gpuVenvPython -ErrorAction SilentlyContinue
@@ -1940,13 +1985,15 @@ function Ensure-GpuVenvReady {
         $msg = "🔥 GPU (CUDA) 起動を利用するには、専用のGPU仮想環境 (.venv_gpu) のセットアップが必要です。`r`n`r`n・PyTorch (CUDA 12.4+)、Faster-Whisper、PEFT (LoRA) を導入します。`r`n・所要時間: 約 1〜3 分（回線速度による）`r`n`r`n今すぐセットアップを開始しますか？"
     } elseif ($diag.status -eq "incompatible_directml") {
         $msg = "⚠️ 旧バージョン (v2.0.0 以前) の DirectML 環境が残留しているため、最新の CUDA 環境に再構築（自己修復）が必要です。`r`n`r`n今すぐ自動再構築を実行しますか？"
+    } elseif ($diag.status -eq "incompatible_python") {
+        $msg = "⚠️ GPU仮想環境の Python バージョンが PyTorch CUDA 未対応です。`r`n`r`n安定した Python 3.12 環境へ自動再構築しますか？"
     } else {
         $msg = "⚠️ GPU環境に不整合または不足パッケージが検出されました: $($diag.message)`r`n`r`nGPU環境を修復・再セットアップしますか？"
     }
 
     $ans = Show-AppConfirm -Message $msg -Title $title
     if ($ans -eq [System.Windows.MessageBoxResult]::Yes) {
-        $setupRes = Invoke-SetupGpuVenv -ForceRecreate ($diag.status -eq "incompatible_directml")
+        $setupRes = Invoke-SetupGpuVenv -ForceRecreate ($diag.status -eq "incompatible_directml" -or $diag.status -eq "incompatible_python" -or $diag.status -eq "error")
         return $setupRes
     }
     return $false

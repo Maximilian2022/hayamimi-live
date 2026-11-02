@@ -51,6 +51,35 @@ def test_probe_not_installed(tmp_path, monkeypatch):
     assert "存在しません" in res["message"]
 
 
+def test_probe_incompatible_python(tmp_path, monkeypatch):
+    """Python 3.14 等の PyTorch CUDA 未対応バージョンが検出された場合 incompatible_python となること"""
+    fake_py = tmp_path / "python.exe"
+    fake_py.write_text("#!/bin/sh\n")
+    monkeypatch.setattr("scripts.check_gpu_env.get_gpu_python_path", lambda: str(fake_py))
+
+    fake_output = {
+        "python_version": "3.14.0",
+        "python_major_minor": "3.14",
+        "torch_version": "2.4.0",
+        "cuda_available": True,
+        "directml_detected": False,
+        "faster_whisper": True,
+        "peft": True,
+        "ctranslate2": True,
+    }
+
+    mock_proc = MagicMock()
+    mock_proc.returncode = 0
+    mock_proc.stdout = json.dumps(fake_output)
+    mock_proc.stderr = ""
+
+    with patch("subprocess.run", return_value=mock_proc):
+        res = run_gpu_env_probe()
+        assert res["status"] == "incompatible_python"
+        assert res["ready"] is False
+        assert "3.14" in res["message"]
+
+
 def test_probe_incompatible_directml(tmp_path, monkeypatch):
     fake_py = tmp_path / "python.exe"
     fake_py.write_text("#!/bin/sh\n")
