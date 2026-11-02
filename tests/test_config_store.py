@@ -17,6 +17,7 @@ from scripts.config_store import (
     get_storage_dir,
     reset_storage_dir_cache,
     create_config_snapshot_backup,
+    extract_initial_prompt_from_replace_file,
 )
 
 
@@ -127,3 +128,22 @@ def test_config_snapshot_backup(tmp_config_dir):
     with open(os.path.join(backup_dir, "obs_config.json"), "r", encoding="utf-8") as f:
         bak_obs = json.load(f)
     assert bak_obs["password"] == "snap_pwd"
+
+
+def test_extract_initial_prompt_from_replace_file(tmp_path):
+    replace_file = tmp_path / "test_replace.txt"
+    content = """# 置換辞書
+アマンガス\tAmongUs
+モット\tMOD
+GTハブ=GitHub
+ウインドズ=Windows
+"""
+    replace_file.write_text(content, encoding="utf-8")
+
+    prompt = extract_initial_prompt_from_replace_file(str(replace_file))
+    assert "AmongUs" in prompt
+    assert "MOD" in prompt
+    assert "GitHub" in prompt
+    assert "Windows" in prompt
+
+

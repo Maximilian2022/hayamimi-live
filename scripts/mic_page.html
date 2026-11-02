@@ -664,24 +664,29 @@
       color: var(--paper-dim);
       outline: none;
       user-select: none;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
+      display: block;
+      position: relative;
+      padding-right: 1.6rem;
       width: 100%;
       box-sizing: border-box;
       list-style: none;
     }
-    details.settings-box summary::-webkit-details-marker {
+    details.settings-box summary::-webkit-details-marker,
+    details.settings-box summary::marker {
       display: none;
     }
     details.settings-box summary::after {
       content: "▼";
+      position: absolute;
+      right: 0.2rem;
+      top: 50%;
+      transform: translateY(-50%);
       font-size: 0.72rem;
       color: var(--paper-dim);
       transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
     }
     details.settings-box[open] summary::after {
-      transform: rotate(180deg);
+      transform: translateY(-50%) rotate(180deg);
     }
     details.settings-box[open] summary {
       margin-bottom: 0.6rem;
@@ -1017,9 +1022,14 @@
       <!-- リアルタイム文字起こしプレビューカード -->
       <div class="card" style="flex: 1; min-height: 240px;">
         <div class="card-title">
-          リアルタイム文字起こしプレビュー
-          <div id="latency-chip" class="status-badge" style="font-size: 0.65rem; padding: 0.15rem 0.4rem;">
-            応答: <span id="lat-val">-</span> ms
+          <span>リアルタイム文字起こしプレビュー</span>
+          <div style="display: flex; gap: 6px; align-items: center;">
+            <div id="engine-chip" class="status-badge" style="font-size: 0.65rem; padding: 0.15rem 0.45rem; background: rgba(56, 189, 248, 0.15); color: #38BDF8; border: 1px solid rgba(56, 189, 248, 0.3);">
+              <span id="engine-val">接続確認中...</span>
+            </div>
+            <div id="latency-chip" class="status-badge" style="font-size: 0.65rem; padding: 0.15rem 0.4rem;">
+              応答: <span id="lat-val">-</span> ms
+            </div>
           </div>
         </div>
         <div id="partial-live-text" class="idle">
@@ -1994,6 +2004,42 @@
             if (ev.latency_ms != null) {
               latVal.textContent = Math.round(ev.latency_ms);
             }
+            if (ev.tier === "dml_whisper") {
+              const engVal = document.getElementById("engine-val");
+              const engChip = document.getElementById("engine-chip");
+              if (engVal) {
+                if (ev.device && ev.device.includes("RTX")) {
+                  engVal.textContent = "⚡ GPU (Kotoba-Whisper)";
+                } else if (ev.device && ev.device.includes("iGPU")) {
+                  engVal.textContent = "⚡ iGPU (Kotoba-Whisper)";
+                } else {
+                  engVal.textContent = "⚡ GPU (Kotoba-Whisper)";
+                }
+              }
+              if (engChip) {
+                engChip.style.background = "rgba(16, 185, 129, 0.15)";
+                engChip.style.color = "#10B981";
+                engChip.style.borderColor = "rgba(16, 185, 129, 0.3)";
+              }
+            } else if (ev.tier) {
+              const engVal = document.getElementById("engine-val");
+              const engChip = document.getElementById("engine-chip");
+              if (ev.device === "NPU" || (serverCfgLoaded && window._currentDevice === "NPU")) {
+                if (engVal) engVal.textContent = "⚡ NPU (ReazonSpeech)";
+                if (engChip) {
+                  engChip.style.background = "rgba(16, 185, 129, 0.15)";
+                  engChip.style.color = "#10B981";
+                  engChip.style.borderColor = "rgba(16, 185, 129, 0.3)";
+                }
+              } else {
+                if (engVal) engVal.textContent = "⚙ CPU (ReazonSpeech)";
+                if (engChip) {
+                  engChip.style.background = "rgba(56, 189, 248, 0.15)";
+                  engChip.style.color = "#38BDF8";
+                  engChip.style.borderColor = "rgba(56, 189, 248, 0.3)";
+                }
+              }
+            }
             updateLivePreviewFromEvent(ev);
           } else if (ev.type === "translation") {
             const first = finalFeed.firstElementChild;
@@ -2154,6 +2200,32 @@
       if (res.ok) {
         const cfg = await res.json();
         serverCfgLoaded = true;
+        if (cfg.engine) {
+          const engVal = document.getElementById("engine-val");
+          const engChip = document.getElementById("engine-chip");
+          if (cfg.device_name === "NPU" || (cfg.device && cfg.device === "npu")) {
+            if (engVal) engVal.textContent = "⚡ NPU (ReazonSpeech)";
+            if (engChip) {
+              engChip.style.background = "rgba(16, 185, 129, 0.15)";
+              engChip.style.color = "#10B981";
+              engChip.style.borderColor = "rgba(16, 185, 129, 0.3)";
+            }
+          } else if (cfg.engine === "whisper_dml") {
+            if (engVal) engVal.textContent = "⚡ iGPU (Kotoba-Whisper)";
+            if (engChip) {
+              engChip.style.background = "rgba(16, 185, 129, 0.15)";
+              engChip.style.color = "#10B981";
+              engChip.style.borderColor = "rgba(16, 185, 129, 0.3)";
+            }
+          } else {
+            if (engVal) engVal.textContent = "⚙ CPU (ReazonSpeech)";
+            if (engChip) {
+              engChip.style.background = "rgba(56, 189, 248, 0.15)";
+              engChip.style.color = "#38BDF8";
+              engChip.style.borderColor = "rgba(56, 189, 248, 0.3)";
+            }
+          }
+        }
         if (cfg.lang) document.getElementById("cfg-lang").value = cfg.lang;
         if (cfg.translate && cfg.translate.length > 0) {
           document.getElementById("cfg-trans-enable").checked = true;
@@ -3643,6 +3715,32 @@
   }
 
   window.obsMuteSync = new ObsMuteSync();
+
+  // アコーディオン (details / summary) の堅牢な開閉保証 (OBS CEF/WebKit/古いブラウザ等のバグ対応)
+  document.addEventListener("DOMContentLoaded", () => {
+    document.querySelectorAll("details summary").forEach(summary => {
+      summary.addEventListener("click", (e) => {
+        // summary 内のリンクやボタン、入力欄をクリックした場合はトグルしない
+        if (e.target.closest("button, a, input, select, textarea")) return;
+        const details = summary.closest("details");
+        if (details) {
+          e.preventDefault();
+          details.open = !details.open;
+        }
+      });
+      // キーボード (Enter / Space) 操作でのトグル保証
+      summary.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          const details = summary.closest("details");
+          if (details) {
+            details.open = !details.open;
+          }
+        }
+      });
+    });
+  });
+
 
 </script>
 

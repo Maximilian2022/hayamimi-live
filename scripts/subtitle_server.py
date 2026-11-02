@@ -1121,10 +1121,12 @@ class EventHub:
     def final(self, text: str, lang: str = "", speaker: str = "",
               latency_ms: float | None = None, tier: str = "",
               audio_s: float | None = None, lid_ms: float | None = None,
-              decode_ms: float | None = None, switched: bool = False) -> None:
+              decode_ms: float | None = None, switched: bool = False,
+              device: str = "") -> None:
         self.publish({"type": "final", "text": text, "lang": lang, "speaker": speaker,
                       "latency_ms": latency_ms, "tier": tier, "audio_s": audio_s,
-                      "lid_ms": lid_ms, "decode_ms": decode_ms, "switched": switched})
+                      "lid_ms": lid_ms, "decode_ms": decode_ms, "switched": switched,
+                      "device": device})
 
     def subscribe(self) -> queue.Queue:
         """Register a new consumer; past `refine` events are replayed first.
@@ -1191,10 +1193,12 @@ class RuntimeControls:
         self.reset_fn = reset_fn
 
     def get_config(self) -> dict:
-        cfg = {"lang": None, "dual_confirm": None, "punctuate": None,
+        cfg = {"engine": "reazonspeech", "lang": None, "dual_confirm": None, "punctuate": None,
                "lid_switch_confirm": None, "min_switch_s": None,
                "translate": [], "vad": None}
         if self.asr is not None:
+            cfg["engine"] = getattr(self.asr, "engine_name", "reazonspeech")
+            cfg["device_name"] = getattr(self.asr, "device_name", "")
             cfg["lang"] = self.asr.forced_lang
             cfg["dual_confirm"] = self.asr.dual_confirm
             cfg["punctuate"] = self.asr._punctuate
@@ -1356,9 +1360,11 @@ class SubtitleServer:
     def final(self, text: str, lang: str = "", speaker: str = "",
               latency_ms: float | None = None, tier: str = "",
               audio_s: float | None = None, lid_ms: float | None = None,
-              decode_ms: float | None = None, switched: bool = False):
+              decode_ms: float | None = None, switched: bool = False,
+              device: str = ""):
         self.hub.final(text, lang, speaker, latency_ms, tier,
-                       audio_s=audio_s, lid_ms=lid_ms, decode_ms=decode_ms, switched=switched)
+                       audio_s=audio_s, lid_ms=lid_ms, decode_ms=decode_ms, switched=switched,
+                       device=device)
 
     def subscribe(self) -> queue.Queue:
         """Register a new consumer; past `refine` events are replayed first.

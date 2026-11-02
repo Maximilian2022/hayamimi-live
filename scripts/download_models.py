@@ -260,6 +260,20 @@ def download_opt_ins(args) -> None:
             "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8",
             "Parakeet TDT 0.6B v2 (en-only, opt-in --en-tier v2)")
 
+    if getattr(args, "whisper_dml", False):
+        try:
+            from huggingface_hub import snapshot_download
+            dest = os.path.join(MODELS_DIR, "kotoba-whisper-v2.2-onnx")
+            print(f"Downloading Kotoba-Whisper-v2.2 ONNX for DirectML into {dest}...")
+            snapshot_download(
+                repo_id="onnx-community/kotoba-whisper-v2.2-ONNX",
+                local_dir=dest,
+                allow_patterns=["onnx/*int8.onnx", "*.json"],
+            )
+            print("Kotoba-Whisper-v2.2 ONNX download completed.")
+        except Exception as e:
+            print(f"Failed to download Kotoba-Whisper-v2.2 ONNX: {e}")
+
     if getattr(args, "translators", False):
         download_hf_repo(
             "ishiki-emo/mojicast-m2m100-ct2",
@@ -382,6 +396,8 @@ def main():
     ap.add_argument("--translators", action="store_true",
                      help="also download ja->en (FuguMT) and ja->multilingual (M2M-100) "
                           "translation models (~600MB total)")
+    ap.add_argument("--whisper-dml", action="store_true",
+                     help="download Kotoba-Whisper-v2.2 ONNX for DirectML iGPU mode (~500MB)")
     args = ap.parse_args()
 
     os.makedirs(MODELS_DIR, exist_ok=True)

@@ -85,3 +85,4 @@ def test_profile_active_persistence_and_clear(clean_config_env):
     # プロファイル解除
     save_active_speaker_id(None)
     assert get_saved_active_speaker_id() is None
+

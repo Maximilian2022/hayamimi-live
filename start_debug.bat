@@ -38,7 +38,11 @@ exit /b 1
 
 :launch_gui
 echo [*] Starting hayamimi GUI Launcher (Console Active)...
-%PS_CMD% -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\launcher_gui.ps1"
+if "%PS_CMD%"=="pwsh" (
+    %PS_CMD% -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\launcher_gui.ps1"
+) else (
+    %PS_CMD% -NoProfile -ExecutionPolicy Bypass -Command "$s=[System.IO.File]::ReadAllText('%~dp0scripts\launcher_gui.ps1',[System.Text.Encoding]::UTF8);&([scriptblock]::Create($s))"
+)
 
 pause
 endlocal

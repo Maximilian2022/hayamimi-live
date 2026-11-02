@@ -45,6 +45,14 @@ import itn_cjk
 from lid_preprocessing import trim_lid_clip  # noqa: F401 (re-exported as asr_engine.trim_lid_clip)
 
 try:
+    from whisper_dml_engine import WhisperDirectMLEngine  # noqa: F401
+except ImportError:
+    try:
+        from scripts.whisper_dml_engine import WhisperDirectMLEngine  # noqa: F401
+    except ImportError:
+        WhisperDirectMLEngine = None
+
+try:
     from sudachipy import dictionary, tokenizer
     _SUDACHI_DICT = dictionary.Dictionary()
     if hasattr(_SUDACHI_DICT, 'tokenizer'):
@@ -830,7 +838,8 @@ class RoutedASR:
                  agree_threshold: float = SECOND_OPINION_THRESHOLD,
                  en_tier: str = "v3",
                  punct_model: str = "bert",
-                 on_event: "Callable[[dict], None] | None" = None):
+                 on_event: "Callable[[dict], None] | None" = None,
+                 device: str = "cpu"):
         # on_event (GitHub issue #29): the engine's structured-event sink.
         # Set before ANY other construction step below so every model build
         # in this constructor (the lid build a few lines down included) is
@@ -841,6 +850,9 @@ class RoutedASR:
         # hub.publish so model_load/model_fallback/warning events reach the
         # same EventHub every other structured event goes through.
         self._on_event = on_event
+        self.device = device
+        self.device_name = "NPU" if device == "npu" else "CPU"
+        self.engine_name = "reazonspeech"
         self._threads = threads
         # close() bookkeeping. Set before ANY thread is started below (the
         # preload thread at the end of this constructor) so _spawn_bg() and

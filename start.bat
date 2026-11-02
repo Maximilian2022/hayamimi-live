@@ -28,7 +28,11 @@ if "%SAC_ENABLED%"=="0" (
 )
 
 :: SAC 有効時、または start.vbs 不在時は安全に PowerShell を直接 Hidden で起動
-start "" %PS_CMD% -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0scripts\launcher_gui.ps1"
+if "%PS_CMD%"=="pwsh" (
+    start "" %PS_CMD% -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0scripts\launcher_gui.ps1"
+) else (
+    start "" %PS_CMD% -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command "$s=[System.IO.File]::ReadAllText('%~dp0scripts\launcher_gui.ps1',[System.Text.Encoding]::UTF8);&([scriptblock]::Create($s))"
+)
 
 endlocal
 exit /b 0

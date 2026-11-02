@@ -1289,6 +1289,7 @@ def test_get_config_reports_current_values(running_server):
     assert payload == {
         "lang": None, "dual_confirm": True, "punctuate": True,
         "lid_switch_confirm": 2, "min_switch_s": 2.0, "translate": ["en"], "vad": None,
+        "engine": "reazonspeech", "device_name": "",
     }
 
 

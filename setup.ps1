@@ -77,7 +77,11 @@ If Not fso.FileExists(targetScript) Then
     End If
 End If
 
-cmdLine = psCmd & " -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & targetScript & """"
+If InStr(psCmd, "pwsh") > 0 Then
+    cmdLine = psCmd & " -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & targetScript & """"
+Else
+    cmdLine = psCmd & " -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command ""$s=[System.IO.File]::ReadAllText('" & Replace(targetScript, "'", "''") & "',[System.Text.Encoding]::UTF8);&([scriptblock]::Create($s))"""
+End If
 
 On Error Resume Next
 WshShell.Run cmdLine, 0, False

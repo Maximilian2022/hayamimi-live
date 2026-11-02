@@ -317,3 +317,46 @@ def create_config_snapshot_backup() -> Optional[str]:
     except Exception as e:
         logger.warning("Failed to create config snapshot backup: %s", e)
         return None
+
+
+# ==============================================================================
+# 旧置換辞書から Initial Prompt への自動移行ヘルパー
+# ==============================================================================
+def extract_initial_prompt_from_replace_file(replace_file: str, max_words: int = 50) -> str:
+    """既存の置換辞書 (*_replace.txt) から固有名詞を抽出し、Whisper の Initial Prompt 文字列を生成する。
+
+    タブ区切り ('アマンガス\tAmongUs') または等号区切り ('アマンガス=AmongUs') から、
+    正規の英単語・固有名詞（置換先）を抽出し、カンマ区切りで返却します。
+    """
+    if not replace_file or not os.path.exists(replace_file):
+        return ""
+
+    words: list[str] = []
+    seen: set[str] = set()
+
+    try:
+        with open(replace_file, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+
+                target = ""
+                if "\t" in line:
+                    parts = line.split("\t", 1)
+                    target = parts[1].strip()
+                elif "=" in line:
+                    parts = line.split("=", 1)
+                    target = parts[1].strip()
+
+                if target and target not in seen:
+                    seen.add(target)
+                    words.append(target)
+                    if len(words) >= max_words:
+                        break
+    except Exception as e:
+        logger.warning("Failed to extract initial prompt from %s: %s", replace_file, e)
+
+    return ", ".join(words)
+
+

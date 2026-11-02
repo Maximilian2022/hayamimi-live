@@ -37,3 +37,4 @@ pydantic>=2.0.0
 
 sudachipy>=0.7.0
 sudachidict_core>=20261015
+openvino>=2026.0.0

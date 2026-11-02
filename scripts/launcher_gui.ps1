@@ -1,5 +1,4 @@
-﻿# --- バージョン管理 (version.txt を Single Source of Truth として動的同期) ---
-$script:AppVersion = "1.7.0"
+﻿$script:AppVersion = "2.0.0"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $versionTxtFile = Join-Path $repoRoot "version.txt"
 if (Test-Path $versionTxtFile) {
@@ -653,11 +652,11 @@ function Update-ContainerLogFile {
                             </Grid.ColumnDefinitions>
                             <TextBlock Text="実行基盤:" FontSize="12" FontWeight="SemiBold" Foreground="#94A3B8" VerticalAlignment="Center" Margin="0,0,16,0" Width="68"/>
                             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                <RadioButton x:Name="RbModeVenv" Content="🐍 Python venv (ネイティブ / 推奨)" GroupName="EngineMode" Foreground="#F1F5F9" FontSize="12.5" Margin="0,0,24,0" VerticalAlignment="Center" Cursor="Hand" IsChecked="True"/>
+                                <RadioButton x:Name="RbModeVenv" Content="🐍 Python venv (ネイティブ / 推奨)" GroupName="EngineMode" Foreground="#F1F5F9" FontSize="12.5" Margin="0,0,24,0" VerticalAlignment="Center" Cursor="Hand"/>
                                 <RadioButton x:Name="RbModeWslc" Content="📦 WSL Containers (WSL3 コンテナ)" GroupName="EngineMode" Foreground="#F1F5F9" FontSize="12.5" VerticalAlignment="Center" Cursor="Hand"/>
                             </StackPanel>
                         </Grid>
-                        <!-- 推論設定 (GPU/CPU) -->
+                        <!-- 推論設定 (CPU/NPU) -->
                         <Grid Grid.Row="1">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto"/>
@@ -665,8 +664,8 @@ function Update-ContainerLogFile {
                             </Grid.ColumnDefinitions>
                             <TextBlock Text="推論設定:" FontSize="12" FontWeight="SemiBold" Foreground="#94A3B8" VerticalAlignment="Center" Margin="0,0,16,0" Width="68"/>
                             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                <RadioButton x:Name="RbDeviceCpu" Content="⚙ CPU 起動 (推奨 / ゲーム・配信のGPU負荷ゼロ)" GroupName="DeviceMode" Foreground="#F1F5F9" FontSize="12.5" Margin="0,0,24,0" VerticalAlignment="Center" Cursor="Hand" IsChecked="True"/>
-                                <RadioButton x:Name="RbDeviceGpu" Content="⚡ GPU 起動 (CUDA / 翻訳高速化)" GroupName="DeviceMode" Foreground="#F1F5F9" FontSize="12.5" VerticalAlignment="Center" Cursor="Hand"/>
+                                <RadioButton x:Name="RbDeviceCpu" Content="⚙ CPU 起動" GroupName="DeviceMode" Foreground="#F1F5F9" FontSize="12.5" Margin="0,0,24,0" VerticalAlignment="Center" Cursor="Hand"/>
+                                <RadioButton x:Name="RbDeviceNpu" Content="⚡ NPU 起動" GroupName="DeviceMode" Foreground="#F1F5F9" FontSize="12.5" VerticalAlignment="Center" Cursor="Hand"/>
                             </StackPanel>
                         </Grid>
                     </Grid>
@@ -920,7 +919,7 @@ $window.Dispatcher.Add_UnhandledException({
 $rbModeVenv = $window.FindName("RbModeVenv")
 $rbModeWslc = $window.FindName("RbModeWslc")
 $rbDeviceCpu = $window.FindName("RbDeviceCpu")
-$rbDeviceGpu = $window.FindName("RbDeviceGpu")
+$rbDeviceNpu = $window.FindName("RbDeviceNpu")
 $btnSetupEnv = $window.FindName("BtnSetupEnv")
 $statusLabel = $window.FindName("StatusLabel")
 $statusLed = $window.FindName("StatusLed")
@@ -991,13 +990,15 @@ $brushRed    = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#
 $brushBlue   = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#38BDF8")
 
 $script:HasNvidiaGpu = $false
+$script:HasNpu = $false
+$script:NpuName = ""
 
 # デバイスバッジ表示の更新 (選択中のモードと連動)
 function Update-DeviceBadgeDisplay {
-    if ($script:CurrentDeviceMode -eq "Gpu" -and $script:HasNvidiaGpu) {
-        $name = if ($script:GpuShortName) { $script:GpuShortName } else { "CUDA" }
+    if ($script:CurrentDeviceMode -eq "Npu" -and $script:HasNpu) {
+        $name = if ($script:NpuName) { $script:NpuName } else { "NPU" }
         if ($gpuBadge) {
-            $gpuBadge.Text = "⚡ GPU 加速: $name"
+            $gpuBadge.Text = "⚡ NPU 起動: $name"
             $gpuBadge.Foreground = $brushGreen
         }
         if ($gpuBadgeBorder) {
@@ -1005,9 +1006,9 @@ function Update-DeviceBadgeDisplay {
             $gpuBadgeBorder.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#0C241E")
         }
     } else {
-        # CPU モード (または GPU 無し)
+        # CPU モード
         if ($gpuBadge) {
-            $gpuBadge.Text = "⚙ CPU 起動 (ゲーム・配信優先)"
+            $gpuBadge.Text = "⚙ CPU 起動 (ReazonSpeech)"
             $gpuBadge.Foreground = $brushBlue
         }
         if ($gpuBadgeBorder) {
@@ -1017,61 +1018,59 @@ function Update-DeviceBadgeDisplay {
     }
 }
 
-# GPU / ハードウェアアクセラレーション状態の検出とバッジ更新 (NVIDIA / AMD 判別)
+# ハードウェア (NPU / メイン GPU) 状態の検出とラジオボタン・バッジ更新
 function Update-GpuDeviceBadge {
     try {
-        $gpus = Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue
-        $nvidiaGpu = $gpus | Where-Object { $_.Name -match "NVIDIA|GeForce|RTX|GTX|Quadro|Tesla" } | Select-Object -First 1
-        $amdGpu = $gpus | Where-Object { $_.Name -match "Radeon|AMD" } | Select-Object -First 1
+        # 1. NPU (Neural Processing Unit) の検出
+        $npu = Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue | Where-Object {
+            $_.Name -like "*AI Boost*" -or $_.Name -like "*NPU*" -or $_.PNPClass -eq "ComputeAccelerator"
+        } | Select-Object -First 1
 
+        if ($npu -and $npu.Status -eq "OK") {
+            $script:HasNpu = $true
+            $script:NpuName = $npu.Name
+            if ($rbDeviceNpu) {
+                $rbDeviceNpu.IsEnabled = $true
+                $rbDeviceNpu.Content = "⚡ NPU 起動"
+                $rbDeviceNpu.ToolTip = "NPU: $($npu.Name) (CPU・GPU負荷ゼロ)"
+            }
+            Write-AppLog "✔ NPU 検出: $($npu.Name) (ReazonSpeech NPU 高速推論対応 / CPU・GPU負荷ゼロ)" "INFO"
+        } else {
+            $script:HasNpu = $false
+            $script:NpuName = ""
+            if ($rbDeviceNpu) {
+                $rbDeviceNpu.IsEnabled = $false
+                $rbDeviceNpu.Content = "⚡ NPU 起動 (非搭載)"
+                $rbDeviceNpu.ToolTip = "システムに NPU が検出されませんでした"
+            }
+            if ($rbDeviceCpu) {
+                $rbDeviceCpu.IsChecked = $true
+            }
+            $script:CurrentDeviceMode = "Cpu"
+            Write-AppLog "ℹ NPU 未検出: CPU 起動モード (ReazonSpeech) で動作します" "INFO"
+        }
+
+        # 2. メイン GPU の検出と保護確認
+        $gpus = Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue
+        $nvidiaGpu = $gpus | Where-Object { $_.Name -match "NVIDIA|GeForce|RTX" } | Select-Object -First 1
         if ($nvidiaGpu) {
             $script:HasNvidiaGpu = $true
-            $gpuShortName = $nvidiaGpu.Name -replace "NVIDIA\s*", ""
-            $script:GpuShortName = $gpuShortName
-            if ($rbDeviceGpu) {
-                $rbDeviceGpu.IsEnabled = $true
-                $rbDeviceGpu.Content = "⚡ GPU 起動 ($gpuShortName / CUDA)"
-            }
-            Write-AppLog "✔ NVIDIA GPU 検出: $($nvidiaGpu.Name) (CUDA 推論対応)" "INFO"
-        } elseif ($amdGpu) {
-            # AMD Radeon GPU の場合 (CTranslate2 / Docker が CUDA 専用のため CPU 起動を明示)
-            $script:HasNvidiaGpu = $false
-            $script:GpuShortName = ""
-            $amdShortName = ($amdGpu.Name -replace "AMD\s*|Radeon\s*|Graphics\s*", "").Trim()
-            if ($rbDeviceGpu) {
-                $rbDeviceGpu.IsEnabled = $false
-                $rbDeviceGpu.Content = "⚡ GPU 起動 (AMD Radeon: CUDA非対応)"
-            }
-            if ($rbDeviceCpu) {
-                $rbDeviceCpu.IsChecked = $true
-            }
-            $script:CurrentDeviceMode = "Cpu"
-            Write-AppLog "ℹ AMD GPU 検出: $($amdGpu.Name) (※推論スタックがCUDA専用のため、安全なCPU起動となります)" "INFO"
-        } else {
-            $script:HasNvidiaGpu = $false
-            $script:GpuShortName = ""
-            if ($rbDeviceGpu) {
-                $rbDeviceGpu.IsEnabled = $false
-                $rbDeviceGpu.Content = "⚡ GPU 起動 (NVIDIA GPU 未検出)"
-            }
-            if ($rbDeviceCpu) {
-                $rbDeviceCpu.IsChecked = $true
-            }
-            $script:CurrentDeviceMode = "Cpu"
+            $script:GpuShortName = $nvidiaGpu.Name -replace "NVIDIA\s*", ""
+            Write-AppLog "✔ メイン GPU 検出: $($nvidiaGpu.Name) (配信・ゲーム用に完全保護 / 負荷0%)" "INFO"
         }
+
         Update-DeviceBadgeDisplay
     } catch {
-        $script:HasNvidiaGpu = $false
-        $script:GpuShortName = ""
-        if ($rbDeviceGpu) {
-            $rbDeviceGpu.IsEnabled = $false
-            $rbDeviceGpu.Content = "⚡ GPU 起動 (検出エラー)"
+        $script:HasNpu = $false
+        $script:NpuName = ""
+        if ($rbDeviceNpu) {
+            $rbDeviceNpu.IsEnabled = $false
+            $rbDeviceNpu.Content = "⚡ NPU 起動 (検出エラー)"
         }
         if ($rbDeviceCpu) {
             $rbDeviceCpu.IsChecked = $true
         }
         $script:CurrentDeviceMode = "Cpu"
-        Update-DeviceBadgeDisplay
     }
 }
 
@@ -1326,6 +1325,7 @@ function Save-LauncherConfig {
         [string]$EngineMode = $script:CurrentEngineMode,
         [string]$DeviceMode = $script:CurrentDeviceMode
     )
+    if ($script:IsInitializing) { return }
     try {
         $configDir = Join-Path $ProjectRoot "config"
         if (-not (Test-Path $configDir)) {
@@ -1351,6 +1351,7 @@ function Save-LauncherConfig {
         $tmpFile = [System.IO.Path]::Combine($configDir, ".tmp_launcher_config_" + [System.Guid]::NewGuid().ToString("N") + ".json")
         [System.IO.File]::WriteAllText($tmpFile, $json, [System.Text.Encoding]::UTF8)
         Move-Item -Path $tmpFile -Destination $script:ConfigFile -Force
+        Write-AppLog "ランチャー設定を保存しました: engine_mode=$($obj['engine_mode']), device_mode=$($obj['device_mode'])" "DEBUG"
     } catch {}
 }
 
@@ -1459,10 +1460,10 @@ function Set-DeviceMode {
     Save-DeviceMode -Mode $NewMode
     Update-DeviceBadgeDisplay
 
-    if ($NewMode -eq "Gpu") {
-        Write-AppLog "推論設定を「⚡ GPU 起動 (CUDA)」に切り替えました。※翻訳推論をGPUで高速化します。" "INFO"
+    if ($NewMode -eq "Npu") {
+        Write-AppLog "推論設定を「⚡ NPU 起動」に切り替えました。※NPU活用・CPU負荷ゼロ" "INFO"
     } else {
-        Write-AppLog "推論設定を「⚙ CPU 起動 (推奨)」に切り替えました。※GPU/VRAM負荷ゼロ（ゲーム・配信優先）" "INFO"
+        Write-AppLog "推論設定を「⚙ CPU 起動」に切り替えました。" "INFO"
     }
 }
 
@@ -1478,8 +1479,8 @@ function Invoke-DeviceModeSwitch {
     if ($script:CurrentDeviceMode -eq $TargetMode) { return }
 
     if (Test-AppRunning) {
-        $curDevName = if ($script:CurrentDeviceMode -eq "Gpu") { "GPU 起動 (CUDA)" } else { "CPU 起動 (推奨)" }
-        $targetDevName = if ($TargetMode -eq "Gpu") { "GPU 起動 (CUDA)" } else { "CPU 起動 (推奨)" }
+        $curDevName = if ($script:CurrentDeviceMode -eq "Npu") { "NPU 起動" } else { "CPU 起動" }
+        $targetDevName = if ($TargetMode -eq "Npu") { "NPU 起動" } else { "CPU 起動" }
         $ask = Show-AppConfirm -Message "現在アプリが稼働中です。`r`n`r`n推論設定を「$targetDevName」に切り替えるには、現在のプロセスを再起動する必要があります。`r`n`r`n稼働中のプロセスを停止して切り替えますか？" -Title "推論設定の切り替え確認 - Hayamimi Live"
         if ($ask -eq [System.Windows.MessageBoxResult]::Yes) {
             $script:IsSwitchingDevice = $true
@@ -1928,6 +1929,58 @@ function Start-PythonVenvApp {
         return
     }
 
+    # NPU 起動時の依存パッケージ整合性チェック & 自動補完 (過去ユーザーのシームレスアップデート対応)
+    if ($script:CurrentDeviceMode -eq "Npu" -and $script:HasNpu) {
+        $hasOpenVino = & "$venvPython" -B -c "import openvino" 2>$null; $?
+        if (-not $hasOpenVino) {
+            Write-AppLog "==========================================" "INFO"
+            Write-AppLog "【NPU初回準備】NPU推論に必要な OpenVINO ライブラリを自動配備しています (数秒で完了します)..." "INFO"
+            Set-UIState "NPU準備中..." $brushOrange $false $false
+            if ($initProgressBar) { $initProgressBar.Visibility = "Visible" }
+
+            $uvCmd = Get-SafeUvCommand
+            $installed = $false
+            if ($uvCmd) {
+                try {
+                    $pinfoPip = [System.Diagnostics.ProcessStartInfo]::new()
+                    $pinfoPip.FileName = $uvCmd
+                    $pinfoPip.Arguments = "pip install --python `"$venvPython`" openvino>=2026.0.0"
+                    $pinfoPip.WorkingDirectory = $ProjectRoot
+                    $pinfoPip.RedirectStandardOutput = $true
+                    $pinfoPip.RedirectStandardError = $true
+                    $pinfoPip.UseShellExecute = $false
+                    $pinfoPip.CreateNoWindow = $true
+                    $procPip = [System.Diagnostics.Process]::Start($pinfoPip)
+                    Wait-ProcessWithUiPump -Proc $procPip -LogPrefix "[NPU導入]"
+                    if ($procPip.ExitCode -eq 0) { $installed = $true }
+                } catch {}
+            }
+            if (-not $installed) {
+                try {
+                    $pinfoPipSys = [System.Diagnostics.ProcessStartInfo]::new()
+                    $pinfoPipSys.FileName = $venvPython
+                    $pinfoPipSys.Arguments = "-m pip install openvino>=2026.0.0"
+                    $pinfoPipSys.WorkingDirectory = $ProjectRoot
+                    $pinfoPipSys.RedirectStandardOutput = $true
+                    $pinfoPipSys.RedirectStandardError = $true
+                    $pinfoPipSys.UseShellExecute = $false
+                    $pinfoPipSys.CreateNoWindow = $true
+                    $procPipSys = [System.Diagnostics.Process]::Start($pinfoPipSys)
+                    Wait-ProcessWithUiPump -Proc $procPipSys -LogPrefix "[NPU導入]"
+                    if ($procPipSys.ExitCode -eq 0) { $installed = $true }
+                } catch {}
+            }
+            if ($initProgressBar) { $initProgressBar.Visibility = "Collapsed" }
+            if ($installed) {
+                Write-AppLog "✔ OpenVINO の自動導入が完了しました！NPU 起動を続行します。" "INFO"
+            } else {
+                Write-AppLog "⚠ OpenVINO の導入に失敗したため、安全な CPU 起動モードにフォールバックします。" "WARN"
+                $script:CurrentDeviceMode = "Cpu"
+                if ($rbDeviceCpu) { $rbDeviceCpu.IsChecked = $true }
+            }
+        }
+    }
+
     # 必須モデル存在事前チェック & セルフヒーリング
     $hasModels = Ensure-ModelsIntegrity
     if (-not $hasModels) {
@@ -1957,7 +2010,9 @@ function Start-PythonVenvApp {
     if (Test-Path $script:PythonLogFile) {
         Remove-Item -Path $script:PythonLogFile -Force -ErrorAction SilentlyContinue
     }
-    [System.IO.File]::WriteAllText($script:PythonLogFile, "# hayamimi python log`r`n", [System.Text.Encoding]::UTF8)
+    $utf8Bom = [byte[]]@(0xEF, 0xBB, 0xBF)
+    [System.IO.File]::WriteAllBytes($script:PythonLogFile, $utf8Bom)
+    [System.IO.File]::AppendAllText($script:PythonLogFile, "# hayamimi python log`r`n", [System.Text.UTF8Encoding]::new($false))
     $script:LastPythonLogLineCount = 0
     $script:LastPythonLogByteOffset = 0L
     # 4-class 句読点モデル (models/punct-ja-4class-permissive) の存在確認 & 初回自動ダウンロード (約40MB)
@@ -1987,15 +2042,21 @@ function Start-PythonVenvApp {
     $venvDir = Split-Path $venvPython
     $venvScripts = Join-Path $venvDir "Scripts"
 
-    # 推論デバイス設定 (HAYAMIMI_DEVICE: cuda / cpu)
-    $devEnv = if ($script:CurrentDeviceMode -eq "Gpu" -and $script:HasNvidiaGpu) { "cuda" } else { "cpu" }
-    if ($devEnv -eq "cuda") {
-        Write-AppLog "推論デバイス: GPU 加速 (HAYAMIMI_DEVICE=cuda)" "INFO"
+    # 推論デバイス & ASR エンジン設定
+    $engineArg = "--engine reazonspeech"
+    $devEnv = "cpu"
+
+    if ($script:CurrentDeviceMode -eq "Npu" -and $script:HasNpu) {
+        $devEnv = "npu"
+        $deviceOptArg = "--device npu"
+        Write-AppLog "推論デバイス: NPU 起動 ($($script:NpuName) / CPU・GPU負荷ゼロ)" "INFO"
     } else {
-        Write-AppLog "推論デバイス: CPU 起動 (HAYAMIMI_DEVICE=cpu / ゲーム・配信負荷ゼロ)" "INFO"
+        $devEnv = "cpu"
+        $deviceOptArg = "--device cpu"
+        Write-AppLog "推論デバイス: CPU 起動 (ReazonSpeech / ゲーム・配信優先)" "INFO"
     }
 
-    $cmdArgs = "/s /c `"set PYTHONDONTWRITEBYTECODE=1 && set HAYAMIMI_DEVICE=$devEnv && set `"PATH=$venvScripts;$venvDir;%PATH%`" && `"$venvPython`" -B `"$transScript`" --input ws --serve 8833 --ws-host 0.0.0.0 --ws-port 8766 --punct-model 4class > `"$script:PythonLogFile`" 2>&1`""
+    $cmdArgs = "/s /c `"chcp 65001 >nul && `"$venvPython`" -B `"$transScript`" --input ws --serve 8833 --ws-host 0.0.0.0 --ws-port 8766 --punct-model 4class $engineArg $deviceOptArg >> `"$script:PythonLogFile`" 2>&1`""
 
     $pinfo = [System.Diagnostics.ProcessStartInfo]::new()
     $pinfo.FileName = "cmd.exe"
@@ -3621,11 +3682,13 @@ $btnStop.Add_Click({
 # 実行基盤ラジオボタン処理 (稼働中安全停止確認付き)
 if ($rbModeVenv) {
     $rbModeVenv.Add_Checked({
+        if ($script:IsInitializing) { return }
         Invoke-EngineModeSwitch -TargetMode "Venv" -TargetRb $rbModeVenv -OtherRb $rbModeWslc
     })
 }
 if ($rbModeWslc) {
     $rbModeWslc.Add_Checked({
+        if ($script:IsInitializing) { return }
         Invoke-EngineModeSwitch -TargetMode "Wslc" -TargetRb $rbModeWslc -OtherRb $rbModeVenv
     })
 }
@@ -3633,12 +3696,14 @@ if ($rbModeWslc) {
 # 推論デバイスラジオボタン処理 (稼働中安全停止確認付き)
 if ($rbDeviceCpu) {
     $rbDeviceCpu.Add_Checked({
-        Invoke-DeviceModeSwitch -TargetMode "Cpu" -TargetRb $rbDeviceCpu -OtherRb $rbDeviceGpu
+        if ($script:IsInitializing) { return }
+        Invoke-DeviceModeSwitch -TargetMode "Cpu" -TargetRb $rbDeviceCpu -OtherRb $rbDeviceNpu
     })
 }
-if ($rbDeviceGpu) {
-    $rbDeviceGpu.Add_Checked({
-        Invoke-DeviceModeSwitch -TargetMode "Gpu" -TargetRb $rbDeviceGpu -OtherRb $rbDeviceCpu
+if ($rbDeviceNpu) {
+    $rbDeviceNpu.Add_Checked({
+        if ($script:IsInitializing) { return }
+        Invoke-DeviceModeSwitch -TargetMode "Npu" -TargetRb $rbDeviceNpu -OtherRb $rbDeviceCpu
     })
 }
 
@@ -3711,6 +3776,28 @@ $btnClearLog.Add_Click({ $logTextBox.Clear() })
 if ($btnOpenPythonLog) {
     $btnOpenPythonLog.Add_Click({
         if (Test-Path $script:PythonLogFile) {
+            # Windows 11 メモ帳の旧 TabState キャッシュ (UTF-16LE 誤認タブ) をクリーンアップ
+            try {
+                $tabFiles = Get-ChildItem -Path "$env:LOCALAPPDATA\Packages\Microsoft.WindowsNotepad*\LocalState\TabState\*.bin" -ErrorAction SilentlyContinue
+                $targetBytes = [System.Text.Encoding]::Unicode.GetBytes("python.log")
+                foreach ($tf in $tabFiles) {
+                    if ($tf.Name -notmatch "\.0\.bin$|\.1\.bin$") {
+                        $raw = [System.IO.File]::ReadAllBytes($tf.FullName)
+                        $found = $false
+                        for ($k = 0; $k -le ($raw.Length - $targetBytes.Length); $k++) {
+                            $match = $true
+                            for ($j = 0; $j -lt $targetBytes.Length; $j++) {
+                                if ($raw[$k + $j] -ne $targetBytes[$j]) { $match = $false; break }
+                            }
+                            if ($match) { $found = $true; break }
+                        }
+                        if ($found) {
+                            $baseId = $tf.Name.Split('.')[0]
+                            Remove-Item -Path (Join-Path $tf.DirectoryName "$baseId*") -Force -ErrorAction SilentlyContinue
+                        }
+                    }
+                }
+            } catch {}
             Start-Process $script:PythonLogFile
         } else {
             Write-AppLog "python.log はまだ生成されていません。" "WARN"
@@ -3746,6 +3833,11 @@ $window.Add_Closing({
         Invoke-ShutdownApp
         return
     }
+
+    # 終了直前に最新のランチャー設定 (実行基盤 & 推論設定) を確実に永続化
+    try {
+        Save-LauncherConfig -EngineMode $script:CurrentEngineMode -DeviceMode $script:CurrentDeviceMode
+    } catch {}
 
     $script:IsClosing = $true
     if ($updateCheckTimer -and $updateCheckTimer.IsEnabled) {
@@ -3829,24 +3921,33 @@ if (-not (Test-Path $script:PythonLogFile)) {
 }
 
 # 初期化処理
+$script:IsInitializing = $true
+
+# 1. 実行基盤の初期化 & 復元
 $initMode = Get-InitialEngineMode
+Set-EngineMode $initMode
 if ($initMode -eq "Wslc") {
     if ($rbModeWslc) { $rbModeWslc.IsChecked = $true }
+    if ($rbModeVenv) { $rbModeVenv.IsChecked = $false }
 } else {
     if ($rbModeVenv) { $rbModeVenv.IsChecked = $true }
+    if ($rbModeWslc) { $rbModeWslc.IsChecked = $false }
 }
-Set-EngineMode $initMode
 
-# 推論デバイス初期化 (デフォルトは CPU 起動)
-$initDevMode = Get-SavedDeviceMode
+# 2. 推論デバイスの検出 & 復元
 Update-GpuDeviceBadge
-if ($initDevMode -eq "Gpu" -and $script:HasNvidiaGpu) {
-    if ($rbDeviceGpu) { $rbDeviceGpu.IsChecked = $true }
-    Set-DeviceMode "Gpu"
+$initDevMode = Get-SavedDeviceMode
+if ($initDevMode -eq "Npu" -and $script:HasNpu) {
+    if ($rbDeviceNpu) { $rbDeviceNpu.IsChecked = $true }
+    if ($rbDeviceCpu) { $rbDeviceCpu.IsChecked = $false }
+    Set-DeviceMode "Npu"
 } else {
     if ($rbDeviceCpu) { $rbDeviceCpu.IsChecked = $true }
+    if ($rbDeviceNpu) { $rbDeviceNpu.IsChecked = $false }
     Set-DeviceMode "Cpu"
 }
+
+$script:IsInitializing = $false
 $script:NeedModelRepairOnStartup = $false
 if (Test-ModelsReady) {
     Protect-ModelFiles
@@ -3988,7 +4089,11 @@ If Not fso.FileExists(targetScript) Then
     End If
 End If
 
-cmdLine = psCmd & " -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & targetScript & """"
+If InStr(psCmd, "pwsh") > 0 Then
+    cmdLine = psCmd & " -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & targetScript & """"
+Else
+    cmdLine = psCmd & " -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command ""$s=[System.IO.File]::ReadAllText('" & Replace(targetScript, "'", "''") & "',[System.Text.Encoding]::UTF8);&([scriptblock]::Create($s))"""
+End If
 
 On Error Resume Next
 WshShell.Run cmdLine, 0, False

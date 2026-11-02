@@ -104,3 +104,12 @@ def test_realtime_trans_dynamic_sync_listeners():
         "updateTransPillStates must reflect transEnabled state"
     )
 
+
+
+def test_mic_page_engine_chip():
+    with open(MIC_PAGE_PATH, "r", encoding="utf-8") as f:
+        html = f.read()
+
+    assert 'id="engine-chip"' in html, "engine-chip element missing"
+    assert 'id="engine-val"' in html, "engine-val element missing"
+    assert "dml_whisper" in html, "dml_whisper tier handling missing"

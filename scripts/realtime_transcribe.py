@@ -1129,7 +1129,8 @@ def drain_segments(vad, sample_rate: int, asr: RoutedASR, stats: SessionStats,
         printer.hub.final(result["text"], result["lang"], display_speaker,
                           latency_ms, result.get("tier", ""),
                           audio_s=seg_s, lid_ms=result.get("lid_ms"),
-                          decode_ms=result.get("decode_ms"), switched=switched)
+                          decode_ms=result.get("decode_ms"), switched=switched,
+                          device=getattr(asr, "device_name", ""))
         probe_part = f", probe={result['probe_ms']:.0f}ms" if result.get("probe_ms") else ""
         print(f"[{speaker_tag}{result['lang']}/{result.get('tier', '?')}] {result['text']}  "
               f"(seg={seg_s:.1f}s, lid={result['lid_ms']:.0f}ms{probe_part}, "
@@ -2336,6 +2337,14 @@ def main():
                          "(docs/eval/punct_retrain.md; needs download_models.py "
                          "--punct-4class). Falls back to bert with a warning if the "
                          "4class model isn't downloaded.")
+    ap.add_argument("--engine", choices=["reazonspeech", "whisper_dml"], default="reazonspeech",
+                    help="ASR engine: reazonspeech (CPU, ultra-fast) or whisper_dml (Intel/AMD iGPU DirectML, Kotoba-Whisper)")
+    ap.add_argument("--device", choices=["cpu", "npu", "gpu"], default="cpu",
+                    help="compute device for inference: cpu (default) or npu (Intel AI Boost)")
+    ap.add_argument("--initial-prompt", type=str, default=None,
+                    help="Initial prompt / vocabulary hint for whisper_dml engine")
+    ap.add_argument("--dml-device-id", type=int, default=None,
+                    help="DirectML device ID for whisper_dml (auto-detects iGPU if omitted)")
     ap.add_argument("--transcript", metavar="PATH",
                     help="append refined transcript lines to this file")
     ap.add_argument("--hotwords", metavar="PATH", default="",
@@ -2529,28 +2538,55 @@ def main():
               file=sys.stderr)
 
     print("loading models...", file=sys.stderr)
-    try:
-        asr = RoutedASR(threads=args.threads,
-                        max_resident=args.max_resident if args.max_resident > 0 else None,
-                        hotwords_file=args.hotwords, replace_file=args.replace,
-                        lid_switch_confirm=max(args.lid_switch_confirm, 1),
-                        dual_confirm=(args.mode != "fast"),
-                        forced_lang=args.lang if args.mode == "single" else None,
-                        ja_second_opinion=args.refine_ja_second_opinion,
-                        en_tier=args.en_tier,
-                        punct_model=args.punct_model,
-                        on_event=hub.publish,
-                        **({"agree_threshold": args.refine_agree_threshold}
-                           if args.refine_agree_threshold is not None else {}))
-        live_vad = LiveVad(args.min_silence, args.max_speech)
-    except ModelUnavailable as exc:
-        # A required model is missing under models/ -- asr_engine and
-        # build_vad() both guard sherpa-onnx's native constructors so this
-        # is a catchable exception, not the process silently exit()ing out
-        # from inside the C++ layer. Fail with a clear message instead.
-        ap.error(f"required model '{exc.name}' not found under models/ -- "
-                 f"run scripts/download_models.py")
-        return
+    asr = None
+    if args.engine == "whisper_dml":
+        try:
+            print("loading Whisper DirectML engine on iGPU...", file=sys.stderr)
+            from whisper_dml_engine import WhisperDirectMLEngine
+            asr = WhisperDirectMLEngine(
+                device_id=args.dml_device_id,
+                threads=args.threads,
+                initial_prompt=args.initial_prompt,
+                replace_file=args.replace,
+                on_event=hub.publish,
+            )
+            live_vad = LiveVad(args.min_silence, args.max_speech)
+            print(f"Whisper DirectML ready ({asr.device_name})", file=sys.stderr)
+        except Exception as exc:
+            print(f"Warning: Failed to initialize Whisper DirectML ({exc}). Falling back to ReazonSpeech CPU...", file=sys.stderr)
+            asr = None
+
+    if asr is None:
+        target_device = args.device
+        if target_device == "npu":
+            try:
+                import openvino  # noqa: F401
+            except ImportError:
+                print("Warning: openvino is not installed in .venv. Falling back to CPU mode.", file=sys.stderr)
+                target_device = "cpu"
+        try:
+            asr = RoutedASR(threads=args.threads,
+                            max_resident=args.max_resident if args.max_resident > 0 else None,
+                            hotwords_file=args.hotwords, replace_file=args.replace,
+                            lid_switch_confirm=max(args.lid_switch_confirm, 1),
+                            dual_confirm=(args.mode != "fast"),
+                            forced_lang=args.lang if args.mode == "single" else None,
+                            ja_second_opinion=args.refine_ja_second_opinion,
+                            en_tier=args.en_tier,
+                            punct_model=args.punct_model,
+                            device=target_device,
+                            on_event=hub.publish,
+                            **({"agree_threshold": args.refine_agree_threshold}
+                               if args.refine_agree_threshold is not None else {}))
+            live_vad = LiveVad(args.min_silence, args.max_speech)
+        except ModelUnavailable as exc:
+            # A required model is missing under models/ -- asr_engine and
+            # build_vad() both guard sherpa-onnx's native constructors so this
+            # is a catchable exception, not the process silently exit()ing out
+            # from inside the C++ layer. Fail with a clear message instead.
+            ap.error(f"required model '{exc.name}' not found under models/ -- "
+                     f"run scripts/download_models.py")
+            return
     asr.min_switch_s = max(args.lang_switch_guard, 0.0)
     if server is not None:
         # lets /replacements and /itn_overrides on the subtitle server read
