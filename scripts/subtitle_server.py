@@ -590,38 +590,83 @@ def _get_overlay_style() -> dict:
     return _deep_merge_dict(_DEFAULT_STYLE, {})
 
 def _save_overlay_style(style: dict) -> None:
-    storage_dir = _get_storage_dir()
-    path = os.path.join(storage_dir, _STYLE_FILENAME)
     try:
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(style, f, ensure_ascii=False, indent=2)
-    except Exception as exc:
-        sys.stderr.write(f"[subtitle_server] overlay style save failed ({path}): {exc}\n")
+        from scripts.config_store import save_overlay_style
+        save_overlay_style(style)
+    except Exception:
+        storage_dir = _get_storage_dir()
+        path = os.path.join(storage_dir, _STYLE_FILENAME)
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(style, f, ensure_ascii=False, indent=2)
+        except Exception as exc:
+            sys.stderr.write(f"[subtitle_server] overlay style save failed ({path}): {exc}\n")
 
 def _get_saved_asr_config() -> dict:
-    storage_dir = _get_storage_dir()
-    path = os.path.join(storage_dir, _CONFIG_FILENAME)
-    if os.path.exists(path):
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return {}
+    try:
+        from scripts.config_store import get_saved_asr_config
+        return get_saved_asr_config()
+    except Exception:
+        storage_dir = _get_storage_dir()
+        path = os.path.join(storage_dir, _CONFIG_FILENAME)
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return {}
 
 def _save_asr_config(cfg: dict) -> None:
-    storage_dir = _get_storage_dir()
-    path = os.path.join(storage_dir, _CONFIG_FILENAME)
     try:
-        existing = _get_saved_asr_config()
-        save_keys = ("lang", "translate", "punctuate", "dual_confirm", "lid_switch_confirm", "min_switch_s", "vad")
-        for k in save_keys:
-            if k in cfg:
-                existing[k] = cfg[k]
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(existing, f, ensure_ascii=False, indent=2)
-    except Exception as exc:
-        sys.stderr.write(f"[subtitle_server] asr config save failed ({path}): {exc}\n")
+        from scripts.config_store import save_asr_config
+        save_asr_config(cfg)
+    except Exception:
+        storage_dir = _get_storage_dir()
+        path = os.path.join(storage_dir, _CONFIG_FILENAME)
+        try:
+            existing = _get_saved_asr_config()
+            save_keys = ("lang", "translate", "punctuate", "dual_confirm", "lid_switch_confirm", "min_switch_s", "vad")
+            for k in save_keys:
+                if k in cfg:
+                    existing[k] = cfg[k]
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(existing, f, ensure_ascii=False, indent=2)
+        except Exception as exc:
+            sys.stderr.write(f"[subtitle_server] asr config save failed ({path}): {exc}\n")
+
+def _get_saved_obs_config() -> dict:
+    try:
+        from scripts.config_store import get_saved_obs_config
+        return get_saved_obs_config()
+    except Exception:
+        return {
+            "enabled": True,
+            "url": "ws://127.0.0.1:4455",
+            "password": "",
+            "target_source": "",
+        }
+
+def _save_obs_config(cfg: dict) -> dict:
+    try:
+        from scripts.config_store import save_obs_config
+        return save_obs_config(cfg)
+    except Exception:
+        return cfg
+
+def _save_active_speaker_id(speaker_id) -> None:
+    try:
+        from scripts.config_store import save_active_speaker_id
+        save_active_speaker_id(speaker_id)
+    except Exception:
+        pass
+
+def _get_saved_active_speaker_id():
+    try:
+        from scripts.config_store import get_saved_active_speaker_id
+        return get_saved_active_speaker_id()
+    except Exception:
+        return None
 
 _MIC_HTML_CACHE = {"mtime": 0.0, "content": ""}
 
@@ -1494,9 +1539,25 @@ class SubtitleServer:
                         self._json(200, res_list)
                     except Exception as e:
                         self._json(500, {"error": str(e)})
+                elif req_path == "/api/obs-config":
+                    self._json(200, _get_saved_obs_config())
                 elif req_path == "/api/profiles/active":
                     act = getattr(server, "_active_profile", None)
                     active_tags = getattr(server, "_active_profile_tags", []) or []
+                    if act is None:
+                        saved_sid = _get_saved_active_speaker_id()
+                        if saved_sid:
+                            try:
+                                from tools.profile_builder.profile_exporter import load_profile
+                                pdir = _get_profiles_dir()
+                                restored_prof = load_profile(saved_sid, pdir)
+                                if restored_prof is not None:
+                                    server._active_profile = restored_prof
+                                    act = restored_prof
+                                    if server.asr is not None:
+                                        server.asr.set_replacements(restored_prof.get_active_replacements([]))
+                            except Exception as ex:
+                                logger.debug("Auto-restore profile failed: %s", ex)
                     if act:
                         self._json(200, {
                             "active": True,
@@ -1504,6 +1565,7 @@ class SubtitleServer:
                             "display_name": act.display_name,
                             "available_tags": act.get_available_tags(),
                             "active_tags": active_tags,
+                            "youtube_channel_url": getattr(act, "youtube_channel_url", None),
                             "has_voiceprint": bool(act.voiceprint and len(act.voiceprint) > 0),
                             "voiceprint_samples": act.voiceprint_sample_count or 0,
                         })
@@ -1807,6 +1869,16 @@ class SubtitleServer:
                             server.asr.set_dynamic_comment_replacements({})
                     self._json(200, {"ok": True, **status})
                     return
+                if req_path == "/api/obs-config":
+                    code, payload = self._read_json_body()
+                    if code != 200 or payload is None:
+                        return
+                    if not isinstance(payload, dict):
+                        self._json(400, {"error": "body must be a JSON object"})
+                        return
+                    saved = _save_obs_config(payload)
+                    self._json(200, {"ok": True, **saved})
+                    return
                 if req_path == "/api/profiles/apply":
                     code, payload = self._read_json_body()
                     if code != 200 or payload is None:
@@ -1817,7 +1889,13 @@ class SubtitleServer:
                     try:
                         sid = payload.get("speaker_id")
                         if not sid:
-                            self._json(400, {"error": "speaker_id is required"})
+                            _sync_stats_to_profile(server)
+                            server._active_profile = None
+                            server._active_profile_tags = []
+                            _save_active_speaker_id(None)
+                            if server.asr is not None:
+                                server.asr.set_replacements({})
+                            self._json(200, {"ok": True, "active": False, "speaker_id": None})
                             return
                         if not is_safe_speaker_id(sid):
                             self._json(400, {"error": "Invalid speaker_id format"})
@@ -1840,7 +1918,17 @@ class SubtitleServer:
                             server.asr.set_replacements(mapping)
                         server._active_profile = prof
                         server._active_profile_tags = active_tags or []
+                        _save_active_speaker_id(prof.speaker_id)
                         has_vp = bool(prof.voiceprint and len(prof.voiceprint) > 0)
+
+                        chan_url = getattr(prof, "youtube_channel_url", None)
+                        if chan_url:
+                            try:
+                                from scripts.comment_sync import get_global_comment_sync
+                            except ImportError:
+                                from comment_sync import get_global_comment_sync
+                            get_global_comment_sync().set_config({"youtube_channel_url": chan_url})
+
                         self._json(200, {
                             "ok": True,
                             "speaker_id": sid,
@@ -1849,6 +1937,7 @@ class SubtitleServer:
                             "total_rules_count": len(prof.replacements),
                             "available_tags": prof.get_available_tags(),
                             "active_tags": server._active_profile_tags,
+                            "youtube_channel_url": chan_url,
                             "has_voiceprint": has_vp,
                             "voiceprint_samples": prof.voiceprint_sample_count or 0,
                         })

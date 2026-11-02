@@ -26,6 +26,73 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 # OneDrive や保護フォルダー配下での Python バイトコードキャッシュ (__pycache__) 作成を抑止
 $env:PYTHONDONTWRITEBYTECODE = "1"
 
+# --- Smart App Control (SAC) 判定 & 起動スクリプト管理 ---
+function Test-IsSmartAppControlEnforced {
+    try {
+        $key = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy" -Name "VerifiedAndReputablePolicyState" -ErrorAction SilentlyContinue
+        if ($key -and ($key.VerifiedAndReputablePolicyState -eq 1 -or $key.VerifiedAndReputablePolicyState -eq 2)) {
+            return $true
+        }
+    } catch {}
+    return $false
+}
+
+function Ensure-StartVbs {
+    param([string]$TargetDirectory)
+    $vbs = Join-Path $TargetDirectory "start.vbs"
+    if (-not (Test-Path $vbs)) {
+        $code = @"
+Set WshShell = CreateObject("WScript.Shell")
+Set fso = CreateObject("Scripting.FileSystemObject")
+scriptDir = fso.GetParentFolderName(WScript.ScriptFullName)
+WshShell.CurrentDirectory = scriptDir
+
+psCmd = "powershell"
+If fso.FileExists("C:\Program Files\PowerShell\7\pwsh.exe") Then
+    psCmd = """C:\Program Files\PowerShell\7\pwsh.exe"""
+ElseIf fso.FileExists("C:\Program Files (x86)\PowerShell\7\pwsh.exe") Then
+    psCmd = """C:\Program Files (x86)\PowerShell\7\pwsh.exe"""
+Else
+    Dim pathEnv, paths, p
+    pathEnv = WshShell.ExpandEnvironmentStrings("%PATH%")
+    paths = Split(pathEnv, ";")
+    For Each p In paths
+        If p <> "" And fso.FolderExists(p) Then
+            If fso.FileExists(fso.BuildPath(p, "pwsh.exe")) Then
+                psCmd = "pwsh"
+                Exit For
+            End If
+        End If
+    Next
+End If
+
+targetScript = scriptDir & "\scripts\launcher_gui.ps1"
+If Not fso.FileExists(targetScript) Then
+    If fso.FileExists(scriptDir & "\scripts\scripts\launcher_gui.ps1") Then
+        targetScript = scriptDir & "\scripts\scripts\launcher_gui.ps1"
+    Else
+        MsgBox "Cannot find launcher script:" & vbCrLf & _
+               scriptDir & "\scripts\launcher_gui.ps1", 16, "hayamimi launcher error"
+        WScript.Quit 1
+    End If
+End If
+
+cmdLine = psCmd & " -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & targetScript & """"
+
+On Error Resume Next
+WshShell.Run cmdLine, 0, False
+If Err.Number <> 0 Then
+    MsgBox "Failed to launch hayamimi (Error " & Err.Number & "):" & vbCrLf & _
+           Err.Description & vbCrLf & vbCrLf & _
+           "Command: " & cmdLine, 16, "hayamimi launcher error"
+    WScript.Quit Err.Number
+End If
+"@
+        [System.IO.File]::WriteAllText($vbs, $code, [System.Text.Encoding]::ASCII)
+    }
+    return $vbs
+}
+
 $RepoZipUrl = "https://github.com/Maximilian2022/hayamimi-live/archive/refs/heads/main.zip"
 # 既定のインストール先 (マイドキュメント\hayamimi: 完全ポータブル & 削除が容易)
 $DefaultInstallPath = [System.IO.Path]::Combine([System.Environment]::GetFolderPath('MyDocuments'), "hayamimi")
@@ -703,7 +770,28 @@ $stepTimer.Add_Tick({
                         }
                         continue
                     }
-                    if ($item.Name -eq "logs") { continue }
+                    if ($item.Name -in @("logs", "scratch", ".git", ".venv", "config_backups")) { continue }
+
+                    # ユーザー設定 (config) およびプロファイル (profiles) の保護:
+                    # 既存のインストール環境への再セットアップ・更新時、保存済み設定やプロファイルが上書きされるのを厳格に防止する
+                    if ($item.Name -in @("config", "profiles")) {
+                        $destCustom = Join-Path $script:targetDir $item.Name
+                        if (-not (Test-Path $destCustom)) {
+                            New-Item -ItemType Directory -Path $destCustom -Force | Out-Null
+                        }
+                        # 既存ファイルが存在しない場合のみコピー（既存設定を絶対に上書きしない）
+                        $subFiles = Get-ChildItem -Path $item.FullName -Recurse -File -ErrorAction SilentlyContinue
+                        foreach ($sf in $subFiles) {
+                            $relPath = $sf.FullName.Substring($item.FullName.Length).TrimStart("\", "/")
+                            $targetSf = Join-Path $destCustom $relPath
+                            if (-not (Test-Path $targetSf)) {
+                                $targetSubDir = Split-Path $targetSf -Parent
+                                if (-not (Test-Path $targetSubDir)) { New-Item -ItemType Directory -Path $targetSubDir -Force | Out-Null }
+                                Copy-Item -Path $sf.FullName -Destination $targetSf -Force
+                            }
+                        }
+                        continue
+                    }
 
                     $destPath = Join-Path $script:targetDir $item.Name
                     if ($item.PSIsContainer) {
@@ -780,14 +868,24 @@ $stepTimer.Add_Tick({
                     $shortcutPath = Join-Path $desktopPath "hayamimi (早耳).lnk"
                     $targetVbs = Join-Path $script:targetDir "start.vbs"
                     $targetBat = Join-Path $script:targetDir "start.bat"
+                    $isSac = Test-IsSmartAppControlEnforced
 
                     $wsh = New-Object -ComObject WScript.Shell
                     $shortcut = $wsh.CreateShortcut($shortcutPath)
                     
-                    # SAC (Smart App Control) 対策: wscript.exe はブロックされるため、SAC 自動判定付き start.bat をターゲットにする
-                    $shortcut.TargetPath = $targetBat
+                    if ($isSac) {
+                        # Smart App Control (SAC) 有効環境: wscript.exe はブロックされるため start.bat ターゲット
+                        Write-SetupLog "Smart App Control (SAC) 有効環境を検出: start.bat ターゲットのショートカットを作成します。"
+                        $shortcut.TargetPath = $targetBat
+                        $shortcut.WindowStyle = 7 # 7 = 最小化 (コマンドプロンプトのチラつき最小化)
+                    } else {
+                        # SAC オフ環境: 完全非表示で起動する start.vbs を配備・ターゲット指定
+                        Ensure-StartVbs -TargetDirectory $script:targetDir | Out-Null
+                        Write-SetupLog "Smart App Control (SAC) オフ環境を検出: 完全非表示起動の start.vbs ターゲットのショートカットを作成します。"
+                        $shortcut.TargetPath = $targetVbs
+                        $shortcut.WindowStyle = 1 # 通常 (VBS内部で非表示実行)
+                    }
                     $shortcut.WorkingDirectory = $script:targetDir
-                    $shortcut.WindowStyle = 7 # 7 = 最小化 (コマンドプロンプトのチラつきを最小化)
                     $shortcut.Description = "hayamimi (早耳) - リアルタイム音声認識 & 翻訳"
                     $shortcut.IconLocation = "%SystemRoot%\System32\shell32.dll, 168"
                     $shortcut.Save()
@@ -841,13 +939,23 @@ $btnLaunch.Add_Click({
     $targetDir = $txtInstallPath.Text.Trim()
     $vbsPath = Join-Path $targetDir "start.vbs"
     $batPath = Join-Path $targetDir "start.bat"
+    $isSac = Test-IsSmartAppControlEnforced
 
     try {
-        if (Test-Path $vbsPath) {
-            Start-Process "wscript.exe" "`"$vbsPath`""
-        } elseif (Test-Path $batPath) {
-            Start-Process $batPath
+        if ($isSac) {
+            # SAC 有効環境では wscript.exe はブロックされるため start.bat で起動
+            if (Test-Path $batPath) {
+                Start-Process $batPath
+            }
+        } else {
+            # SAC オフ環境では start.vbs による完全非表示起動を優先
+            if (Test-Path $vbsPath) {
+                Start-Process "wscript.exe" "`"$vbsPath`""
+            } elseif (Test-Path $batPath) {
+                Start-Process $batPath
+            }
         }
+        $window.Close()
         $window.Close()
     } catch {
         Write-SetupLog "起動エラー: $_"

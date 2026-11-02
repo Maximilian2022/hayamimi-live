@@ -663,6 +663,33 @@
       font-weight: 600;
       color: var(--paper-dim);
       outline: none;
+      user-select: none;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      width: 100%;
+      box-sizing: border-box;
+      list-style: none;
+    }
+    details.settings-box summary::-webkit-details-marker {
+      display: none;
+    }
+    details.settings-box summary::after {
+      content: "▼";
+      font-size: 0.72rem;
+      color: var(--paper-dim);
+      transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    details.settings-box[open] summary::after {
+      transform: rotate(180deg);
+    }
+    details.settings-box[open] summary {
+      margin-bottom: 0.6rem;
+      padding-bottom: 0.6rem;
+      border-bottom: 1px solid var(--line);
+    }
+    details.settings-box summary:hover {
+      color: var(--paper);
     }
     .settings-content {
       margin-top: 0.8rem;
@@ -1226,6 +1253,21 @@
               <label style="font-size: 0.7rem; color: #94A3B8; margin-bottom: 2px;">コメント監視テキストファイルパス (任意・副系):</label>
               <input type="text" id="cfg-comment-file-path" placeholder="例: C:\obs\comment.txt" style="font-size: 0.74rem; padding: 4px 8px;">
             </div>
+
+            <!-- 📺 YouTube ライブチャット自動連携 (プロファイル・チャンネル必須) -->
+            <div id="yt-live-sync-container" style="background: rgba(239, 68, 68, 0.05); border: 1px solid rgba(239, 68, 68, 0.22); border-radius: 6px; padding: 8px 10px; margin-top: 5px; opacity: 0.5; transition: opacity 0.2s ease;">
+              <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap;">
+                <label id="yt-live-sync-label" style="display: flex; align-items: center; gap: 8px; cursor: pointer; color: #CBD5E1; margin: 0; font-size: 0.75rem;">
+                  <input type="checkbox" id="cfg-yt-live-sync-enabled" disabled style="accent-color: #EF4444; width: 14px; height: 14px; cursor: not-allowed;">
+                  <strong style="color: #F1F5F9;">📺 YouTube ライブチャット自動連携</strong>
+                </label>
+                <span id="yt-live-status-badge" style="font-size: 0.68rem; color: #94A3B8; font-family: monospace;">（プロファイルでYouTubeチャンネルを設定すると利用可能）</span>
+              </div>
+              <div id="yt-live-channel-info" style="font-size: 0.68rem; color: #94A3B8; margin-top: 4px; display: none;">
+                監視チャンネル: <span id="yt-live-channel-url" style="color: #38BDF8; word-break: break-all;"></span>
+              </div>
+            </div>
+
             <div id="comment-hotwords-preview" style="font-size: 0.7rem; color: #38BDF8; margin-top: 2px;">
               獲得ホットワード: 0語
             </div>
@@ -2619,6 +2661,7 @@
       group.style.display = "none";
       container.innerHTML = "";
       if (badge) badge.textContent = "";
+      updateYouTubeLiveSyncUI("");
       return;
     }
 
@@ -2675,6 +2718,8 @@
         <a href="/profile" target="_blank" style="color:#38BDF8; text-decoration:none;">除外ワード編集 ↗</a>
       `;
     }
+
+    updateYouTubeLiveSyncUI(speakerId);
   }
 
   async function toggleProfileTag(speakerId, tag) {
@@ -2699,6 +2744,11 @@
     const saveMsg = document.getElementById("save-msg");
     if (!speakerId) {
       try {
+        await fetch("/api/profiles/apply", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ speaker_id: "" }),
+        }).catch(() => {});
         await fetch("/replacements", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -2839,6 +2889,70 @@
     if (el) el.addEventListener("change", saveDspConfig);
   });
 
+  let activeProfileChannelUrl = "";
+
+  function updateYouTubeLiveSyncUI(speakerId) {
+    const chk = document.getElementById("cfg-yt-live-sync-enabled");
+    const container = document.getElementById("yt-live-sync-container");
+    const badge = document.getElementById("yt-live-status-badge");
+    const chanInfo = document.getElementById("yt-live-channel-info");
+    const chanUrlSpan = document.getElementById("yt-live-channel-url");
+    if (!chk || !container || !badge) return;
+
+    if (!speakerId) {
+      activeProfileChannelUrl = "";
+      chk.disabled = true;
+      chk.checked = false;
+      chk.style.cursor = "not-allowed";
+      container.style.opacity = "0.5";
+      badge.textContent = "（プロファイルでYouTubeチャンネルを設定すると利用可能）";
+      badge.style.color = "#94A3B8";
+      if (chanInfo) chanInfo.style.display = "none";
+      return;
+    }
+
+    const prof = loadedProfilesList.find(p => p.speaker_id === speakerId);
+    const chanUrl = prof ? (prof.youtube_channel_url || prof.channel_url || "") : "";
+    activeProfileChannelUrl = chanUrl;
+
+    if (!chanUrl) {
+      chk.disabled = true;
+      chk.checked = false;
+      chk.style.cursor = "not-allowed";
+      container.style.opacity = "0.5";
+      badge.textContent = "（プロファイルにチャンネルURLが未登録です）";
+      badge.style.color = "#94A3B8";
+      if (chanInfo) chanInfo.style.display = "none";
+      return;
+    }
+
+    // 有効化条件合致
+    chk.disabled = false;
+    chk.style.cursor = "pointer";
+    container.style.opacity = "1.0";
+    if (chanInfo && chanUrlSpan) {
+      chanInfo.style.display = "block";
+      chanUrlSpan.textContent = chanUrl;
+    }
+
+    // 前回の保存設定を復元 (初期値は false / OFF)
+    try {
+      const saved = localStorage.getItem("hayamimi_yt_live_sync_enabled");
+      chk.checked = (saved === "true");
+    } catch (_) {
+      chk.checked = false;
+    }
+
+    if (!chk.checked) {
+      badge.textContent = "⚪ オフ";
+      badge.style.color = "#94A3B8";
+    } else {
+      badge.textContent = "⏳ 配信枠を確認中（待機中）";
+      badge.style.color = "#FACC15";
+      saveCommentSyncConfig();
+    }
+  }
+
   function updateCommentSyncBadge(c) {
     const badge = document.getElementById("comment-sync-badge");
     const prev = document.getElementById("comment-hotwords-preview");
@@ -2846,6 +2960,9 @@
       if (!c.enabled) {
         badge.textContent = "⚪ オフ";
         badge.style.color = "#94A3B8";
+      } else if (c.connected_source === "youtube_live") {
+        badge.textContent = `🟢 YouTubeライブ連携中 (${c.active_words_count || 0}語)`;
+        badge.style.color = "#EF4444";
       } else if (c.connected_source === "onecomme_api" || c.connected_source === "comment_file" || c.connected_source === "manual") {
         badge.textContent = `🟢 連携中 (${c.active_words_count || 0}語獲得)`;
         badge.style.color = "#4ADE80";
@@ -2854,6 +2971,35 @@
         badge.style.color = "#FACC15";
       }
     }
+
+    // YouTube Live バッジの同期
+    const ytBadge = document.getElementById("yt-live-status-badge");
+    const ytChk = document.getElementById("cfg-yt-live-sync-enabled");
+    if (ytBadge && ytChk && !ytChk.disabled) {
+      if (!ytChk.checked) {
+        ytBadge.textContent = "⚪ オフ";
+        ytBadge.style.color = "#94A3B8";
+      } else {
+        const ytSt = c.youtube_live_status || "waiting_stream";
+        if (ytSt === "receiving") {
+          ytBadge.textContent = `🟢 ライブチャット受信中 (獲得: ${c.active_words_count || 0}語)`;
+          ytBadge.style.color = "#4ADE80";
+        } else if (ytSt === "waiting_stream") {
+          ytBadge.textContent = "⏳ 配信枠を確認中（待機中）";
+          ytBadge.style.color = "#FACC15";
+        } else if (ytSt === "ended") {
+          ytBadge.textContent = "⏹️ 配信終了 (待機中)";
+          ytBadge.style.color = "#94A3B8";
+        } else if (ytSt === "error") {
+          ytBadge.textContent = "⚠️ 配信枠未検出";
+          ytBadge.style.color = "#F87171";
+        } else {
+          ytBadge.textContent = "⚪ オフ";
+          ytBadge.style.color = "#94A3B8";
+        }
+      }
+    }
+
     if (prev) {
       const words = c.active_words || [];
       prev.textContent = words.length > 0
@@ -2863,10 +3009,14 @@
   }
 
   async function saveCommentSyncConfig() {
+    const ytChk = document.getElementById("cfg-yt-live-sync-enabled");
+    const isYtEnabled = ytChk && !ytChk.disabled ? ytChk.checked : false;
     const payload = {
       enabled: document.getElementById("cfg-comment-sync-enabled").checked,
       onecomme_url: document.getElementById("cfg-onecomme-url").value.trim(),
       comment_file_path: document.getElementById("cfg-comment-file-path").value.trim(),
+      youtube_live_enabled: isYtEnabled,
+      youtube_channel_url: activeProfileChannelUrl || "",
     };
     try {
       const res = await fetch("/api/comments/config", {
@@ -2885,6 +3035,16 @@
     const el = document.getElementById(id);
     if (el) el.addEventListener("change", saveCommentSyncConfig);
   });
+
+  const ytLiveChkEl = document.getElementById("cfg-yt-live-sync-enabled");
+  if (ytLiveChkEl) {
+    ytLiveChkEl.addEventListener("change", () => {
+      try {
+        localStorage.setItem("hayamimi_yt_live_sync_enabled", String(ytLiveChkEl.checked));
+      } catch (_) {}
+      saveCommentSyncConfig();
+    });
+  }
 
   // --- ASR & リアルタイム翻訳設定の即時同期 (マイク稼働中の動的言語増減対応) ---
   let _asrConfigSyncTimer = null;
@@ -3072,6 +3232,52 @@
       }
     }
 
+    async syncWithServer() {
+      try {
+        const res = await fetch("/api/obs-config");
+        if (res.ok) {
+          const cfg = await res.json();
+          const serverHasCustom = Boolean(cfg.password || cfg.target_source || (cfg.url && cfg.url !== "ws://127.0.0.1:4455"));
+          const localHasCustom = Boolean(this.password || this.targetSource || (this.url && this.url !== "ws://127.0.0.1:4455"));
+
+          if (serverHasCustom || !localHasCustom) {
+            if (cfg.url) { this.url = cfg.url; if (this.urlInput) this.urlInput.value = cfg.url; }
+            if (cfg.password != null) { this.password = cfg.password; if (this.passwordInput) this.passwordInput.value = cfg.password; }
+            if (cfg.target_source != null) { this.targetSource = cfg.target_source; }
+            if (cfg.enabled != null) { this.enabled = Boolean(cfg.enabled); if (this.toggleEl) this.toggleEl.checked = this.enabled; }
+            try {
+              localStorage.setItem("hayamimi_obs_sync_enabled", String(this.enabled));
+              localStorage.setItem("hayamimi_obs_ws_url", this.url);
+              localStorage.setItem("hayamimi_obs_ws_password", this.password);
+              localStorage.setItem("hayamimi_obs_target_source", this.targetSource);
+            } catch (_) {}
+          } else if (localHasCustom && !serverHasCustom) {
+            // localStorage に過去設定がある場合はサーバー側へ自動マイグレーション
+            this.saveSettingsToServer();
+          }
+        }
+      } catch (e) {
+        console.warn("OBS server config sync failed:", e);
+      }
+    }
+
+    async saveSettingsToServer() {
+      try {
+        await fetch("/api/obs-config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            enabled: this.enabled,
+            url: this.url,
+            password: this.password,
+            target_source: this.targetSource,
+          }),
+        });
+      } catch (e) {
+        console.warn("Failed to persist OBS settings to server:", e);
+      }
+    }
+
     saveSettings() {
       try {
         if (this.urlInput) this.url = this.urlInput.value.trim() || "ws://127.0.0.1:4455";
@@ -3083,6 +3289,8 @@
         localStorage.setItem("hayamimi_obs_ws_url", this.url);
         localStorage.setItem("hayamimi_obs_ws_password", this.password);
         localStorage.setItem("hayamimi_obs_target_source", this.targetSource);
+
+        this.saveSettingsToServer();
 
         if (this.reconnectMsg) {
           this.reconnectMsg.textContent = "設定を保存しました";

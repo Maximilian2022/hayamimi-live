@@ -198,6 +198,164 @@ class CommentHotwordExtractor:
         return candidates
 
 
+
+
+def normalize_youtube_channel_url(url: str) -> str:
+    """Normalize YouTube channel URL to its live streaming endpoint."""
+    u = (url or "").strip()
+    if not u:
+        return ""
+    if u.startswith("@"):
+        u = f"https://www.youtube.com/{u}"
+    elif not u.startswith("http://") and not u.startswith("https://"):
+        u = f"https://www.youtube.com/{u}"
+
+    u = u.split("?")[0].split("#")[0].rstrip("/")
+    for suffix in ("/videos", "/featured", "/streams", "/community", "/playlists", "/about"):
+        if u.endswith(suffix):
+            u = u[:-len(suffix)]
+            break
+    if not u.endswith("/live"):
+        u = f"{u}/live"
+    return u
+
+
+def parse_youtube_live_page(html: str, final_url: str = "") -> Tuple[Optional[str], bool, Optional[str]]:
+    """Extract (video_id, is_live, initial_continuation) from YouTube /live HTML/URL.
+    
+    Returns:
+        (video_id, is_live, continuation)
+        is_live is True ONLY when the stream is actively live (not upcoming/waiting room).
+    """
+    video_id = None
+    if final_url:
+        m = re.search(r"[?&]v=([a-zA-Z0-9_-]{11})", final_url)
+        if m:
+            video_id = m.group(1)
+
+    if not video_id and html:
+        m = re.search(r'itemprop="videoId" content="([a-zA-Z0-9_-]{11})"', html)
+        if m:
+            video_id = m.group(1)
+    if not video_id and html:
+        m = re.search(r'"videoId":"([a-zA-Z0-9_-]{11})"', html)
+        if m:
+            video_id = m.group(1)
+
+    if not video_id:
+        return None, False, None
+
+    is_upcoming = ('"isUpcoming":true' in html) or ('"status":"UPCOMING"' in html)
+    is_live = False
+    if not is_upcoming:
+        if ('"isLive":true' in html) or ('"isLiveNow":true' in html) or ('"liveStreamability"' in html):
+            is_live = True
+
+    continuation = None
+    if html:
+        m_cont = re.search(r'"continuation":"([a-zA-Z0-9_\-\%]+)"', html)
+        if m_cont:
+            continuation = m_cont.group(1)
+
+    return video_id, is_live, continuation
+
+
+def fetch_youtube_live_chat_initial_continuation(video_id: str, timeout_sec: float = 4.0) -> Optional[str]:
+    """Fetch initial chat continuation token from YouTube live_chat iframe page."""
+    if not video_id:
+        return None
+    chat_url = f"https://www.youtube.com/live_chat?v={video_id}"
+    req = urllib.request.Request(
+        chat_url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+            html = resp.read().decode("utf-8", errors="replace")
+        m = re.search(r'"continuation":"([a-zA-Z0-9_\-\%]+)"', html)
+        if m:
+            return m.group(1)
+    except Exception as e:
+        logger.debug("Failed to fetch initial chat continuation for %s: %s", video_id, e)
+    return None
+
+
+def parse_youtube_live_chat_response(data: dict) -> Tuple[List[str], Optional[str], float]:
+    """Parse YouTube get_live_chat response JSON.
+    
+    Returns (messages, next_continuation, timeout_ms).
+    """
+    if not isinstance(data, dict):
+        return [], None, 3000.0
+
+    lcc = data.get("continuationContents", {}).get("liveChatContinuation", {})
+    actions = lcc.get("actions", [])
+    texts: List[str] = []
+
+    for act in actions:
+        item = act.get("addChatItemAction", {}).get("item", {})
+        msg_renderer = item.get("liveChatTextMessageRenderer") or item.get("liveChatPaidMessageRenderer")
+        if not msg_renderer:
+            continue
+        runs = msg_renderer.get("message", {}).get("runs", [])
+        msg_text = "".join(r.get("text", "") for r in runs if isinstance(r, dict)).strip()
+        if msg_text:
+            texts.append(msg_text)
+
+    continuations = lcc.get("continuations", [])
+    next_continuation = None
+    timeout_ms = 3000.0
+
+    for c in continuations:
+        cdata = c.get("timedContinuationData") or c.get("invalidationContinuationData") or c.get("liveChatReplayContinuationData")
+        if cdata and "continuation" in cdata:
+            next_continuation = cdata["continuation"]
+            timeout_ms = float(cdata.get("timeoutMs", 3000))
+            break
+
+    return texts, next_continuation, timeout_ms
+
+
+def poll_youtube_live_chat_api(continuation: str, timeout_sec: float = 4.0) -> Tuple[List[str], Optional[str], float]:
+    """POST to YouTube internal get_live_chat endpoint and return (texts, next_continuation, timeout_ms)."""
+    if not continuation:
+        return [], None, 3000.0
+    url = "https://www.youtube.com/youtubei/v1/live_chat/get_live_chat"
+    payload = {
+        "context": {
+            "client": {
+                "clientName": "WEB",
+                "clientVersion": "2.20240101.00.00",
+                "hl": "ja",
+                "gl": "JP",
+            }
+        },
+        "continuation": continuation,
+    }
+    data_bytes = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data_bytes,
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+            data = json.loads(raw)
+        return parse_youtube_live_chat_response(data)
+    except Exception as e:
+        logger.debug("Failed poll_youtube_live_chat_api: %s", e)
+        return [], None, 3000.0
+
+
 class CommentSynchronizer:
     """Background daemon that polls OneComme HTTP API and/or a local comment text file."""
 
@@ -206,6 +364,8 @@ class CommentSynchronizer:
         enabled: bool = False,
         onecomme_url: str = "http://127.0.0.1:11180/api/comments",
         comment_file_path: str = "",
+        youtube_live_enabled: bool = False,
+        youtube_channel_url: str = "",
         poll_interval_sec: float = 3.0,
         word_ttl_sec: float = 300.0,
         on_dictionary_updated: Optional[Callable[[Dict[str, str]], None]] = None,
@@ -214,6 +374,14 @@ class CommentSynchronizer:
         self.enabled = bool(enabled)
         self.onecomme_url = onecomme_url.strip() or "http://127.0.0.1:11180/api/comments"
         self.comment_file_path = comment_file_path.strip()
+        self.youtube_live_enabled = bool(youtube_live_enabled)
+        self.youtube_channel_url = youtube_channel_url.strip()
+        self.youtube_live_status: str = "disabled"  # disabled, waiting_stream, receiving, ended, error
+        self.youtube_video_id: Optional[str] = None
+        self._yt_continuation: Optional[str] = None
+        self._yt_next_poll_time: float = 0.0
+        self._yt_last_stream_check_time: float = 0.0
+        self._yt_stream_check_interval: float = 30.0
         self.poll_interval_sec = max(0.5, float(poll_interval_sec))
         self.word_ttl_sec = max(0.1, float(word_ttl_sec))
         self.on_dictionary_updated = on_dictionary_updated
@@ -252,10 +420,15 @@ class CommentSynchronizer:
         with self._lock:
             active_words = list(self._active_terms.keys())
             dyn_replacements = self._build_merged_replacements_unlocked()
+            yt_status = self.youtube_live_status if (self.enabled and self.youtube_live_enabled) else "disabled"
             return {
                 "enabled": self.enabled,
                 "onecomme_url": self.onecomme_url,
                 "comment_file_path": self.comment_file_path,
+                "youtube_live_enabled": self.youtube_live_enabled,
+                "youtube_channel_url": self.youtube_channel_url,
+                "youtube_live_status": yt_status,
+                "youtube_video_id": self.youtube_video_id,
                 "word_ttl_sec": self.word_ttl_sec,
                 "connected_source": self._connected_source if self.enabled else "disabled",
                 "active_words": active_words,
@@ -282,6 +455,24 @@ class CommentSynchronizer:
                     self.onecomme_url = u
             if "comment_file_path" in cfg and isinstance(cfg["comment_file_path"], str):
                 self.comment_file_path = cfg["comment_file_path"].strip()
+            if "youtube_live_enabled" in cfg:
+                new_yt_en = bool(cfg["youtube_live_enabled"])
+                if new_yt_en != self.youtube_live_enabled:
+                    self.youtube_live_enabled = new_yt_en
+                    if not self.youtube_live_enabled:
+                        self.youtube_live_status = "disabled"
+                        self._yt_continuation = None
+                        self.youtube_video_id = None
+                    else:
+                        self.youtube_live_status = "waiting_stream"
+                        self._yt_last_stream_check_time = 0.0
+            if "youtube_channel_url" in cfg and isinstance(cfg["youtube_channel_url"], str):
+                new_chan = cfg["youtube_channel_url"].strip()
+                if new_chan != self.youtube_channel_url:
+                    self.youtube_channel_url = new_chan
+                    self._yt_continuation = None
+                    self.youtube_video_id = None
+                    self._yt_last_stream_check_time = 0.0
             if "word_ttl_sec" in cfg:
                 try:
                     self.word_ttl_sec = max(30.0, float(cfg["word_ttl_sec"]))
@@ -424,6 +615,75 @@ class CommentSynchronizer:
             logger.debug("Comment file read error: %s", e)
             return []
 
+    def _poll_youtube_live_chat(self) -> List[str]:
+        """Poll YouTube live chat using internal get_live_chat endpoint without external libraries."""
+        if not self.enabled or not self.youtube_live_enabled or not self.youtube_channel_url:
+            return []
+
+        now = time.time()
+
+        # Step 1: Probe channel for an active live stream if no continuation token
+        if not self._yt_continuation:
+            if now - self._yt_last_stream_check_time < self._yt_stream_check_interval:
+                return []
+            self._yt_last_stream_check_time = now
+            live_url = normalize_youtube_channel_url(self.youtube_channel_url)
+            if not live_url:
+                self.youtube_live_status = "error"
+                return []
+
+            try:
+                req = urllib.request.Request(
+                    live_url,
+                    headers={
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                        "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
+                    },
+                )
+                with urllib.request.urlopen(req, timeout=4.5) as resp:
+                    final_url = resp.geturl()
+                    html = resp.read().decode("utf-8", errors="replace")
+
+                vid, is_live, cont = parse_youtube_live_page(html, final_url)
+                if vid and is_live:
+                    self.youtube_video_id = vid
+                    if not cont:
+                        cont = fetch_youtube_live_chat_initial_continuation(vid)
+                    if cont:
+                        self._yt_continuation = cont
+                        self.youtube_live_status = "receiving"
+                        self._yt_next_poll_time = now
+                        logger.info("YouTube Live detected! video_id=%s, starting live chat sync", vid)
+                    else:
+                        self.youtube_live_status = "waiting_stream"
+                elif vid and not is_live:
+                    self.youtube_video_id = vid
+                    self.youtube_live_status = "waiting_stream"
+                else:
+                    self.youtube_video_id = None
+                    self.youtube_live_status = "waiting_stream"
+            except Exception as e:
+                logger.debug("YouTube Live probe failed: %s", e)
+                self.youtube_live_status = "waiting_stream"
+            return []
+
+        # Step 2: Poll live chat messages with continuation token
+        if now < self._yt_next_poll_time:
+            return []
+
+        texts, next_cont, timeout_ms = poll_youtube_live_chat_api(self._yt_continuation)
+        if next_cont:
+            self._yt_continuation = next_cont
+            self.youtube_live_status = "receiving"
+            self._yt_next_poll_time = now + max(1.5, timeout_ms / 1000.0)
+        else:
+            self._yt_continuation = None
+            self.youtube_live_status = "ended"
+            self._yt_last_stream_check_time = now
+            logger.info("YouTube Live chat ended for video_id=%s", self.youtube_video_id)
+
+        return texts
+
     def poll_once(self) -> int:
         """Perform a single poll cycle across OneComme API and/or text file."""
         if not self.enabled:
@@ -453,6 +713,15 @@ class CommentSynchronizer:
                     self._connected_source = "comment_file"
                     self._last_error = None
 
+        # 3. Try YouTube Live Chat directly if enabled and configured
+        if self.youtube_live_enabled and self.youtube_channel_url:
+            try:
+                yt_texts = self._poll_youtube_live_chat()
+                if yt_texts:
+                    return self.ingest_comments(yt_texts, source_label="youtube_live")
+            except Exception as yt_err:
+                logger.debug("YouTube Live polling error: %s", yt_err)
+
         # Prune expired terms and notify if changed
         if self._prune_expired() and self.on_dictionary_updated:
             try:
@@ -474,11 +743,20 @@ class CommentSynchronizer:
 
 _GLOBAL_COMMENT_SYNC_LOCK = threading.Lock()
 _GLOBAL_COMMENT_SYNC: Optional[CommentSynchronizer] = None
-_COMMENT_CONFIG_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "config",
-    "comment_sync_config.json",
-)
+_COMMENT_CONFIG_PATH: Optional[str] = None
+
+def _get_comment_config_path() -> str:
+    if _COMMENT_CONFIG_PATH:
+        return _COMMENT_CONFIG_PATH
+    try:
+        from scripts.config_store import get_storage_dir, CONFIG_FILENAME_COMMENT
+        return os.path.join(get_storage_dir(), CONFIG_FILENAME_COMMENT)
+    except Exception:
+        return os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "config",
+            "comment_sync_config.json",
+        )
 
 
 def get_global_comment_sync() -> CommentSynchronizer:
@@ -487,14 +765,20 @@ def get_global_comment_sync() -> CommentSynchronizer:
     with _GLOBAL_COMMENT_SYNC_LOCK:
         if _GLOBAL_COMMENT_SYNC is None:
             _GLOBAL_COMMENT_SYNC = CommentSynchronizer()
-            if os.path.exists(_COMMENT_CONFIG_PATH):
-                try:
-                    with open(_COMMENT_CONFIG_PATH, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                    if isinstance(data, dict):
-                        _GLOBAL_COMMENT_SYNC.set_config(data)
-                except Exception as e:
-                    logger.warning("Failed to load comment_sync_config.json: %s", e)
+            cfg_path = _get_comment_config_path()
+            try:
+                from scripts.config_store import load_json_with_backup
+                data = load_json_with_backup(cfg_path, default=None)
+            except Exception:
+                data = None
+                if os.path.exists(cfg_path):
+                    try:
+                        with open(cfg_path, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                    except Exception as e:
+                        logger.warning("Failed to load comment_sync_config.json: %s", e)
+            if isinstance(data, dict):
+                _GLOBAL_COMMENT_SYNC.set_config(data)
         return _GLOBAL_COMMENT_SYNC
 
 
@@ -502,19 +786,23 @@ def save_global_comment_sync_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     """Update the global CommentSynchronizer and persist configuration."""
     syncer = get_global_comment_sync()
     status = syncer.set_config(cfg)
+    cfg_path = _get_comment_config_path()
+    payload = {
+        "enabled": status["enabled"],
+        "onecomme_url": status["onecomme_url"],
+        "comment_file_path": status["comment_file_path"],
+        "youtube_live_enabled": status.get("youtube_live_enabled", False),
+        "youtube_channel_url": status.get("youtube_channel_url", ""),
+        "word_ttl_sec": status["word_ttl_sec"],
+    }
     try:
-        os.makedirs(os.path.dirname(_COMMENT_CONFIG_PATH), exist_ok=True)
-        with open(_COMMENT_CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump(
-                {
-                    "enabled": status["enabled"],
-                    "onecomme_url": status["onecomme_url"],
-                    "comment_file_path": status["comment_file_path"],
-                    "word_ttl_sec": status["word_ttl_sec"],
-                },
-                f,
-                indent=2,
-            )
-    except Exception as e:
-        logger.warning("Failed to save comment_sync_config.json: %s", e)
+        from scripts.config_store import atomic_save_json
+        atomic_save_json(cfg_path, payload, create_backup=True)
+    except Exception:
+        try:
+            os.makedirs(os.path.dirname(cfg_path), exist_ok=True)
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+        except Exception as e:
+            logger.warning("Failed to save comment_sync_config.json: %s", e)
     return status

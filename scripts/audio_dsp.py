@@ -317,11 +317,20 @@ class BroadcastAudioDSP:
 
 _GLOBAL_DSP_LOCK = threading.Lock()
 _GLOBAL_DSP: Optional[BroadcastAudioDSP] = None
-_DSP_CONFIG_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "config",
-    "dsp_config.json",
-)
+_DSP_CONFIG_PATH: Optional[str] = None
+
+def _get_dsp_config_path() -> str:
+    if _DSP_CONFIG_PATH:
+        return _DSP_CONFIG_PATH
+    try:
+        from scripts.config_store import get_storage_dir, CONFIG_FILENAME_DSP
+        return os.path.join(get_storage_dir(), CONFIG_FILENAME_DSP)
+    except Exception:
+        return os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "config",
+            "dsp_config.json",
+        )
 
 
 def get_global_dsp() -> BroadcastAudioDSP:
@@ -330,14 +339,20 @@ def get_global_dsp() -> BroadcastAudioDSP:
     with _GLOBAL_DSP_LOCK:
         if _GLOBAL_DSP is None:
             _GLOBAL_DSP = BroadcastAudioDSP()
-            if os.path.exists(_DSP_CONFIG_PATH):
-                try:
-                    with open(_DSP_CONFIG_PATH, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                    if isinstance(data, dict):
-                        _GLOBAL_DSP.set_config(data)
-                except Exception as e:
-                    logger.warning("Failed to load dsp_config.json: %s", e)
+            cfg_path = _get_dsp_config_path()
+            try:
+                from scripts.config_store import load_json_with_backup
+                data = load_json_with_backup(cfg_path, default=None)
+            except Exception:
+                data = None
+                if os.path.exists(cfg_path):
+                    try:
+                        with open(cfg_path, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                    except Exception as e:
+                        logger.warning("Failed to load dsp_config.json: %s", e)
+            if isinstance(data, dict):
+                _GLOBAL_DSP.set_config(data)
         return _GLOBAL_DSP
 
 
@@ -345,11 +360,16 @@ def save_global_dsp_config(cfg: Dict[str, Any]) -> Dict[str, bool]:
     """Update the global DSP instance and persist settings to config/dsp_config.json."""
     dsp = get_global_dsp()
     updated = dsp.set_config(cfg)
+    cfg_path = _get_dsp_config_path()
     try:
-        os.makedirs(os.path.dirname(_DSP_CONFIG_PATH), exist_ok=True)
-        with open(_DSP_CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump(updated, f, indent=2)
-    except Exception as e:
-        logger.warning("Failed to save dsp_config.json: %s", e)
+        from scripts.config_store import atomic_save_json
+        atomic_save_json(cfg_path, updated, create_backup=True)
+    except Exception:
+        try:
+            os.makedirs(os.path.dirname(cfg_path), exist_ok=True)
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                json.dump(updated, f, indent=2)
+        except Exception as e:
+            logger.warning("Failed to save dsp_config.json: %s", e)
     return updated
 

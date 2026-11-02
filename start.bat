@@ -15,6 +15,7 @@ if %errorlevel% equ 0 set "PS_CMD=pwsh"
 set "SAC_ENABLED=0"
 for /f "tokens=3" %%A in ('reg query "HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy" /v VerifiedAndReputablePolicyState 2^>nul') do (
     if "%%A"=="0x1" set "SAC_ENABLED=1"
+    if "%%A"=="0x2" set "SAC_ENABLED=1"
 )
 
 :: SAC がオフ (0) かつ start.vbs が存在する場合のみ wscript で起動してターミナルポップアップを防止

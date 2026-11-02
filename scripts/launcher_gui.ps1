@@ -1,5 +1,5 @@
 ﻿# --- バージョン管理 (version.txt を Single Source of Truth として動的同期) ---
-$script:AppVersion = "1.6.9"
+$script:AppVersion = "1.7.0"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $versionTxtFile = Join-Path $repoRoot "version.txt"
 if (Test-Path $versionTxtFile) {
@@ -1281,7 +1281,22 @@ function Update-WslcBannerState {
 function Get-SavedLauncherConfig {
     if (Test-Path $script:ConfigFile) {
         try {
-            return Get-Content -Path $script:ConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json
+            $content = Get-Content -Path $script:ConfigFile -Raw -Encoding UTF8
+            if ($content -and $content.Trim()) {
+                return $content | ConvertFrom-Json
+            }
+        } catch {}
+    }
+    # バックアップファイル (.bak) からの自動自己修復
+    $bakFile = $script:ConfigFile + ".bak"
+    if (Test-Path $bakFile) {
+        try {
+            $bakContent = Get-Content -Path $bakFile -Raw -Encoding UTF8
+            if ($bakContent -and $bakContent.Trim()) {
+                $res = $bakContent | ConvertFrom-Json
+                Copy-Item -Path $bakFile -Destination $script:ConfigFile -Force -ErrorAction SilentlyContinue
+                return $res
+            }
         } catch {}
     }
     return $null
@@ -1296,16 +1311,16 @@ function Get-SavedEngineMode {
     return $null
 }
 
-# 推論デバイス設定の読み込み (デフォルトは CPU)
+# 演算デバイス設定の読み込み (デフォルト: CPU)
 function Get-SavedDeviceMode {
     $cfg = Get-SavedLauncherConfig
     if ($cfg -and $cfg.device_mode -in @("Cpu", "Gpu")) {
         return $cfg.device_mode
     }
-    return "Cpu" # デフォルトは安全・省リソースな CPU 起動
+    return "Cpu" # デフォルトは最も安全・軽量な CPU 起動
 }
 
-# ランチャー設定 (実行基盤 & 推論デバイス) の保存
+# ランチャー設定 (実行基盤 & 演算デバイス) のアトミック永続化保存
 function Save-LauncherConfig {
     param(
         [string]$EngineMode = $script:CurrentEngineMode,
@@ -1316,12 +1331,26 @@ function Save-LauncherConfig {
         if (-not (Test-Path $configDir)) {
             New-Item -ItemType Directory -Path $configDir -Force | Out-Null
         }
-        $obj = [ordered]@{
-            engine_mode = if ($EngineMode) { $EngineMode } else { "Venv" }
-            device_mode = if ($DeviceMode) { $DeviceMode } else { "Cpu" }
+        $existing = Get-SavedLauncherConfig
+        $obj = [ordered]@{}
+        if ($existing) {
+            foreach ($prop in $existing.PSObject.Properties) {
+                $obj[$prop.Name] = $prop.Value
+            }
         }
-        $json = $obj | ConvertTo-Json
-        [System.IO.File]::WriteAllText($script:ConfigFile, $json, [System.Text.Encoding]::UTF8)
+        $obj["engine_mode"] = if ($EngineMode) { $EngineMode } else { "Venv" }
+        $obj["device_mode"] = if ($DeviceMode) { $DeviceMode } else { "Cpu" }
+        $json = $obj | ConvertTo-Json -Depth 4
+
+        # 既存正常ファイルの .bak 作成
+        if ((Test-Path $script:ConfigFile) -and (Get-Item $script:ConfigFile).Length -gt 0) {
+            Copy-Item -Path $script:ConfigFile -Destination ($script:ConfigFile + ".bak") -Force -ErrorAction SilentlyContinue
+        }
+
+        # 一時ファイルへのアトミック書き込み
+        $tmpFile = [System.IO.Path]::Combine($configDir, ".tmp_launcher_config_" + [System.Guid]::NewGuid().ToString("N") + ".json")
+        [System.IO.File]::WriteAllText($tmpFile, $json, [System.Text.Encoding]::UTF8)
+        Move-Item -Path $tmpFile -Destination $script:ConfigFile -Force
     } catch {}
 }
 
@@ -2634,6 +2663,18 @@ function Invoke-UpdateAppCode {
         if ($btnRebuild) { $btnRebuild.IsEnabled = $false }
 
         $updateSuccess = $false
+        # アップデート前の自動設定バックアップ (万が一の障害防止)
+        try {
+            $cfgSrc = Join-Path $ProjectRoot "config"
+            if (Test-Path $cfgSrc) {
+                $backupDir = Join-Path $ProjectRoot ("config_backups\backup_" + (Get-Date -Format "yyyyMMdd_HHmmss"))
+                New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
+                Copy-Item -Path (Join-Path $cfgSrc "*") -Destination $backupDir -Recurse -Force -ErrorAction SilentlyContinue
+                Write-AppLog "アップデート前の設定バックアップを作成しました: $backupDir" "INFO"
+            }
+        } catch {
+            Write-AppLog "設定バックアップ作成中に警告: $_" "WARN"
+        }
         $hasGit = $false
 
         # 1. git の存在確認
@@ -2703,7 +2744,7 @@ function Invoke-UpdateAppCode {
             if ($innerDir) {
                 $srcItems = Get-ChildItem -Path $innerDir.FullName
                 foreach ($item in $srcItems) {
-                    if ($item.Name -in @(".git", ".venv", "models", "logs", "config", "scratch")) { continue }
+                    if ($item.Name -in @(".git", ".venv", "models", "logs", "config", "profiles", "scratch", "config_backups")) { continue }
                     $destPath = Join-Path $ProjectRoot $item.Name
                     if ($item.PSIsContainer) {
                         if (-not (Test-Path $destPath)) {
@@ -3877,6 +3918,94 @@ $window.Add_ContentRendered({
 })
 
 # 起動時アップデート自動確認タイマー (起動1.2秒後に非同期で安全に実行)
+# --- SAC (Smart App Control) 判定 & デスクトップショートカット自動最適化 ---
+function Optimize-DesktopShortcut {
+    try {
+        $desktopPath = [System.Environment]::GetFolderPath("Desktop")
+        $shortcutPath = Join-Path $desktopPath "hayamimi (早耳).lnk"
+        if (-not (Test-Path $shortcutPath)) { return }
+
+        $wsh = New-Object -ComObject WScript.Shell
+        $sc = $wsh.CreateShortcut($shortcutPath)
+        $curTarget = $sc.TargetPath
+        $targetBat = Join-Path $ProjectRoot "start.bat"
+        $targetVbs = Join-Path $ProjectRoot "start.vbs"
+
+        # SAC 判定 (1: Enforced, 2: Evaluation)
+        $isSac = $false
+        try {
+            $key = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy" -Name "VerifiedAndReputablePolicyState" -ErrorAction SilentlyContinue
+            if ($key -and ($key.VerifiedAndReputablePolicyState -eq 1 -or $key.VerifiedAndReputablePolicyState -eq 2)) {
+                $isSac = $true
+            }
+        } catch {}
+
+        if ($isSac) {
+            # SAC ON なのに start.vbs を指している場合 -> start.bat に自動修復 (SACブロック回避)
+            if ($curTarget -like "*start.vbs*") {
+                $sc.TargetPath = $targetBat
+                $sc.WindowStyle = 7
+                $sc.WorkingDirectory = $ProjectRoot
+                $sc.Save()
+                Write-AppLog "Smart App Control (SAC) 有効環境を検出: デスクトップショートカットを start.bat に自動最適化しました。" "INFO"
+            }
+        } else {
+            # SAC OFF 環境: start.vbs が無ければ自動配備し、VBS起動ショートカットを維持
+            if (-not (Test-Path $targetVbs)) {
+                $vbsCode = @"
+Set WshShell = CreateObject("WScript.Shell")
+Set fso = CreateObject("Scripting.FileSystemObject")
+scriptDir = fso.GetParentFolderName(WScript.ScriptFullName)
+WshShell.CurrentDirectory = scriptDir
+
+psCmd = "powershell"
+If fso.FileExists("C:\Program Files\PowerShell\7\pwsh.exe") Then
+    psCmd = """C:\Program Files\PowerShell\7\pwsh.exe"""
+ElseIf fso.FileExists("C:\Program Files (x86)\PowerShell\7\pwsh.exe") Then
+    psCmd = """C:\Program Files (x86)\PowerShell\7\pwsh.exe"""
+Else
+    Dim pathEnv, paths, p
+    pathEnv = WshShell.ExpandEnvironmentStrings("%PATH%")
+    paths = Split(pathEnv, ";")
+    For Each p In paths
+        If p <> "" And fso.FolderExists(p) Then
+            If fso.FileExists(fso.BuildPath(p, "pwsh.exe")) Then
+                psCmd = "pwsh"
+                Exit For
+            End If
+        End If
+    Next
+End If
+
+targetScript = scriptDir & "\scripts\launcher_gui.ps1"
+If Not fso.FileExists(targetScript) Then
+    If fso.FileExists(scriptDir & "\scripts\scripts\launcher_gui.ps1") Then
+        targetScript = scriptDir & "\scripts\scripts\launcher_gui.ps1"
+    Else
+        MsgBox "Cannot find launcher script:" & vbCrLf & _
+               scriptDir & "\scripts\launcher_gui.ps1", 16, "hayamimi launcher error"
+        WScript.Quit 1
+    End If
+End If
+
+cmdLine = psCmd & " -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & targetScript & """"
+
+On Error Resume Next
+WshShell.Run cmdLine, 0, False
+If Err.Number <> 0 Then
+    MsgBox "Failed to launch hayamimi (Error " & Err.Number & "):" & vbCrLf & _
+           Err.Description & vbCrLf & vbCrLf & _
+           "Command: " & cmdLine, 16, "hayamimi launcher error"
+    WScript.Quit Err.Number
+End If
+"@
+                [System.IO.File]::WriteAllText($targetVbs, $vbsCode, [System.Text.Encoding]::ASCII)
+            }
+        }
+    } catch {}
+}
+Optimize-DesktopShortcut
+
 $updateCheckTimer = [System.Windows.Threading.DispatcherTimer]::new()
 $updateCheckTimer.Interval = [TimeSpan]::FromMilliseconds(1200)
 $updateCheckTimer.Add_Tick({
