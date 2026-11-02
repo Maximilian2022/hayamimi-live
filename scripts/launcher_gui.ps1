@@ -539,7 +539,7 @@ function Update-ContainerLogFile {
 [xml]$xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Hayamimi Live ランチャー (GUI v1.6.5)"
+        Title="Hayamimi Live ランチャー (GUI v2.2.0)"
         Height="780" Width="780"
         MinHeight="680" MinWidth="720"
         WindowStartupLocation="CenterScreen"
@@ -617,7 +617,7 @@ function Update-ContainerLogFile {
                         <TextBlock x:Name="GpuBadge" Text="⚡ GPU: 検出中..." FontSize="11" Foreground="#10B981" FontWeight="SemiBold"/>
                     </Border>
                     <Border Background="#1E1B4B" CornerRadius="12" Padding="10,5" Margin="0,0,8,0" BorderBrush="#4338CA" BorderThickness="1">
-                        <TextBlock x:Name="VersionBadge" Text="GUI v1.6.5" FontSize="11" Foreground="#A5B4FC" FontWeight="Bold" FontFamily="{StaticResource MonoFont}"/>
+                        <TextBlock x:Name="VersionBadge" Text="GUI v2.2.0" FontSize="11" Foreground="#A5B4FC" FontWeight="Bold" FontFamily="{StaticResource MonoFont}"/>
                     </Border>
                     <Border Background="#141B2D" CornerRadius="12" Padding="10,5" BorderBrush="#253350" BorderThickness="1">
                         <TextBlock x:Name="RuntimeBadge" Text="Python venv" FontSize="11" Foreground="#38BDF8" FontWeight="SemiBold"/>
@@ -665,7 +665,8 @@ function Update-ContainerLogFile {
                             <TextBlock Text="推論設定:" FontSize="12" FontWeight="SemiBold" Foreground="#94A3B8" VerticalAlignment="Center" Margin="0,0,16,0" Width="68"/>
                             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                                 <RadioButton x:Name="RbDeviceCpu" Content="⚙ CPU 起動" GroupName="DeviceMode" Foreground="#F1F5F9" FontSize="12.5" Margin="0,0,24,0" VerticalAlignment="Center" Cursor="Hand"/>
-                                <RadioButton x:Name="RbDeviceNpu" Content="⚡ NPU 起動" GroupName="DeviceMode" Foreground="#F1F5F9" FontSize="12.5" VerticalAlignment="Center" Cursor="Hand" Visibility="Collapsed"/>
+                                <RadioButton x:Name="RbDeviceNpu" Content="⚡ NPU 起動" GroupName="DeviceMode" Foreground="#F1F5F9" FontSize="12.5" Margin="0,0,24,0" VerticalAlignment="Center" Cursor="Hand" Visibility="Collapsed"/>
+                                <RadioButton x:Name="RbDeviceGpu" Content="🔥 GPU 起動 (実験的 / LoRA)" GroupName="DeviceMode" Foreground="#F1F5F9" FontSize="12.5" VerticalAlignment="Center" Cursor="Hand" Visibility="Collapsed"/>
                             </StackPanel>
                         </Grid>
                     </Grid>
@@ -920,6 +921,7 @@ $rbModeVenv = $window.FindName("RbModeVenv")
 $rbModeWslc = $window.FindName("RbModeWslc")
 $rbDeviceCpu = $window.FindName("RbDeviceCpu")
 $rbDeviceNpu = $window.FindName("RbDeviceNpu")
+$rbDeviceGpu = $window.FindName("RbDeviceGpu")
 $btnSetupEnv = $window.FindName("BtnSetupEnv")
 $statusLabel = $window.FindName("StatusLabel")
 $statusLed = $window.FindName("StatusLed")
@@ -995,7 +997,17 @@ $script:NpuName = ""
 
 # デバイスバッジ表示の更新 (選択中のモードと連動)
 function Update-DeviceBadgeDisplay {
-    if ($script:CurrentDeviceMode -eq "Npu" -and $script:HasNpu) {
+    if ($script:CurrentDeviceMode -eq "Gpu" -and $script:HasNvidiaGpu) {
+        $name = if ($script:GpuShortName) { $script:GpuShortName } else { "NVIDIA GPU" }
+        if ($gpuBadge) {
+            $gpuBadge.Text = "🔥 GPU 起動: $name (Whisper+LoRA)"
+            $gpuBadge.Foreground = $brushOrange
+        }
+        if ($gpuBadgeBorder) {
+            $gpuBadgeBorder.BorderBrush = $brushOrange
+            $gpuBadgeBorder.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#2D1B06")
+        }
+    } elseif ($script:CurrentDeviceMode -eq "Npu" -and $script:HasNpu) {
         $name = if ($script:NpuName) { $script:NpuName } else { "NPU" }
         if ($gpuBadge) {
             $gpuBadge.Text = "⚡ NPU 起動: $name"
@@ -1057,13 +1069,24 @@ function Update-GpuDeviceBadge {
             Write-AppLog "ℹ NPU 未検出: CPU 起動モード (ReazonSpeech) で動作します" "INFO"
         }
 
-        # 2. メイン GPU の検出と保護確認
+        # 2. メイン GPU の検出と保護確認 / GPU 起動オプション制御
         $gpus = Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue
         $nvidiaGpu = $gpus | Where-Object { $_.Name -match "NVIDIA|GeForce|RTX" } | Select-Object -First 1
         if ($nvidiaGpu) {
             $script:HasNvidiaGpu = $true
             $script:GpuShortName = $nvidiaGpu.Name -replace "NVIDIA\s*", ""
-            Write-AppLog "✔ メイン GPU 検出: $($nvidiaGpu.Name) (配信・ゲーム用に完全保護 / 負荷0%)" "INFO"
+            if ($rbDeviceGpu) {
+                $rbDeviceGpu.IsEnabled = $true
+                $rbDeviceGpu.Visibility = [System.Windows.Visibility]::Visible
+                $rbDeviceGpu.ToolTip = "GPU: $($nvidiaGpu.Name) (Whisper + LoRA 高精度モード / 実験的)"
+            }
+            Write-AppLog "✔ メイン GPU 検出: $($nvidiaGpu.Name) (GPU 起動 LoRA オプション利用可能)" "INFO"
+        } else {
+            $script:HasNvidiaGpu = $false
+            if ($rbDeviceGpu) {
+                $rbDeviceGpu.IsEnabled = $false
+                $rbDeviceGpu.Visibility = [System.Windows.Visibility]::Collapsed
+            }
         }
 
         Update-DeviceBadgeDisplay
@@ -1320,7 +1343,7 @@ function Get-SavedEngineMode {
 # 演算デバイス設定の読み込み (デフォルト: CPU)
 function Get-SavedDeviceMode {
     $cfg = Get-SavedLauncherConfig
-    if ($cfg -and $cfg.device_mode -in @("Cpu", "Gpu")) {
+    if ($cfg -and $cfg.device_mode -in @("Cpu", "Npu", "Gpu")) {
         return $cfg.device_mode
     }
     return "Cpu" # デフォルトは最も安全・軽量な CPU 起動
@@ -1467,7 +1490,9 @@ function Set-DeviceMode {
     Save-DeviceMode -Mode $NewMode
     Update-DeviceBadgeDisplay
 
-    if ($NewMode -eq "Npu") {
+    if ($NewMode -eq "Gpu") {
+        Write-AppLog "推論設定を「🔥 GPU 起動 (実験的 / LoRA)」に切り替えました。※Whisper+LoRA高精度推論" "INFO"
+    } elseif ($NewMode -eq "Npu") {
         Write-AppLog "推論設定を「⚡ NPU 起動」に切り替えました。※NPU活用・CPU負荷ゼロ" "INFO"
     } else {
         Write-AppLog "推論設定を「⚙ CPU 起動」に切り替えました。" "INFO"
@@ -1485,9 +1510,19 @@ function Invoke-DeviceModeSwitch {
     if ($script:IsSwitchingDevice) { return }
     if ($script:CurrentDeviceMode -eq $TargetMode) { return }
 
+    if ($TargetMode -eq "Gpu") {
+        $gpuReady = Ensure-GpuVenvReady
+        if (-not $gpuReady) {
+            $script:IsSwitchingDevice = $true
+            if ($OtherRb) { $OtherRb.IsChecked = $true }
+            $script:IsSwitchingDevice = $false
+            return
+        }
+    }
+
     if (Test-AppRunning) {
-        $curDevName = if ($script:CurrentDeviceMode -eq "Npu") { "NPU 起動" } else { "CPU 起動" }
-        $targetDevName = if ($TargetMode -eq "Npu") { "NPU 起動" } else { "CPU 起動" }
+        $curDevName = if ($script:CurrentDeviceMode -eq "Gpu") { "GPU 起動" } elseif ($script:CurrentDeviceMode -eq "Npu") { "NPU 起動" } else { "CPU 起動" }
+        $targetDevName = if ($TargetMode -eq "Gpu") { "GPU 起動" } elseif ($TargetMode -eq "Npu") { "NPU 起動" } else { "CPU 起動" }
         $ask = Show-AppConfirm -Message "現在アプリが稼働中です。`r`n`r`n推論設定を「$targetDevName」に切り替えるには、現在のプロセスを再起動する必要があります。`r`n`r`n稼働中のプロセスを停止して切り替えますか？" -Title "推論設定の切り替え確認 - Hayamimi Live"
         if ($ask -eq [System.Windows.MessageBoxResult]::Yes) {
             $script:IsSwitchingDevice = $true
@@ -1735,7 +1770,189 @@ function Ensure-PythonVenvUpToDate {
     return $true
 }
 
-# Python venv (ネイティブ実行環境) 自動セットアップ関数 (UIフリーズ・応答なし完全防止)
+# GPU 仮想環境 (.venv_gpu) 健全性診断関数
+function Test-GpuVenvHealth {
+    param([switch]$Silent)
+    $checkScript = Join-Path $ProjectRoot "scripts\check_gpu_env.py"
+    $pyRunner = if (Test-Path $script:PythonExe) { $script:PythonExe } else { "python.exe" }
+    try {
+        $jsonStr = & $pyRunner -B $checkScript 2>$null | Out-String
+        if ($jsonStr) {
+            return ($jsonStr | ConvertFrom-Json)
+        }
+    } catch {
+        if (-not $Silent) {
+            Write-AppLog "GPU環境診断実行エラー: $_" "WARN"
+        }
+    }
+    return [PSCustomObject]@{
+        status = "error"
+        ready = $false
+        message = "診断スクリプトの実行に失敗しました。"
+    }
+}
+
+# GPU (CUDA) 仮想環境 (.venv_gpu) 自動構築 & 自己修復関数
+function Invoke-SetupGpuVenv {
+    param([bool]$ForceRecreate = $false)
+
+    Write-AppLog "==========================================" "INFO"
+    Write-AppLog "GPU (NVIDIA CUDA) 仮想環境 (.venv_gpu) のセットアップを開始します..." "INFO"
+    Set-UIState "GPU環境構築中..." $brushOrange $false $false
+    if ($initProgressBar) { $initProgressBar.Visibility = "Visible" }
+
+    $gpuVenvDir = Join-Path $ProjectRoot ".venv_gpu"
+    $gpuVenvPython = Join-Path $gpuVenvDir "Scripts\python.exe"
+
+    if ($ForceRecreate -and (Test-Path $gpuVenvDir)) {
+        Write-AppLog "既存の不整合な GPU 仮想環境 (.venv_gpu) をクリーンアップしています..." "INFO"
+        try {
+            Remove-Item -Path $gpuVenvDir -Recurse -Force -ErrorAction Stop
+        } catch {
+            Write-AppLog "GPU 仮想環境フォルダの削除警告: $_" "WARN"
+        }
+    }
+
+    $uvCmd = Get-SafeUvCommand
+
+    if ($ForceRecreate -or -not (Test-Path $gpuVenvPython)) {
+        Write-AppLog "GPU 仮想環境 (.venv_gpu) を作成しています..." "INFO"
+        $created = $false
+        if ($uvCmd) {
+            try {
+                $pinfoVenv = [System.Diagnostics.ProcessStartInfo]::new()
+                $pinfoVenv.FileName = $uvCmd
+                $pinfoVenv.Arguments = "venv .venv_gpu --python 3.14"
+                $pinfoVenv.WorkingDirectory = $ProjectRoot
+                $pinfoVenv.RedirectStandardOutput = $true
+                $pinfoVenv.RedirectStandardError = $true
+                $pinfoVenv.UseShellExecute = $false
+                $pinfoVenv.CreateNoWindow = $true
+                $procVenv = [System.Diagnostics.Process]::Start($pinfoVenv)
+                Wait-ProcessWithUiPump -Proc $procVenv -LogPrefix "[GPU-venv作成]"
+                if ($procVenv.ExitCode -eq 0 -and (Test-Path $gpuVenvPython)) {
+                    $created = $true
+                }
+            } catch {}
+        }
+        if (-not $created) {
+            $sysPython = (where.exe python 2>$null | Select-Object -First 1)
+            if ($sysPython) {
+                try {
+                    $pinfoSys = [System.Diagnostics.ProcessStartInfo]::new()
+                    $pinfoSys.FileName = $sysPython
+                    $pinfoSys.Arguments = "-m venv .venv_gpu"
+                    $pinfoSys.WorkingDirectory = $ProjectRoot
+                    $pinfoSys.RedirectStandardOutput = $true
+                    $pinfoSys.RedirectStandardError = $true
+                    $pinfoSys.UseShellExecute = $false
+                    $pinfoSys.CreateNoWindow = $true
+                    $procSys = [System.Diagnostics.Process]::Start($pinfoSys)
+                    Wait-ProcessWithUiPump -Proc $procSys -LogPrefix "[GPU-venv作成]"
+                    if ($procSys.ExitCode -eq 0 -and (Test-Path $gpuVenvPython)) {
+                        $created = $true
+                    }
+                } catch {}
+            }
+        }
+        if (-not $created) {
+            Write-AppLog "GPU 仮想環境 (.venv_gpu) の作成に失敗しました。" "ERROR"
+            Set-UIState "GPU環境構築失敗" $brushRed $true $false
+            if ($initProgressBar) { $initProgressBar.Visibility = "Collapsed" }
+            return $false
+        }
+        Write-AppLog "✔ GPU 仮想環境 (.venv_gpu) を作成しました。" "INFO"
+    }
+
+    $reqFile = Join-Path $ProjectRoot "requirements-gpu.txt"
+    Write-AppLog "GPU依存パッケージ (PyTorch cu124, faster-whisper, peft等) をインストール中 (数分)..." "INFO"
+
+    $installed = $false
+    if ($uvCmd) {
+        try {
+            $pinfoPip = [System.Diagnostics.ProcessStartInfo]::new()
+            $pinfoPip.FileName = $uvCmd
+            $pinfoPip.Arguments = "pip install --extra-index-url https://download.pytorch.org/whl/cu124 -r `"$reqFile`" --python `"$gpuVenvPython`""
+            $pinfoPip.WorkingDirectory = $ProjectRoot
+            $pinfoPip.RedirectStandardOutput = $true
+            $pinfoPip.RedirectStandardError = $true
+            $pinfoPip.UseShellExecute = $false
+            $pinfoPip.CreateNoWindow = $true
+            $pinfoPip.Environment["PYTHONDONTWRITEBYTECODE"] = "1"
+            $procPip = [System.Diagnostics.Process]::Start($pinfoPip)
+            Wait-ProcessWithUiPump -Proc $procPip -LogPrefix "[GPU-pip導入]"
+            if ($procPip.ExitCode -eq 0) { $installed = $true }
+        } catch {
+            $uvCmd = $null
+        }
+    }
+    if (-not $installed -and (Test-Path $gpuVenvPython)) {
+        try {
+            Unblock-File -LiteralPath $gpuVenvPython -ErrorAction SilentlyContinue
+            $pinfoPipSys = [System.Diagnostics.ProcessStartInfo]::new()
+            $pinfoPipSys.FileName = $gpuVenvPython
+            $pinfoPipSys.Arguments = "-B -m pip install --extra-index-url https://download.pytorch.org/whl/cu124 -r `"$reqFile`""
+            $pinfoPipSys.WorkingDirectory = $ProjectRoot
+            $pinfoPipSys.RedirectStandardOutput = $true
+            $pinfoPipSys.RedirectStandardError = $true
+            $pinfoPipSys.UseShellExecute = $false
+            $pinfoPipSys.CreateNoWindow = $true
+            $pinfoPipSys.Environment["PYTHONDONTWRITEBYTECODE"] = "1"
+            $procPipSys = [System.Diagnostics.Process]::Start($pinfoPipSys)
+            Wait-ProcessWithUiPump -Proc $procPipSys -LogPrefix "[GPU-pip導入]"
+            if ($procPipSys.ExitCode -eq 0) { $installed = $true }
+        } catch {}
+    }
+
+    if (-not $installed) {
+        Write-AppLog "GPU 依存パッケージのインストールに失敗しました。" "ERROR"
+        Set-UIState "GPUパッケージ導入失敗" $brushRed $true $false
+        if ($initProgressBar) { $initProgressBar.Visibility = "Collapsed" }
+        return $false
+    }
+
+    $checkScript = Join-Path $ProjectRoot "scripts\check_gpu_env.py"
+    try {
+        & "$gpuVenvPython" -B "$checkScript" --write-marker 2>$null | Out-Null
+    } catch {}
+
+    Unblock-ProjectFiles -RootDir $ProjectRoot
+    Write-AppLog "✔ GPU (CUDA) 仮想環境のセットアップがすべて完了しました！" "INFO"
+    Write-AppLog "==========================================" "INFO"
+    Set-UIState "停止中" $brushGray $true $false
+    if ($initProgressBar) { $initProgressBar.Visibility = "Collapsed" }
+    return $true
+}
+
+# GPU 環境の準備確認 & 誘導関数
+function Ensure-GpuVenvReady {
+    $diag = Test-GpuVenvHealth -Silent
+    if ($diag.ready -eq $true) {
+        return $true
+    }
+
+    Write-AppLog "==========================================" "INFO"
+    Write-AppLog "【GPU環境チェック】$($diag.message)" "INFO"
+
+    $title = "GPU (CUDA) 環境のセットアップ - Hayamimi Live"
+    $msg = ""
+    if ($diag.status -eq "not_installed") {
+        $msg = "🔥 GPU (CUDA) 起動を利用するには、専用のGPU仮想環境 (.venv_gpu) のセットアップが必要です。`r`n`r`n・PyTorch (CUDA 12.4+)、Faster-Whisper、PEFT (LoRA) を導入します。`r`n・所要時間: 約 1〜3 分（回線速度による）`r`n`r`n今すぐセットアップを開始しますか？"
+    } elseif ($diag.status -eq "incompatible_directml") {
+        $msg = "⚠️ 旧バージョン (v2.0.0 以前) の DirectML 環境が残留しているため、最新の CUDA 環境に再構築（自己修復）が必要です。`r`n`r`n今すぐ自動再構築を実行しますか？"
+    } else {
+        $msg = "⚠️ GPU環境に不整合または不足パッケージが検出されました: $($diag.message)`r`n`r`nGPU環境を修復・再セットアップしますか？"
+    }
+
+    $ans = Show-AppConfirm -Message $msg -Title $title
+    if ($ans -eq [System.Windows.MessageBoxResult]::Yes) {
+        $setupRes = Invoke-SetupGpuVenv -ForceRecreate ($diag.status -eq "incompatible_directml")
+        return $setupRes
+    }
+    return $false
+}
+
+# Python 仮想環境 (.venv) セットアップ関数 (ネイティブ実行用)
 function Invoke-SetupPythonVenv {
     param([bool]$ForceRecreate = $false)
 
@@ -1936,6 +2153,17 @@ function Start-PythonVenvApp {
         return
     }
 
+    # GPU 起動時の仮想環境 (.venv_gpu) 健全性チェック & 自己修復
+    if ($script:CurrentDeviceMode -eq "Gpu" -and $script:HasNvidiaGpu) {
+        $gpuOk = Ensure-GpuVenvReady
+        if (-not $gpuOk) {
+            Write-AppLog "⚠ GPU 環境の準備が完了していないため、安全な CPU 起動モードにフォールバックします。" "WARN"
+            $script:CurrentDeviceMode = "Cpu"
+            if ($rbDeviceCpu) { $rbDeviceCpu.IsChecked = $true }
+            Set-DeviceMode "Cpu"
+        }
+    }
+
     # NPU 起動時の依存パッケージ整合性チェック & 自動補完 (過去ユーザーのシームレスアップデート対応)
     if ($script:CurrentDeviceMode -eq "Npu" -and $script:HasNpu) {
         $hasOpenVino = & "$venvPython" -B -c "import openvino" 2>$null; $?
@@ -2053,7 +2281,18 @@ function Start-PythonVenvApp {
     $engineArg = "--engine reazonspeech"
     $devEnv = "cpu"
 
-    if ($script:CurrentDeviceMode -eq "Npu" -and $script:HasNpu) {
+    if ($script:CurrentDeviceMode -eq "Gpu" -and $script:HasNvidiaGpu) {
+        $devEnv = "gpu"
+        $engineArg = "--engine whisper_cuda"
+        $deviceOptArg = "--device gpu"
+        $gpuPython = Join-Path $ProjectRoot ".venv_gpu\Scripts\python.exe"
+        if (Test-Path $gpuPython) {
+            $venvPython = $gpuPython
+            $venvDir = Split-Path $venvPython
+            $venvScripts = Join-Path $venvDir "Scripts"
+        }
+        Write-AppLog "推論デバイス: GPU (CUDA) 起動 (Whisper+LoRA / 高精度)" "INFO"
+    } elseif ($script:CurrentDeviceMode -eq "Npu" -and $script:HasNpu) {
         $devEnv = "npu"
         $deviceOptArg = "--device npu"
         Write-AppLog "推論デバイス: NPU 起動 ($($script:NpuName) / CPU・GPU負荷ゼロ)" "INFO"
@@ -3324,9 +3563,16 @@ if ($btnRebuild) {
     $btnRebuild.Add_Click({
         try {
             if ($script:CurrentEngineMode -eq "Venv") {
-                $confirm = Show-AppConfirm -Message "Python venv 環境の依存パッケージ (requirements.txt) を再セットアップしますか？" -Title "環境セットアップ - hayamimi"
-                if ($confirm -eq [System.Windows.MessageBoxResult]::Yes) {
-                    Invoke-SetupPythonVenv -ForceRecreate $false | Out-Null
+                if ($script:CurrentDeviceMode -eq "Gpu") {
+                    $confirm = Show-AppConfirm -Message "GPU (CUDA) 仮想環境 (.venv_gpu) を再セットアップしますか？`r`n`r`n※ PyTorch cu124, faster-whisper, peft 等を再インストールします。" -Title "GPU環境セットアップ - hayamimi"
+                    if ($confirm -eq [System.Windows.MessageBoxResult]::Yes) {
+                        Invoke-SetupGpuVenv -ForceRecreate $true | Out-Null
+                    }
+                } else {
+                    $confirm = Show-AppConfirm -Message "Python venv 環境の依存パッケージ (requirements.txt) を再セットアップしますか？" -Title "環境セットアップ - hayamimi"
+                    if ($confirm -eq [System.Windows.MessageBoxResult]::Yes) {
+                        Invoke-SetupPythonVenv -ForceRecreate $false | Out-Null
+                    }
                 }
             } else {
                 $confirm = Show-AppConfirm -Message "最新のソースコードをコンテナイメージに反映（リビルド）しますか？`r`n`r`n※ 実行には数分かかる場合があります。" -Title "コンテナのリビルド - hayamimi"
@@ -3713,6 +3959,12 @@ if ($rbDeviceNpu) {
         Invoke-DeviceModeSwitch -TargetMode "Npu" -TargetRb $rbDeviceNpu -OtherRb $rbDeviceCpu
     })
 }
+if ($rbDeviceGpu) {
+    $rbDeviceGpu.Add_Checked({
+        if ($script:IsInitializing) { return }
+        Invoke-DeviceModeSwitch -TargetMode "Gpu" -TargetRb $rbDeviceGpu -OtherRb $rbDeviceCpu
+    })
+}
 
 # 常設 WSL 3.0 セットアップボタンの処理
 if ($btnInstallWslAlways) {
@@ -3944,13 +4196,20 @@ if ($initMode -eq "Wslc") {
 # 2. 推論デバイスの検出 & 復元
 Update-GpuDeviceBadge
 $initDevMode = Get-SavedDeviceMode
-if ($initDevMode -eq "Npu" -and $script:HasNpu) {
+if ($initDevMode -eq "Gpu" -and $script:HasNvidiaGpu) {
+    if ($rbDeviceGpu) { $rbDeviceGpu.IsChecked = $true }
+    if ($rbDeviceNpu) { $rbDeviceNpu.IsChecked = $false }
+    if ($rbDeviceCpu) { $rbDeviceCpu.IsChecked = $false }
+    Set-DeviceMode "Gpu"
+} elseif ($initDevMode -eq "Npu" -and $script:HasNpu) {
     if ($rbDeviceNpu) { $rbDeviceNpu.IsChecked = $true }
     if ($rbDeviceCpu) { $rbDeviceCpu.IsChecked = $false }
+    if ($rbDeviceGpu) { $rbDeviceGpu.IsChecked = $false }
     Set-DeviceMode "Npu"
 } else {
     if ($rbDeviceCpu) { $rbDeviceCpu.IsChecked = $true }
     if ($rbDeviceNpu) { $rbDeviceNpu.IsChecked = $false }
+    if ($rbDeviceGpu) { $rbDeviceGpu.IsChecked = $false }
     Set-DeviceMode "Cpu"
 }
 

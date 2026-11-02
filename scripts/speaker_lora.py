@@ -1,14 +1,18 @@
 """
 scripts/speaker_lora.py
-話者特化 LoRA (PEFT) 高速・低負荷学習エンジン
+話者特化 LoRA (PEFT) 高速・低負荷学習エンジン (v2.2.0)
 
-配信者やユーザーのマイク録音（30〜60秒）から、CPUスレッド制限（負荷15%以下）
-または CUDA GPU オプションを活用し、20〜30秒以内で話者適応 LoRA アダプタを生成します。
+配信者やユーザーのマイク録音、およびプロファイル連携 YouTube 動画（最新3件）から、
+他プロセス（ゲーム・配信 OBS）と安全に共存する動的 GPU リソース上限
+（空き VRAM 50% / 最大 2.5GB 制限、WDDM 10ms スロットリング、BELOW_NORMAL 優先度）
+の下で、1〜2分以内に話者適応 LoRA アダプタを生成・継続学習します。
 """
 
 from __future__ import annotations
 
 import argparse
+import datetime
+import json
 import logging
 import os
 import sys
@@ -62,7 +66,7 @@ def _maybe_reexec_with_gpu_venv():
 
 class SpeakerLoRATrainer:
     """
-    エンコーダ出力事前キャッシュ技術を用いた超低負荷・爆速な話者 LoRA 学習クラス。
+    エンコーダ出力事前キャッシュ技術 & 動的 GPU 制限を用いた超低負荷・爆速な話者 LoRA 学習クラス。
     """
 
     def __init__(
@@ -70,6 +74,7 @@ class SpeakerLoRATrainer:
         model_id: str = DEFAULT_MODEL_ID,
         allow_cuda: bool = False,
         max_cpu_threads: int = 4,
+        max_vram_gb: float = 2.5,
     ):
         if not HAVE_TRAIN_DEPENDENCIES:
             raise RuntimeError(
@@ -80,11 +85,31 @@ class SpeakerLoRATrainer:
         self.model_id = model_id
         self.allow_cuda = allow_cuda
 
-        # デバイスの決定
+        # プロセス優先度を低 (BELOW_NORMAL) に設定してゲームや配信の邪魔をしない
+        if psutil is not None and sys.platform == "win32":
+            try:
+                p = psutil.Process()
+                p.nice(psutil.BELOW_NORMAL_PRIORITY_CLASS)
+            except Exception:
+                pass
+
+        # デバイスの決定と動的 GPU リソース上限の設定
         if self.allow_cuda and torch.cuda.is_available():
             self.device = torch.device("cuda")
             self.threads = 1
-            logger.info("SpeakerLoRATrainer: CUDA GPU (dGPU) を学習に使用します。")
+
+            # 他プロセス共存のための動的 VRAM 上限設定
+            try:
+                free_bytes, total_bytes = torch.cuda.mem_get_info()
+                # 空き VRAM の 50% 以下、かつ最大 2.5GB (2560MB)
+                max_alloc_bytes = min(int(free_bytes * 0.5), int(max_vram_gb * 1024 * 1024 * 1024))
+                fraction = max(0.1, min(0.95, max_alloc_bytes / total_bytes))
+                torch.cuda.set_per_process_memory_fraction(fraction, 0)
+                logger.info(
+                    f"SpeakerLoRATrainer: CUDA GPU (dGPU) 共存学習モード (VRAM上限: {max_alloc_bytes // (1024*1024)}MB / {total_bytes // (1024*1024)}MB, fraction={fraction:.2f})"
+                )
+            except Exception as e:
+                logger.warning(f"Could not set CUDA memory fraction: {e}")
         else:
             self.device = torch.device("cpu")
             # CPU コア数に応じた動的スレッド制限 (最大 4 スレッド、または CPU コア数の 1/4)
@@ -95,35 +120,33 @@ class SpeakerLoRATrainer:
                 f"SpeakerLoRATrainer: CPU 学習モード (スレッド制限: {self.threads}/{cpu_count} コア - 負荷 15% 以下)"
             )
 
-            # プロセス優先度を低 (BELOW_NORMAL) に設定してゲームや配信の邪魔をしない
-            if psutil is not None and sys.platform == "win32":
-                try:
-                    p = psutil.Process()
-                    p.nice(psutil.BELOW_NORMAL_PRIORITY_CLASS)
-                except Exception:
-                    pass
-
         self.processor = None
         self.model = None
         self.peft_model = None
 
-    def _ensure_model_loaded(self):
-        """モデルとプロセッサを遅延ロードする"""
+    def _ensure_model_loaded(self, base_lora_dir: Optional[str] = None):
+        """モデルとプロセッサを遅延ロードする (既存 LoRA があれば継続学習用にロード)"""
         if self.model is None:
             logger.info(f"Loading base model {self.model_id} on {self.device}...")
             self.processor = WhisperProcessor.from_pretrained(self.model_id)
             self.model = WhisperForConditionalGeneration.from_pretrained(self.model_id)
             self.model.to(self.device)
 
+            if base_lora_dir and os.path.exists(os.path.join(base_lora_dir, "adapter_config.json")):
+                logger.info(f"Loading existing LoRA adapter from {base_lora_dir} for continuation fine-tuning...")
+                self.peft_model = PeftModel.from_pretrained(self.model, base_lora_dir, is_trainable=True)
+                self.peft_model.to(self.device)
+
     def train(
         self,
         audio_samples: np.ndarray,
         sample_rate: int,
         training_pairs: list[tuple[float, float, str]],
-        epochs: int = 20,
+        epochs: int = 15,
         lr: float = 1e-3,
         lora_rank: int = 16,
         lora_alpha: int = 32,
+        base_lora_dir: Optional[str] = None,
         on_progress: Optional[Callable[[int, int, float], None]] = None,
     ) -> float:
         """
@@ -131,7 +154,7 @@ class SpeakerLoRATrainer:
         training_pairs: [(start_s, end_s, text), ...]
         戻り値: 学習所要時間 (秒)
         """
-        self._ensure_model_loaded()
+        self._ensure_model_loaded(base_lora_dir=base_lora_dir)
 
         # 16kHz float32 に変換
         if audio_samples.dtype == np.int16:
@@ -147,15 +170,16 @@ class SpeakerLoRATrainer:
                 audio_samples,
             ).astype(np.float32)
 
-        # 1. PEFT LoRA アダプタのアタッチ (デコーダの Cross-Attention: q_proj, v_proj)
-        lora_config = LoraConfig(
-            r=lora_rank,
-            lora_alpha=lora_alpha,
-            target_modules=["q_proj", "v_proj"],
-            lora_dropout=0.05,
-            bias="none",
-        )
-        self.peft_model = get_peft_model(self.model, lora_config)
+        # 1. PEFT LoRA アダプタのアタッチ (新規学習時のみ)
+        if self.peft_model is None:
+            lora_config = LoraConfig(
+                r=lora_rank,
+                lora_alpha=lora_alpha,
+                target_modules=["q_proj", "v_proj"],
+                lora_dropout=0.05,
+                bias="none",
+            )
+            self.peft_model = get_peft_model(self.model, lora_config)
 
         # 2. エンコーダ出力の事前キャッシュ (1-pass forward with torch.no_grad)
         t_cache_start = time.perf_counter()
@@ -193,11 +217,14 @@ class SpeakerLoRATrainer:
             logger.warning("No valid audio segments to train.")
             return 0.0
 
-        # 3. LoRA デコーダのみの超軽量学習
-        optimizer = torch.optim.AdamW(self.peft_model.parameters(), lr=lr)
+        # 3. LoRA デコーダのみの超軽量学習 (他プロセス共存スロットリング付き)
+        effective_lr = lr if base_lora_dir is None else (lr * 0.2)  # 継続学習時は学習率を微小化
+        optimizer = torch.optim.AdamW(self.peft_model.parameters(), lr=effective_lr)
         self.peft_model.train()
 
         t_train_start = time.perf_counter()
+        avg_loss = 0.0
+
         for epoch in range(epochs):
             total_loss = 0.0
             for encoder_outputs, labels in cached_data:
@@ -209,6 +236,10 @@ class SpeakerLoRATrainer:
                 loss.backward()
                 optimizer.step()
                 total_loss += loss.item()
+
+                # WDDM スケジューラスロットリング: 他プロセス (ゲーム/OBS) の描画キューに道を譲る
+                if self.device.type == "cuda":
+                    time.sleep(0.01)
 
             avg_loss = total_loss / len(cached_data)
             if on_progress:
@@ -238,7 +269,8 @@ def main():
     parser.add_argument("--transcript", required=True, help="Transcript text or json file")
     parser.add_argument("--output", required=True, help="Output directory for LoRA adapter")
     parser.add_argument("--allow-cuda", action="store_true", help="Allow CUDA GPU for training")
-    parser.add_argument("--epochs", type=int, default=20, help="Training epochs")
+    parser.add_argument("--base-lora", type=str, default=None, help="Base LoRA dir for continuation training")
+    parser.add_argument("--epochs", type=int, default=15, help="Training epochs")
     parser.add_argument("--threads", type=int, default=4, help="Max CPU threads")
 
     args = parser.parse_args()
@@ -253,7 +285,6 @@ def main():
         max_cpu_threads=args.threads,
     )
 
-    # 簡易行パース (1行1セグメント)
     pairs = []
     with open(args.transcript, "r", encoding="utf-8") as f:
         for idx, line in enumerate(f):
@@ -269,6 +300,7 @@ def main():
         sample_rate=sr,
         training_pairs=pairs,
         epochs=args.epochs,
+        base_lora_dir=args.base_lora,
         on_progress=print_progress,
     )
 
@@ -278,4 +310,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

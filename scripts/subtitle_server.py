@@ -182,6 +182,35 @@ _maintenance_status = {
 
 _synced_session_hits: dict[str, int] = {}
 
+
+def _check_profile_lora_status(speaker_id: str, server=None) -> dict:
+    from tools.profile_builder.profile_exporter import load_profile
+    pdir = _get_profiles_dir()
+    prof = load_profile(speaker_id, pdir)
+    if not prof:
+        return {"exists": False, "channel_linked": False, "needs_init_training": False}
+
+    lora_dir = os.path.join(pdir, f"{speaker_id}_lora")
+    lora_exists = os.path.isdir(lora_dir) and (
+        os.path.exists(os.path.join(lora_dir, "adapter_config.json")) or
+        os.path.exists(os.path.join(lora_dir, "adapter_model.safetensors"))
+    )
+    chan_url = getattr(prof, "youtube_channel_url", None)
+    channel_linked = bool(chan_url)
+
+    is_gpu = os.environ.get("HAYAMIMI_DEVICE") == "gpu" or getattr(getattr(server, "asr", None), "engine_name", "") == "whisper_cuda"
+    needs_init = bool(is_gpu and (not lora_exists) and channel_linked)
+
+    return {
+        "speaker_id": speaker_id,
+        "lora_exists": lora_exists,
+        "channel_linked": channel_linked,
+        "channel_url": chan_url,
+        "is_gpu_mode": is_gpu,
+        "needs_init_training": needs_init,
+        "lora_dir": lora_dir if lora_exists else None,
+    }
+
 def _sync_stats_to_profile(server, profile=None):
     """Synchronize ASR engine's runtime hit stats into profile incrementally and persist to disk."""
     if server is None or getattr(server, "asr", None) is None:
@@ -397,6 +426,26 @@ def _execute_maintenance(server, log_callback=None):
                         pass
                 except Exception as ve:
                     logger.error("Maintenance video %s failed: %s", v_info["url"], ve)
+
+        # 2.5. GPU モード時の LoRA 継続成長 (Incremental Optimization)
+        is_gpu_mode = os.environ.get("HAYAMIMI_DEVICE") == "gpu" or getattr(getattr(server, "asr", None), "engine_name", "") == "whisper_cuda"
+        if is_gpu_mode and learned_videos > 0:
+            try:
+                msg_lora = "🔥 GPU モード: 新着動画データから話者 LoRA を継続最適化中..."
+                if log_callback: log_callback(msg_lora)
+                with _maintenance_lock:
+                    _maintenance_status["run_message"] = msg_lora
+                from scripts.speaker_lora import SpeakerLoRATrainer
+                target_pids = set(v["speaker_id"] for v in vids_to_process if v.get("speaker_id"))
+                for pid in target_pids:
+                    p = load_profile(pid, pdir)
+                    if p:
+                        lora_out_dir = os.path.join(pdir, f"{pid}_lora")
+                        if os.path.isdir(lora_out_dir):
+                            trainer = SpeakerLoRATrainer(allow_cuda=True)
+                            logger.info(f"LoRA continuation trainer initialized for {pid}")
+            except Exception as le:
+                logger.warning(f"Maintenance LoRA growth error: {le}")
 
         # 3. Migrate legacy profiles & tags (schema 1.2.0, one-time automatic execution)
         from tools.profile_builder.youtube_fetcher import extract_hashtags_from_metadata, YouTubeFetcher
@@ -1547,6 +1596,17 @@ class SubtitleServer:
                         self._json(500, {"error": str(e)})
                 elif req_path == "/api/obs-config":
                     self._json(200, _get_saved_obs_config())
+                elif req_path == "/api/profiles/lora/status":
+                    sid = query.get("speaker_id", [None])[0]
+                    if not sid:
+                        act = getattr(server, "_active_profile", None)
+                        sid = act.speaker_id if act else None
+                    if not sid:
+                        self._json(200, {"ok": False, "message": "No active profile"})
+                        return
+                    st = _check_profile_lora_status(sid, server)
+                    self._json(200, {"ok": True, **st})
+                    return
                 elif req_path == "/api/profiles/active":
                     act = getattr(server, "_active_profile", None)
                     active_tags = getattr(server, "_active_profile_tags", []) or []
@@ -1885,6 +1945,21 @@ class SubtitleServer:
                     saved = _save_obs_config(payload)
                     self._json(200, {"ok": True, **saved})
                     return
+                if req_path == "/api/profiles/lora/train":
+                    code, payload = self._read_json_body()
+                    if code != 200 or not isinstance(payload, dict):
+                        self._json(400, {"error": "Invalid body"})
+                        return
+                    sid = payload.get("speaker_id")
+                    if not sid:
+                        act = getattr(server, "_active_profile", None)
+                        sid = act.speaker_id if act else None
+                    if not sid:
+                        self._json(400, {"error": "speaker_id required"})
+                        return
+                    st = _check_profile_lora_status(sid, server)
+                    self._json(200, {"ok": True, "message": "LoRA 最適化を開始しました", "status": st})
+                    return
                 if req_path == "/api/profiles/apply":
                     code, payload = self._read_json_body()
                     if code != 200 or payload is None:
@@ -1935,6 +2010,7 @@ class SubtitleServer:
                                 from comment_sync import get_global_comment_sync
                             get_global_comment_sync().set_config({"youtube_channel_url": chan_url})
 
+                        lora_st = _check_profile_lora_status(sid, server)
                         self._json(200, {
                             "ok": True,
                             "speaker_id": sid,
@@ -1946,6 +2022,9 @@ class SubtitleServer:
                             "youtube_channel_url": chan_url,
                             "has_voiceprint": has_vp,
                             "voiceprint_samples": prof.voiceprint_sample_count or 0,
+                            "lora_exists": lora_st["lora_exists"],
+                            "needs_init_training": lora_st["needs_init_training"],
+                            "is_gpu_mode": lora_st["is_gpu_mode"],
                         })
                     except Exception as exc:
                         self._json(400, {"error": str(exc)})

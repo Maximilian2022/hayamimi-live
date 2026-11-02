@@ -389,6 +389,7 @@ def get_hardware_summary() -> dict:
 
     igpu_dev = next((d for d in devices if d.directml_device_id == igpu_id), None)
     main_gpu = next((d for d in devices if d.is_discrete and not d.is_software), None)
+    nvidia_gpu = next((d for d in devices if d.vendor_id == VENDOR_NVIDIA and not d.is_software), None)
 
     return {
         "os": platform.system(),
@@ -400,6 +401,8 @@ def get_hardware_summary() -> dict:
         "has_npu": npu_dev is not None and npu_dev.is_available,
         "npu_name": npu_dev.name if npu_dev else None,
         "npu_device": asdict(npu_dev) if npu_dev else None,
+        "has_nvidia_gpu": nvidia_gpu is not None,
+        "nvidia_gpu_name": nvidia_gpu.name if nvidia_gpu else None,
         "main_gpu_name": main_gpu.name if main_gpu else None,
         "recommended_device": "npu" if (npu_dev and npu_dev.is_available) else "cpu",
         "recommended_engine": "reazonspeech",

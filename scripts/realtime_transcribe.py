@@ -1183,11 +1183,11 @@ def translate_by_sentence(translator, text: str) -> str:
 def _detect_translator_device() -> str:
     """Detect preferred compute device for translation (cpu by default for rock-solid stability, or cuda if explicitly set)."""
     env_device = os.environ.get("HAYAMIMI_DEVICE", "").strip().lower()
-    if env_device in ("cuda", "cpu"):
-        return env_device
+    if env_device in ("cuda", "gpu"):
+        return "cuda"
     # CTranslate2 on Windows frequently suffers from missing cublas64_12.dll when using CUDA.
     # CPU int8 translation executes in ~20-80ms (far faster than speech cadence),
-    # so CPU is the safe and dependable default unless HAYAMIMI_DEVICE=cuda is explicitly requested.
+    # so CPU is the safe and dependable default unless HAYAMIMI_DEVICE=cuda/gpu is explicitly requested.
     return "cpu"
 
 
@@ -2337,12 +2337,14 @@ def main():
                          "(docs/eval/punct_retrain.md; needs download_models.py "
                          "--punct-4class). Falls back to bert with a warning if the "
                          "4class model isn't downloaded.")
-    ap.add_argument("--engine", choices=["reazonspeech", "whisper_dml"], default="reazonspeech",
-                    help="ASR engine: reazonspeech (CPU, ultra-fast) or whisper_dml (Intel/AMD iGPU DirectML, Kotoba-Whisper)")
+    ap.add_argument("--engine", choices=["reazonspeech", "whisper_dml", "whisper_cuda"], default="reazonspeech",
+                    help="ASR engine: reazonspeech (CPU/NPU), whisper_dml (iGPU DirectML), or whisper_cuda (NVIDIA CUDA Whisper+LoRA)")
     ap.add_argument("--device", choices=["cpu", "npu", "gpu"], default="cpu",
-                    help="compute device for inference: cpu (default) or npu (Intel AI Boost)")
+                    help="compute device for inference: cpu (default), npu (Intel AI Boost), or gpu (NVIDIA CUDA)")
     ap.add_argument("--initial-prompt", type=str, default=None,
-                    help="Initial prompt / vocabulary hint for whisper_dml engine")
+                    help="Initial prompt / vocabulary hint for whisper_dml / whisper_cuda engine")
+    ap.add_argument("--lora-dir", type=str, default=None,
+                    help="Directory containing speaker-adapted LoRA weights for whisper_cuda")
     ap.add_argument("--dml-device-id", type=int, default=None,
                     help="DirectML device ID for whisper_dml (auto-detects iGPU if omitted)")
     ap.add_argument("--transcript", metavar="PATH",
@@ -2539,7 +2541,24 @@ def main():
 
     print("loading models...", file=sys.stderr)
     asr = None
-    if args.engine == "whisper_dml":
+    if args.engine == "whisper_cuda" or (args.device == "gpu" and args.engine != "reazonspeech"):
+        try:
+            print("loading Whisper CUDA engine on NVIDIA GPU...", file=sys.stderr)
+            from whisper_cuda_engine import WhisperCUDAEngine
+            asr = WhisperCUDAEngine(
+                threads=args.threads,
+                initial_prompt=args.initial_prompt,
+                replace_file=args.replace,
+                lora_dir=args.lora_dir,
+                forced_lang=args.lang if args.mode == "single" else "ja",
+                on_event=hub.publish,
+            )
+            live_vad = LiveVad(args.min_silence, args.max_speech)
+            print(f"Whisper CUDA ready ({asr.device_name})", file=sys.stderr)
+        except Exception as exc:
+            print(f"Warning: Failed to initialize Whisper CUDA ({exc}). Falling back to ReazonSpeech CPU...", file=sys.stderr)
+            asr = None
+    elif args.engine == "whisper_dml":
         try:
             print("loading Whisper DirectML engine on iGPU...", file=sys.stderr)
             from whisper_dml_engine import WhisperDirectMLEngine
