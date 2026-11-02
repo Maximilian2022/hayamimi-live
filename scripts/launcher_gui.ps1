@@ -1,4 +1,4 @@
-﻿$script:AppVersion = "2.2.2"
+$script:AppVersion = "2.2.2"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $versionTxtFile = Join-Path $repoRoot "version.txt"
 if (Test-Path $versionTxtFile) {
