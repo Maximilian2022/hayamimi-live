@@ -665,7 +665,7 @@ function Update-ContainerLogFile {
                             <TextBlock Text="推論設定:" FontSize="12" FontWeight="SemiBold" Foreground="#94A3B8" VerticalAlignment="Center" Margin="0,0,16,0" Width="68"/>
                             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                                 <RadioButton x:Name="RbDeviceCpu" Content="⚙ CPU 起動" GroupName="DeviceMode" Foreground="#F1F5F9" FontSize="12.5" Margin="0,0,24,0" VerticalAlignment="Center" Cursor="Hand"/>
-                                <RadioButton x:Name="RbDeviceNpu" Content="⚡ NPU 起動" GroupName="DeviceMode" Foreground="#F1F5F9" FontSize="12.5" VerticalAlignment="Center" Cursor="Hand"/>
+                                <RadioButton x:Name="RbDeviceNpu" Content="⚡ NPU 起動" GroupName="DeviceMode" Foreground="#F1F5F9" FontSize="12.5" VerticalAlignment="Center" Cursor="Hand" Visibility="Collapsed"/>
                             </StackPanel>
                         </Grid>
                     </Grid>
@@ -1047,12 +1047,8 @@ function Update-GpuDeviceBadge {
             $script:NpuName = ""
             if ($rbDeviceNpu) {
                 $rbDeviceNpu.IsEnabled = $false
-                # 非搭載時は暗いスレートグレー & 半透明(Opacity 0.35)で選択不能であることを明示
-                $rbDeviceNpu.Content = "⚡ NPU 起動 (非搭載)"
-                $rbDeviceNpu.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#475569")
-                $rbDeviceNpu.Opacity = 0.35
-                $rbDeviceNpu.Cursor = [System.Windows.Input.Cursors]::No
-                $rbDeviceNpu.ToolTip = "システムに NPU が検出されませんでした (CPU 起動のみ利用可能です)"
+                # NPU 非搭載環境では完全非表示にして UI をすっきり整理
+                $rbDeviceNpu.Visibility = [System.Windows.Visibility]::Collapsed
             }
             if ($rbDeviceCpu) {
                 $rbDeviceCpu.IsChecked = $true
@@ -1076,11 +1072,7 @@ function Update-GpuDeviceBadge {
         $script:NpuName = ""
         if ($rbDeviceNpu) {
             $rbDeviceNpu.IsEnabled = $false
-            $rbDeviceNpu.Content = "⚡ NPU 起動 (非搭載)"
-            $rbDeviceNpu.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#475569")
-            $rbDeviceNpu.Opacity = 0.35
-            $rbDeviceNpu.Cursor = [System.Windows.Input.Cursors]::No
-            $rbDeviceNpu.ToolTip = "システムに NPU が検出されませんでした"
+            $rbDeviceNpu.Visibility = [System.Windows.Visibility]::Collapsed
         }
         if ($rbDeviceCpu) {
             $rbDeviceCpu.IsChecked = $true
