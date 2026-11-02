@@ -667,15 +667,17 @@
       </div>
       <div class="card-desc">Google AI Studio の API キー (無料枠で利用可能)</div>
     </div>
-    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
-      <div style="display: flex; gap: 6px; flex: 1; min-width: 260px; align-items: center;">
-        <input type="password" id="inputApiKey" class="input-text" placeholder="AIzaSy... から始まる API キーを入力" style="flex: 1;">
-        <button type="button" id="btnToggleApiKey" class="btn btn-secondary" style="padding: 7px 11px;" title="キーの表示/非表示">👁</button>
+    <form onsubmit="event.preventDefault(); document.getElementById('btnSaveKey').click();" style="margin: 0;">
+      <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+        <div style="display: flex; gap: 6px; flex: 1; min-width: 260px; align-items: center;">
+          <input type="password" id="inputApiKey" class="input-text" placeholder="AIzaSy... から始まる API キーを入力" style="flex: 1;" autocomplete="current-password">
+          <button type="button" id="btnToggleApiKey" class="btn btn-secondary" style="padding: 7px 11px;" title="キーの表示/非表示">👁</button>
+        </div>
+        <button type="button" id="btnSaveKey" class="btn btn-primary">保存する</button>
+        <button type="button" id="btnValidateKey" class="btn btn-secondary" style="border-color: #3B82F6; color: #60A5FA;">🔍 有効性テスト</button>
+        <button type="button" id="btnDeleteKey" class="btn btn-secondary">削除</button>
       </div>
-      <button id="btnSaveKey" class="btn btn-primary">保存する</button>
-      <button id="btnValidateKey" class="btn btn-secondary" style="border-color: #3B82F6; color: #60A5FA;">🔍 有効性テスト</button>
-      <button id="btnDeleteKey" class="btn btn-secondary">削除</button>
-    </div>
+    </form>
     <div id="keyFeedbackMsg" style="font-size: 0.82rem; margin-top: 6px; min-height: 1.2rem;"></div>
     <div style="font-size: 0.75rem; color: var(--paper-muted); font-family: var(--mono);">
       ※ 入力されたキーはローカル環境（<code>config/gemini_key.txt</code>）に安全に保存され、Gitリポジトリ等へ外部送信されることはありません。
@@ -1150,6 +1152,12 @@
   }
 
   async function validateKeyRemote(keyToValidate = "") {
+    const btnVal = document.getElementById("btnValidateKey");
+    const origBtnText = btnVal ? btnVal.textContent : "🔍 有効性テスト";
+    if (btnVal) {
+      btnVal.disabled = true;
+      btnVal.textContent = "⏳ 検証中...";
+    }
     if (keyFeedback) {
       keyFeedback.innerHTML = '<span style="color: #60A5FA;">🔍 Google AI Studio と通信してキーを検証中...</span>';
     }
@@ -1158,6 +1166,7 @@
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ key: keyToValidate }),
+        signal: (window.AbortSignal && AbortSignal.timeout) ? AbortSignal.timeout(10000) : undefined,
       });
       if (res.ok) {
         const data = await res.json();
@@ -1167,9 +1176,17 @@
           if (keyFeedback) keyFeedback.innerHTML = `<span style="color: #F87171;">${escapeHtml(data.message)}</span>`;
         }
         return data.valid;
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        if (keyFeedback) keyFeedback.innerHTML = `<span style="color: #F87171;">❌ 検証エラー (HTTP ${res.status}): ${escapeHtml(errData.error || res.statusText)}</span>`;
       }
     } catch (err) {
       if (keyFeedback) keyFeedback.innerHTML = `<span style="color: #F87171;">通信エラー: ${escapeHtml(err.message)}</span>`;
+    } finally {
+      if (btnVal) {
+        btnVal.disabled = false;
+        btnVal.textContent = origBtnText;
+      }
     }
     return false;
   }
@@ -1448,6 +1465,8 @@
       }
     }
   });
+
+  async function applyProfile(speakerId) {
     try {
       const targetTags = selectedTagsBySpeaker[speakerId] ? Array.from(selectedTagsBySpeaker[speakerId]) : null;
       const res = await fetch("/api/profiles/apply", {
