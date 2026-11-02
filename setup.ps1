@@ -784,14 +784,10 @@ $stepTimer.Add_Tick({
                     $wsh = New-Object -ComObject WScript.Shell
                     $shortcut = $wsh.CreateShortcut($shortcutPath)
                     
-                    if (Test-Path $targetVbs) {
-                        $shortcut.TargetPath = "wscript.exe"
-                        $shortcut.Arguments = "`"$targetVbs`""
-                    } else {
-                        $shortcut.TargetPath = $targetBat
-                    }
-                    
+                    # SAC (Smart App Control) 対策: wscript.exe はブロックされるため、SAC 自動判定付き start.bat をターゲットにする
+                    $shortcut.TargetPath = $targetBat
                     $shortcut.WorkingDirectory = $script:targetDir
+                    $shortcut.WindowStyle = 7 # 7 = 最小化 (コマンドプロンプトのチラつきを最小化)
                     $shortcut.Description = "hayamimi (早耳) - リアルタイム音声認識 & 翻訳"
                     $shortcut.IconLocation = "%SystemRoot%\System32\shell32.dll, 168"
                     $shortcut.Save()

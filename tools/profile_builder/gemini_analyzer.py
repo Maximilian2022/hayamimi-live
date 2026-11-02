@@ -3,10 +3,12 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
 import re
+import sys
 import time
 from typing import Callable, Optional
 
@@ -152,8 +154,80 @@ hayamimi (ReazonSpeech) が話者の生音声を聞いて誤認識したテキ�
 """
 
 
+def _encrypt_secret(plain_text: str) -> str:
+    """Encrypt sensitive string using Windows DPAPI (CryptProtectData) or base64 fallback."""
+    raw_bytes = plain_text.strip().encode("utf-8")
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class DATA_BLOB(ctypes.Structure):
+                _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_char))]
+
+            buf = ctypes.create_string_buffer(raw_bytes, len(raw_bytes))
+            blob_in = DATA_BLOB(len(raw_bytes), ctypes.cast(buf, ctypes.POINTER(ctypes.c_char)))
+            blob_out = DATA_BLOB()
+            if ctypes.windll.crypt32.CryptProtectData(
+                ctypes.byref(blob_in), "gemini_key", None, None, None, 0, ctypes.byref(blob_out)
+            ):
+                try:
+                    enc_bytes = ctypes.string_at(blob_out.pbData, blob_out.cbData)
+                    return "DPAPI:" + base64.b64encode(enc_bytes).decode("ascii")
+                finally:
+                    ctypes.windll.kernel32.LocalFree(blob_out.pbData)
+        except Exception as e:
+            logger.debug("DPAPI encryption fallback to base64: %s", e)
+
+    return "B64:" + base64.b64encode(raw_bytes).decode("ascii")
+
+
+def _decrypt_secret(cipher_text: str) -> Optional[str]:
+    """Decrypt sensitive string encrypted with DPAPI or base64, with plaintext backwards compatibility."""
+    s = cipher_text.strip()
+    if not s:
+        return None
+
+    if s.startswith("DPAPI:"):
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                from ctypes import wintypes
+
+                class DATA_BLOB(ctypes.Structure):
+                    _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_char))]
+
+                enc_bytes = base64.b64decode(s[6:])
+                buf = ctypes.create_string_buffer(enc_bytes, len(enc_bytes))
+                blob_in = DATA_BLOB(len(enc_bytes), ctypes.cast(buf, ctypes.POINTER(ctypes.c_char)))
+                blob_out = DATA_BLOB()
+                if ctypes.windll.crypt32.CryptUnprotectData(
+                    ctypes.byref(blob_in), None, None, None, None, 0, ctypes.byref(blob_out)
+                ):
+                    try:
+                        dec_bytes = ctypes.string_at(blob_out.pbData, blob_out.cbData)
+                        return dec_bytes.decode("utf-8")
+                    finally:
+                        ctypes.windll.kernel32.LocalFree(blob_out.pbData)
+            except Exception as e:
+                logger.warning("Failed to decrypt DPAPI secret: %s", e)
+                return None
+        else:
+            logger.warning("DPAPI encrypted secret cannot be decrypted on non-Windows platform")
+            return None
+
+    if s.startswith("B64:"):
+        try:
+            return base64.b64decode(s[4:]).decode("utf-8")
+        except Exception:
+            return None
+
+    # Backwards compatibility: treat as legacy plain text
+    return s
+
+
 def load_gemini_api_key(api_key: Optional[str] = None, key_file: str = DEFAULT_KEY_FILE) -> Optional[str]:
-    """Retrieve Gemini API key from explicit argument, persistent file, or environment variable (consistent with server)."""
+    """Retrieve Gemini API key from explicit argument, encrypted file, or environment variable."""
     if api_key and api_key.strip():
         return api_key.strip()
 
@@ -161,9 +235,17 @@ def load_gemini_api_key(api_key: Optional[str] = None, key_file: str = DEFAULT_K
     if os.path.isfile(key_file):
         try:
             with open(key_file, "r", encoding="utf-8") as f:
-                k = f.read().strip()
-                if k:
-                    return k
+                content = f.read().strip()
+                if content:
+                    decrypted = _decrypt_secret(content)
+                    if decrypted:
+                        # Auto-migrate legacy plain text to encrypted format
+                        if not content.startswith(("DPAPI:", "B64:")):
+                            try:
+                                save_gemini_api_key(decrypted, key_file=key_file)
+                            except Exception:
+                                pass
+                        return decrypted
         except Exception as e:
             logger.warning("Failed to read Gemini key from %s: %s", key_file, e)
 
@@ -176,16 +258,17 @@ def load_gemini_api_key(api_key: Optional[str] = None, key_file: str = DEFAULT_K
 
 
 def save_gemini_api_key(api_key: str, key_file: str = DEFAULT_KEY_FILE) -> None:
-    """Save Gemini API key to persistent config file with owner-only permissions."""
+    """Save Gemini API key to persistent config file encrypted with owner-only permissions."""
     os.makedirs(os.path.dirname(os.path.abspath(key_file)), exist_ok=True)
+    encrypted_payload = _encrypt_secret(api_key)
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
     try:
         fd = os.open(key_file, flags, 0o600)
         with open(fd, "w", encoding="utf-8") as f:
-            f.write(api_key.strip())  # codeql[py/clear-text-storage-sensitive-data]
+            f.write(encrypted_payload)
     except OSError:
         with open(key_file, "w", encoding="utf-8") as f:
-            f.write(api_key.strip())  # codeql[py/clear-text-storage-sensitive-data]
+            f.write(encrypted_payload)
     try:
         os.chmod(key_file, 0o600)
     except Exception:

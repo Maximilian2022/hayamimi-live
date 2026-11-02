@@ -1,5 +1,5 @@
-﻿﻿﻿# --- バージョン管理 (version.txt を Single Source of Truth として動的同期) ---
-$script:AppVersion = "1.6.5"
+﻿# --- バージョン管理 (version.txt を Single Source of Truth として動的同期) ---
+$script:AppVersion = "1.6.6"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $versionTxtFile = Join-Path $repoRoot "version.txt"
 if (Test-Path $versionTxtFile) {
@@ -190,7 +190,7 @@ function Unblock-ProjectFiles {
                     }
             }
         }
-        # PowerShell 5.1 互換性のため .ps1 ファイルに UTF-8 BOM (EF BB BF) を保証
+        # PowerShell 5.1 互換性のため .ps1 ファイルに正確に単一の UTF-8 BOM (EF BB BF) を保証 (多重BOM自己治癒)
         $ps1Files = @(
             (Join-Path $RootDir "setup.ps1"),
             (Join-Path $RootDir "scripts\launcher_gui.ps1"),
@@ -200,8 +200,14 @@ function Unblock-ProjectFiles {
             if (Test-Path $pf) {
                 try {
                     $b = [System.IO.File]::ReadAllBytes($pf)
-                    if ($b.Length -ge 3 -and ($b[0] -ne 239 -or $b[1] -ne 187 -or $b[2] -ne 191)) {
-                        [System.IO.File]::WriteAllBytes($pf, ([byte[]]@(239, 187, 191) + $b))
+                    $offset = 0
+                    while ($offset + 3 -le $b.Length -and $b[$offset] -eq 239 -and $b[$offset+1] -eq 187 -and $b[$offset+2] -eq 191) {
+                        $offset += 3
+                    }
+                    if ($offset -ne 3) {
+                        $contentWithoutBom = if ($offset -gt 0) { $b[$offset..($b.Length - 1)] } else { $b }
+                        $singleBom = [byte[]]@(239, 187, 191)
+                        [System.IO.File]::WriteAllBytes($pf, ($singleBom + $contentWithoutBom))
                     }
                 } catch {}
             }
@@ -2794,18 +2800,22 @@ function Invoke-UpdateAppCode {
             $askRestart = Show-AppConfirm -Message "最新のソースコードを取得しました！`r`n`r`nランチャーGUIを最新版で再起動しますか？" -Title "本体更新の完了 - hayamimi"
             if ($askRestart -eq [System.Windows.MessageBoxResult]::Yes) {
                 Write-AppLog "ランチャーを再起動して最新コードを適用します..." "INFO"
-                $startVbs = Join-Path $ProjectRoot "start.vbs"
-                $startBat = Join-Path $ProjectRoot "start.bat"
                 try {
-                    if (Test-Path $startVbs) {
-                        Start-Process "wscript.exe" -ArgumentList "`"$startVbs`""
-                    } elseif (Test-Path $startBat) {
-                        Start-Process "cmd.exe" -ArgumentList "/c `"$startBat`""
-                    } else {
-                        Start-Process "pwsh.exe" -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptDir\launcher_gui.ps1`""
+                    # スマートアプリコントロール (SAC) 対策: 未署名 VBScript (wscript.exe) はブロックされるため絶対に使用しない。
+                    # 現在起動に成功している PowerShell プロセス自身で直接新しいランチャーを起動する。
+                    $currentPs = $null
+                    try {
+                        $currentPs = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+                    } catch {}
+                    if (-not $currentPs -or -not (Test-Path $currentPs)) {
+                        $currentPs = if ($PSVersionTable.PSEdition -eq "Core") { "pwsh.exe" } else { "powershell.exe" }
                     }
+                    Start-Process -FilePath $currentPs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ScriptDir\launcher_gui.ps1`""
                 } catch {
-                    Start-Process "powershell.exe" -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptDir\launcher_gui.ps1`""
+                    $startBat = Join-Path $ProjectRoot "start.bat"
+                    if (Test-Path $startBat) {
+                        Start-Process "cmd.exe" -ArgumentList "/c `"$startBat`""
+                    }
                 }
                 $window.Close()
                 return

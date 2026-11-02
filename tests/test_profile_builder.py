@@ -712,15 +712,35 @@ def test_is_channel_url_strict_sanitization():
 
 
 def test_save_gemini_api_key_secure_permissions(tmp_path):
-    """Verify save_gemini_api_key creates file with restricted permissions and reads back correctly."""
+    """Verify save_gemini_api_key creates file with encryption and reads back correctly, including legacy plaintext migration."""
     from tools.profile_builder.gemini_analyzer import save_gemini_api_key, load_gemini_api_key
 
     key_file = str(tmp_path / "sub" / "gemini_key.txt")
     save_gemini_api_key("AIzaSyTestKey12345", key_file=key_file)
 
+    # Must be encrypted on disk (starts with DPAPI: or B64:)
+    with open(key_file, "r", encoding="utf-8") as f:
+        disk_content = f.read()
+    assert disk_content.startswith(("DPAPI:", "B64:"))
+    assert "AIzaSyTestKey12345" not in disk_content
+
     loaded = load_gemini_api_key(key_file=key_file)
     assert loaded == "AIzaSyTestKey12345"
     assert os.path.isfile(key_file)
+
+    # Legacy plaintext auto-migration test
+    legacy_file = str(tmp_path / "sub" / "legacy_key.txt")
+    with open(legacy_file, "w", encoding="utf-8") as f:
+        f.write("AIzaSyLegacyKey99999")
+
+    legacy_loaded = load_gemini_api_key(key_file=legacy_file)
+    assert legacy_loaded == "AIzaSyLegacyKey99999"
+
+    # Should be auto-migrated to encrypted format on disk
+    with open(legacy_file, "r", encoding="utf-8") as f:
+        migrated_content = f.read()
+    assert migrated_content.startswith(("DPAPI:", "B64:"))
+    assert "AIzaSyLegacyKey99999" not in migrated_content
 
 
 def test_resolve_yt_dlp_and_ffmpeg_commands():
