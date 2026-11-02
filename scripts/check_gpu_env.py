@@ -36,12 +36,18 @@ def get_gpu_python_path() -> str:
     return os.path.join(venv_dir, "bin", "python")
 
 
-def get_marker_file_path() -> str:
+def get_marker_file_path(python_exe: str | None = None) -> str:
+    if python_exe:
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(python_exe)))
+        return os.path.join(base_dir, ".gpu_env_version")
     return os.path.join(get_gpu_venv_dir(), ".gpu_env_version")
 
 
-def read_marker_version() -> str | None:
-    marker = get_marker_file_path()
+def read_marker_version(python_exe: str | None = None) -> str | None:
+    try:
+        marker = get_marker_file_path(python_exe)
+    except TypeError:
+        marker = get_marker_file_path()
     if os.path.isfile(marker):
         try:
             with open(marker, "r", encoding="utf-8") as f:
@@ -51,19 +57,24 @@ def read_marker_version() -> str | None:
     return None
 
 
-def write_marker_version(ver: str = CURRENT_GPU_ENV_VERSION) -> bool:
+def write_marker_version(ver: str = CURRENT_GPU_ENV_VERSION, python_exe: str | None = None) -> bool:
     try:
-        os.makedirs(get_gpu_venv_dir(), exist_ok=True)
-        with open(get_marker_file_path(), "w", encoding="utf-8") as f:
+        try:
+            marker = get_marker_file_path(python_exe)
+        except TypeError:
+            marker = get_marker_file_path()
+        os.makedirs(os.path.dirname(marker), exist_ok=True)
+        with open(marker, "w", encoding="utf-8") as f:
             f.write(ver.strip())
         return True
     except Exception:
         return False
 
 
-def run_gpu_env_probe() -> dict:
+def run_gpu_env_probe(force: bool = False) -> dict:
     """
     .venv_gpu 内の Python を用いて、CUDA, DirectML, faster-whisper, peft の整合性を診断する。
+    マーカーファイルが最新で python.exe が存在する場合、force=True でない限り Fast Path (即座に ready) を返す。
     """
     python_exe = get_gpu_python_path()
     if not os.path.isfile(python_exe):
@@ -74,6 +85,17 @@ def run_gpu_env_probe() -> dict:
             "gpu_python": python_exe,
             "current_version": CURRENT_GPU_ENV_VERSION,
             "installed_version": None,
+        }
+
+    installed_version = read_marker_version(python_exe)
+    if not force and installed_version == CURRENT_GPU_ENV_VERSION:
+        return {
+            "status": "ready",
+            "ready": True,
+            "message": "GPU (CUDA) 環境は正常にセットアップされています (Fast Path)。",
+            "gpu_python": python_exe,
+            "installed_version": CURRENT_GPU_ENV_VERSION,
+            "fast_path": True,
         }
 
     probe_code = (
@@ -222,7 +244,7 @@ def run_gpu_env_probe() -> dict:
         }
 
     # 健全性確認完了 -> マーカーファイルを最新化
-    write_marker_version(CURRENT_GPU_ENV_VERSION)
+    write_marker_version(CURRENT_GPU_ENV_VERSION, python_exe)
 
     return {
         "status": "ready",
@@ -240,6 +262,7 @@ def main():
     parser = argparse.ArgumentParser(description="GPU Venv Health Checker")
     parser.add_argument("--json", action="store_true", default=True, help="Output JSON")
     parser.add_argument("--write-marker", action="store_true", help="Write version marker")
+    parser.add_argument("--force", action="store_true", help="Force deep probe even if marker is present")
     args = parser.parse_args()
 
     if args.write_marker:
@@ -247,7 +270,7 @@ def main():
         print(f"Marker written: {CURRENT_GPU_ENV_VERSION}")
         return
 
-    result = run_gpu_env_probe()
+    result = run_gpu_env_probe(force=args.force)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     if not result.get("ready"):
         sys.exit(1)

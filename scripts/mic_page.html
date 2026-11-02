@@ -1088,7 +1088,10 @@
             </div>
             <div class="form-row">
               <label for="obs-ws-password" style="width: 140px;">サーバーパスワード:</label>
-              <input type="password" id="obs-ws-password" placeholder="パスワード（未設定の場合は空欄）">
+              <div style="display: flex; gap: 0.4rem; flex: 1; align-items: center;">
+                <input type="password" id="obs-ws-password" placeholder="OBSのパスワード（OBS側で認証有効時は入力必須）" style="flex: 1;">
+                <button type="button" id="btn-toggle-obs-pwd" class="btn-copy" style="padding: 0.35rem 0.6rem; font-size: 0.8rem;" title="パスワードの表示/非表示">👁</button>
+              </div>
             </div>
             <div class="form-row">
               <label for="obs-target-source" style="width: 140px;">監視マイクソース:</label>
@@ -1100,6 +1103,9 @@
             <div style="display: flex; gap: 0.6rem; margin-top: 0.8rem; align-items: center; flex-wrap: wrap;">
               <button id="btn-obs-reconnect" class="btn-copy" style="padding: 0.4rem 1rem;">
                 🔄 OBS に再接続
+              </button>
+              <button id="btn-obs-probe" class="btn-copy" style="padding: 0.4rem 1rem; background: #253350; border-color: #3B82F6; color: #60A5FA;">
+                🔍 接続診断テスト
               </button>
               <button id="btn-obs-save" class="btn-copy" style="padding: 0.4rem 1rem;">
                 💾 設定を保存
@@ -1117,7 +1123,7 @@
                 <li>上部メニューの「<strong>ツール (Tools)</strong>」→「<strong>WebSocket サーバー設定 (WebSocket Server Settings)</strong>」を開きます。</li>
                 <li>「<strong>WebSocket サーバーを有効にする</strong>」にチェックを入れます。</li>
                 <li><strong>サーバーポート</strong>が「<code style="color: var(--blue);">4455</code>」になっていることを確認します。</li>
-                <li>「<strong>認証を有効にする</strong>」にチェックが入っている場合は、表示されているパスワードを上記「サーバーパスワード」欄に入力してください（パスワードを無効にすれば空欄のままで動作します）。</li>
+                <li>「<strong>認証を有効にする</strong>」にチェックが入っている場合は、「<strong>サーバーパスワードを表示</strong>」をクリックして表示された文字列をコピーし、上記「サーバーパスワード」欄に入力してください（※チェックを外して無効化すれば、パスワード不要の空欄のままでも接続できます）。</li>
                 <li>「<strong>適用</strong>」をクリックしてダイアログを閉じます。</li>
                 <li>早耳を先に起動している場合は、上記の「<strong>🔄 OBS に再接続</strong>」ボタンをクリックすると即座に接続されます（未接続の場合も数秒おきに自動で再接続を試みます）。</li>
               </ol>
@@ -3286,7 +3292,9 @@
       this.passwordInput = document.getElementById("obs-ws-password");
       this.sourceSelect = document.getElementById("obs-target-source");
       this.reconnectBtn = document.getElementById("btn-obs-reconnect");
+      this.probeBtn = document.getElementById("btn-obs-probe");
       this.saveBtn = document.getElementById("btn-obs-save");
+      this.togglePwdBtn = document.getElementById("btn-toggle-obs-pwd");
       this.reconnectMsg = document.getElementById("obs-reconnect-msg");
 
       this.loadSettings();
@@ -3399,7 +3407,74 @@
       }
     }
 
+    async logToServer(level, message, details = "") {
+      try {
+        await fetch("/api/obs-log", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ level, message, details }),
+        });
+      } catch (_) {}
+    }
+
+    async probeServer(showFeedback = true) {
+      if (showFeedback && this.reconnectMsg) {
+        this.reconnectMsg.textContent = "🔍 OBS 接続を診断中...";
+      }
+      try {
+        const res = await fetch("/api/obs-probe", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            url: this.url,
+            password: this.password,
+          }),
+        });
+        if (res.ok) {
+          const diag = await res.json();
+          if (diag.status === "auth_required") {
+            this.updateStatus("error", "⚠️ 要パスワード (OBS設定を確認)");
+            if (this.reconnectMsg) {
+              this.reconnectMsg.innerHTML = '<span style="color: #F87171;">⚠️ OBS 側でパスワード認証が有効です。上の「サーバーパスワード」欄に入力してください。</span>';
+            }
+          } else if (diag.status === "connected") {
+            this.updateStatus("connected", "OBS疎通確認OK");
+            if (this.reconnectMsg) {
+              this.reconnectMsg.innerHTML = `<span style="color: #34D399;">✔ OBS サーバー (v${diag.obs_version || '5'}) との疎通・認証に成功しました！</span>`;
+              setTimeout(() => { if (this.reconnectMsg) this.reconnectMsg.textContent = ""; }, 4000);
+            }
+          } else if (diag.status === "connection_refused") {
+            this.updateStatus("disconnected", "未接続 (OBS未起動/ポート不通)");
+            if (this.reconnectMsg) {
+              this.reconnectMsg.innerHTML = '<span style="color: #F87171;">❌ OBS Studio が起動していないか、[ツール]->[WebSocket サーバー設定] が無効です。</span>';
+            }
+          } else {
+            if (this.reconnectMsg) {
+              this.reconnectMsg.innerHTML = `<span style="color: #F87171;">⚠️ ${diag.message}</span>`;
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("OBS probe error:", err);
+      }
+    }
+
     bindEvents() {
+      if (this.togglePwdBtn && this.passwordInput) {
+        this.togglePwdBtn.addEventListener("click", () => {
+          const isPwd = this.passwordInput.type === "password";
+          this.passwordInput.type = isPwd ? "text" : "password";
+          this.togglePwdBtn.textContent = isPwd ? "🙈" : "👁";
+        });
+      }
+
+      if (this.probeBtn) {
+        this.probeBtn.addEventListener("click", () => {
+          this.saveSettings();
+          this.probeServer(true);
+        });
+      }
+
       if (this.toggleEl) {
         this.toggleEl.addEventListener("change", () => {
           this.enabled = this.toggleEl.checked;
@@ -3418,6 +3493,7 @@
         this.reconnectBtn.addEventListener("click", () => {
           this.saveSettings();
           this.connect(true);
+          this.probeServer(true);
         });
       }
 
@@ -3426,6 +3502,7 @@
           this.saveSettings();
           if (this.enabled) {
             this.connect(true);
+            this.probeServer(true);
           }
         });
       }
@@ -3507,11 +3584,13 @@
       }
 
       this.updateStatus("connecting", isManual ? "再接続中…" : "接続試行中…");
+      this.logToServer("info", "OBS WebSocket 接続試行: " + this.url);
 
       try {
         this.ws = new WebSocket(this.url);
       } catch (e) {
         this.updateStatus("disconnected", "接続不可 (URL不正)");
+        this.logToServer("error", "OBS WebSocket URL不正: " + this.url, String(e));
         this.scheduleReconnect();
         return;
       }
@@ -3538,13 +3617,18 @@
         }
       };
 
-      this.ws.onerror = () => {};
+      this.ws.onerror = (e) => {
+        console.warn("OBS WS error:", e);
+        this.logToServer("warn", "OBS WebSocket 通信エラー発生", this.url);
+      };
 
-      this.ws.onclose = () => {
+      this.ws.onclose = (e) => {
         this.ws = null;
         this.setMuteState(false);
         if (this.enabled) {
-          this.updateStatus("disconnected", "未接続 (OBS未起動)");
+          const reason = (e && e.code === 1006) ? "未接続 (OBS未起動またはポート拒否)" : "未接続 (OBS未起動)";
+          this.updateStatus("disconnected", reason);
+          this.logToServer("info", `OBS WebSocket 切断 (${reason}, code: ${e ? e.code : 'unknown'})`);
           this.scheduleReconnect();
         }
       };
@@ -3577,7 +3661,11 @@
 
       if (d.authentication) {
         if (!this.password) {
-          this.updateStatus("error", "パスワードが必要です");
+          this.updateStatus("error", "⚠️ 要パスワード (OBS設定を確認)");
+          this.logToServer("warn", "OBS WebSocket 接続中断: OBS側で認証が有効ですが、パスワードが未入力です");
+          if (this.reconnectMsg) {
+            this.reconnectMsg.innerHTML = '<span style="color: #F87171;">⚠️ OBS 側でパスワード認証が有効です。OBSの「ツール」→「WebSocketサーバー設定」のパスワードを入力してください。</span>';
+          }
           return;
         }
         const auth = await this.computeAuth(this.password, d.authentication.salt, d.authentication.challenge);

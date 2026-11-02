@@ -189,3 +189,22 @@ def test_probe_ready_success(tmp_path, monkeypatch):
         assert res["device_name"] == "NVIDIA GeForce RTX 5090"
         assert read_marker_version() == CURRENT_GPU_ENV_VERSION
 
+
+def test_probe_fast_path(tmp_path, monkeypatch):
+    """マーカーファイルが一致する場合、subprocessを実行せずFast Pathで即座にreadyを返すこと"""
+    fake_py = tmp_path / "python.exe"
+    fake_py.write_text("#!/bin/sh\n")
+    marker = tmp_path / ".gpu_env_version"
+    marker.write_text(CURRENT_GPU_ENV_VERSION, encoding="utf-8")
+
+    monkeypatch.setattr("scripts.check_gpu_env.get_gpu_python_path", lambda: str(fake_py))
+    monkeypatch.setattr("scripts.check_gpu_env.get_marker_file_path", lambda *args: str(marker))
+
+    with patch("subprocess.run") as mock_sub:
+        res = run_gpu_env_probe()
+        assert res["ready"] is True
+        assert res["status"] == "ready"
+        assert res.get("fast_path") is True
+        mock_sub.assert_not_called()
+
+

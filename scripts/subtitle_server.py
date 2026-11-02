@@ -1596,6 +1596,16 @@ class SubtitleServer:
                         self._json(500, {"error": str(e)})
                 elif req_path == "/api/obs-config":
                     self._json(200, _get_saved_obs_config())
+                elif req_path == "/api/obs-probe":
+                    saved_obs = _get_saved_obs_config()
+                    target_url = query.get("url", [saved_obs.get("url", "ws://127.0.0.1:4455")])[0]
+                    target_pwd = query.get("password", [saved_obs.get("password", "")])[0]
+                    try:
+                        from scripts.obs_probe import probe_obs_connection
+                        res = probe_obs_connection(url=target_url, password=target_pwd, timeout=2.5, log_to_stderr=True)
+                        self._json(200, res)
+                    except Exception as e:
+                        self._json(500, {"ok": False, "status": "error", "message": f"OBS診断実行エラー: {e}"})
                 elif req_path == "/api/profiles/lora/status":
                     sid = query.get("speaker_id", [None])[0]
                     if not sid:
@@ -1944,6 +1954,30 @@ class SubtitleServer:
                         return
                     saved = _save_obs_config(payload)
                     self._json(200, {"ok": True, **saved})
+                    return
+                if req_path == "/api/obs-probe":
+                    code, payload = self._read_json_body()
+                    req_dict = payload if (code == 200 and isinstance(payload, dict)) else {}
+                    saved_obs = _get_saved_obs_config()
+                    target_url = req_dict.get("url") or saved_obs.get("url") or "ws://127.0.0.1:4455"
+                    target_pwd = req_dict.get("password") if req_dict.get("password") is not None else saved_obs.get("password", "")
+                    try:
+                        from scripts.obs_probe import probe_obs_connection
+                        res = probe_obs_connection(url=target_url, password=target_pwd, timeout=2.5, log_to_stderr=True)
+                        self._json(200, res)
+                    except Exception as e:
+                        self._json(500, {"ok": False, "status": "error", "message": f"OBS診断実行エラー: {e}"})
+                    return
+                if req_path == "/api/obs-log":
+                    code, payload = self._read_json_body()
+                    if code == 200 and isinstance(payload, dict):
+                        level = str(payload.get("level", "info")).upper()
+                        msg = str(payload.get("message", ""))
+                        details = str(payload.get("details", ""))
+                        det_str = f" ({details})" if details else ""
+                        sys.stderr.write(f"[OBS-{level}] {msg}{det_str}\n")
+                        sys.stderr.flush()
+                    self._json(200, {"ok": True})
                     return
                 if req_path == "/api/profiles/lora/train":
                     code, payload = self._read_json_body()

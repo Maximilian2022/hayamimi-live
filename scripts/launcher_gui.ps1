@@ -1,4 +1,4 @@
-$script:AppVersion = "2.2.2"
+﻿$script:AppVersion = "2.2.3"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $versionTxtFile = Join-Path $repoRoot "version.txt"
 if (Test-Path $versionTxtFile) {
@@ -540,7 +540,7 @@ function Update-ContainerLogFile {
 [xml]$xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Hayamimi Live ランチャー (GUI v2.2.2)"
+        Title="Hayamimi Live ランチャー (GUI v2.2.3)"
         Height="780" Width="780"
         MinHeight="680" MinWidth="720"
         WindowStartupLocation="CenterScreen"
@@ -618,7 +618,7 @@ function Update-ContainerLogFile {
                         <TextBlock x:Name="GpuBadge" Text="⚡ GPU: 検出中..." FontSize="11" Foreground="#10B981" FontWeight="SemiBold"/>
                     </Border>
                     <Border Background="#1E1B4B" CornerRadius="12" Padding="10,5" Margin="0,0,8,0" BorderBrush="#4338CA" BorderThickness="1">
-                        <TextBlock x:Name="VersionBadge" Text="GUI v2.2.2" FontSize="11" Foreground="#A5B4FC" FontWeight="Bold" FontFamily="{StaticResource MonoFont}"/>
+                        <TextBlock x:Name="VersionBadge" Text="GUI v2.2.3" FontSize="11" Foreground="#A5B4FC" FontWeight="Bold" FontFamily="{StaticResource MonoFont}"/>
                     </Border>
                     <Border Background="#141B2D" CornerRadius="12" Padding="10,5" BorderBrush="#253350" BorderThickness="1">
                         <TextBlock x:Name="RuntimeBadge" Text="Python venv" FontSize="11" Foreground="#38BDF8" FontWeight="SemiBold"/>
@@ -2386,17 +2386,22 @@ function Stop-PythonVenvApp {
         Write-AppLog "Python プロセスを停止しています..." "INFO"
     }
 
+    $killed = $false
     if ($script:ProcPython -and -not $script:ProcPython.HasExited) {
         try {
             Start-Process taskkill.exe -ArgumentList "/PID $($script:ProcPython.Id) /T /F" -Wait -NoNewWindow
+            $killed = $true
         } catch {}
     }
 
-    try {
-        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like "*realtime_transcribe.py*" } | ForEach-Object {
-            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
-        }
-    } catch {}
+    # 通常は taskkill で即座に終了。未登録やゾンビ残存時のみ WMI クエリで残骸プロセスをスキャン回収 (高速化)
+    if (-not $killed -or (Test-AppRunning)) {
+        try {
+            Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like "*realtime_transcribe.py*" } | ForEach-Object {
+                Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+            }
+        } catch {}
+    }
 
     $script:ProcPython = $null
     if ($initProgressBar) { $initProgressBar.Visibility = "Collapsed" }
