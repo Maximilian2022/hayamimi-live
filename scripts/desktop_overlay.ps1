@@ -63,19 +63,7 @@ if (-not ([System.Management.Automation.PSTypeName]'OverlayWin32').Type) {
 
         [void]$dynType.CreateType()
     } catch {
-        try {
-            Add-Type -TypeDefinition @"
-using System;
-using System.Runtime.InteropServices;
-public class OverlayWin32 {
-    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
-    [DllImport("user32.dll")] public static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
-    [DllImport("user32.dll")] public static extern bool UnregisterHotKey(IntPtr hWnd, int id);
-    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtr")] public static extern IntPtr GetWindowLongPtr(IntPtr hWnd, int nIndex);
-    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtr")] public static extern IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
-}
-"@ -ErrorAction SilentlyContinue
-        } catch {}
+        # SAC 対策: Add-Type -TypeDefinition による動的 C# コンパイル (%TEMP% 未署名一時 DLL 生成) は実行せず安全に抑止
     }
 }
 

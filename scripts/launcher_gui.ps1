@@ -178,7 +178,8 @@ function Unblock-ProjectFiles {
         $subDirs = @(
             (Join-Path $RootDir "scripts"),
             (Join-Path $RootDir "tools"),
-            (Join-Path $RootDir ".venv\Scripts")
+            (Join-Path $RootDir ".venv\Scripts"),
+            (Join-Path $RootDir ".venv_gpu\Scripts")
         )
         foreach ($d in $subDirs) {
             if (Test-Path $d) {
@@ -1987,13 +1988,16 @@ function Ensure-GpuVenvReady {
         $msg = "⚠️ 旧バージョン (v2.0.0 以前) の DirectML 環境が残留しているため、最新の CUDA 環境に再構築（自己修復）が必要です。`r`n`r`n今すぐ自動再構築を実行しますか？"
     } elseif ($diag.status -eq "incompatible_python") {
         $msg = "⚠️ GPU仮想環境の Python バージョンが PyTorch CUDA 未対応です。`r`n`r`n安定した Python 3.12 環境へ自動再構築しますか？"
+    } elseif ($diag.status -eq "incomplete") {
+        $msg = "⚠️ GPU環境に不足パッケージが検出されました: $($diag.message)`r`n`r`n差分パッケージを高速インストール（約10〜30秒）して修復しますか？"
     } else {
         $msg = "⚠️ GPU環境に不整合または不足パッケージが検出されました: $($diag.message)`r`n`r`nGPU環境を修復・再セットアップしますか？"
     }
 
     $ans = Show-AppConfirm -Message $msg -Title $title
     if ($ans -eq [System.Windows.MessageBoxResult]::Yes) {
-        $setupRes = Invoke-SetupGpuVenv -ForceRecreate ($diag.status -eq "incompatible_directml" -or $diag.status -eq "incompatible_python" -or $diag.status -eq "error")
+        $force = ($diag.status -eq "incompatible_directml" -or $diag.status -eq "incompatible_python" -or $diag.status -eq "error" -or $diag.status -eq "no_cuda")
+        $setupRes = Invoke-SetupGpuVenv -ForceRecreate $force
         return $setupRes
     }
     return $false

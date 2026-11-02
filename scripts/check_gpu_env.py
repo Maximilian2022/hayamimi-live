@@ -18,7 +18,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 
-CURRENT_GPU_ENV_VERSION = "cuda_v2.2.1"
+CURRENT_GPU_ENV_VERSION = "cuda_v2.2.2"
 
 
 def get_project_root() -> str:
@@ -112,12 +112,22 @@ def run_gpu_env_probe() -> dict:
         "except Exception:\n"
         "    res['peft'] = False\n"
         "try:\n"
+        "    import ctypes\n"
+        "    ctypes.CDLL('cublas64_12.dll')\n"
+        "    res['cublas_available'] = True\n"
+        "except Exception as e:\n"
+        "    res['cublas_available'] = False\n"
+        "    res['cublas_error'] = str(e)\n"
+        "try:\n"
         "    import ctranslate2\n"
         "    res['ctranslate2'] = True\n"
-        "    res['ctranslate2_cuda'] = 'cuda' in ctranslate2.get_supported_compute_types('cuda')\n"
-        "except Exception:\n"
+        "    types = ctranslate2.get_supported_compute_types('cuda')\n"
+        "    res['ctranslate2_cuda'] = len(types) > 0 and res.get('cublas_available', False)\n"
+        "    res['ctranslate2_types'] = list(types)\n"
+        "except Exception as e:\n"
         "    res['ctranslate2'] = False\n"
         "    res['ctranslate2_cuda'] = False\n"
+        "    res['ctranslate2_error'] = str(e)\n"
         "print(json.dumps(res))\n"
     )
 

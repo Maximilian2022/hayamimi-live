@@ -22,10 +22,14 @@ from typing import Callable, Optional
 import numpy as np
 
 try:
-    from scripts.cuda_utils import setup_cuda_dll_path
+    from cuda_utils import setup_cuda_dll_path
     setup_cuda_dll_path()
 except Exception:
-    pass
+    try:
+        from scripts.cuda_utils import setup_cuda_dll_path
+        setup_cuda_dll_path()
+    except Exception:
+        pass
 
 try:
     import itn_cjk
@@ -124,23 +128,39 @@ class WhisperCUDAEngine:
                 if fb not in candidate_models:
                     candidate_models.append(fb)
 
-            # 1. CUDA でのロード試行 (候補モデル順)
+            # 1. CUDA でのロード試行 (候補モデル順 & compute_type 自動探索)
             if self.device == "cuda":
+                # 指定の compute_type を最優先し、フォールバック候補を試行
+                compute_types = [self.compute_type]
+                for ct_fb in ["default", "int8_float16", "int8", "float32"]:
+                    if ct_fb not in compute_types:
+                        compute_types.append(ct_fb)
+
                 for cand in candidate_models:
-                    try:
-                        logger.info(f"Loading WhisperModel({cand}, device=cuda, compute_type={self.compute_type})...")
-                        self.model = WhisperModel(
-                            cand,
-                            device="cuda",
-                            device_index=self.device_index,
-                            compute_type=self.compute_type,
-                            cpu_threads=threads,
-                        )
-                        self.model_path = cand
-                        logger.info(f"WhisperCUDAEngine loaded successfully on {self.device_name} ({cand})")
+                    if self.model is not None:
                         break
-                    except Exception as e:
-                        logger.warning(f"Failed to load Faster-Whisper on cuda with {cand}: {e}")
+                    for ct in compute_types:
+                        try:
+                            msg = f"Loading WhisperModel({cand}, device=cuda, compute_type={ct})..."
+                            logger.info(msg)
+                            print(f"[whisper_cuda] {msg}", file=sys.stderr, flush=True)
+                            self.model = WhisperModel(
+                                cand,
+                                device="cuda",
+                                device_index=self.device_index,
+                                compute_type=ct,
+                                cpu_threads=threads,
+                            )
+                            self.model_path = cand
+                            self.compute_type = ct
+                            success_msg = f"WhisperCUDAEngine loaded successfully on {self.device_name} ({cand}, compute_type={ct})"
+                            logger.info(success_msg)
+                            print(f"[whisper_cuda] ✔ {success_msg}", file=sys.stderr, flush=True)
+                            break
+                        except Exception as e:
+                            err_msg = f"Failed to load Faster-Whisper on cuda ({cand}, compute_type={ct}): {type(e).__name__}: {e}"
+                            logger.warning(err_msg)
+                            print(f"[whisper_cuda] ⚠ {err_msg}", file=sys.stderr, flush=True)
 
             # 2. CUDA で全滅または CPU 指定時の CPU フォールバック試行
             if self.model is None:
@@ -149,7 +169,9 @@ class WhisperCUDAEngine:
                 self.device_name = "CPU (Fallback)"
                 for cand in candidate_models:
                     try:
-                        logger.info(f"Retrying WhisperModel({cand}) on CPU...")
+                        msg = f"Retrying WhisperModel({cand}) on CPU..."
+                        logger.info(msg)
+                        print(f"[whisper_cuda] {msg}", file=sys.stderr, flush=True)
                         self.model = WhisperModel(
                             cand,
                             device="cpu",
@@ -157,15 +179,23 @@ class WhisperCUDAEngine:
                             cpu_threads=threads,
                         )
                         self.model_path = cand
-                        logger.info(f"WhisperCUDAEngine loaded successfully on CPU fallback ({cand})")
+                        success_msg = f"WhisperCUDAEngine loaded successfully on CPU fallback ({cand})"
+                        logger.info(success_msg)
+                        print(f"[whisper_cuda] ✔ {success_msg}", file=sys.stderr, flush=True)
                         break
                     except Exception as e2:
-                        logger.warning(f"Failed to load Faster-Whisper on CPU with {cand}: {e2}")
+                        err_msg = f"Failed to load Faster-Whisper on CPU with {cand}: {type(e2).__name__}: {e2}"
+                        logger.warning(err_msg)
+                        print(f"[whisper_cuda] ⚠ {err_msg}", file=sys.stderr, flush=True)
 
             if self.model is None:
-                logger.error("Failed to load any Faster-Whisper model on either CUDA or CPU.")
+                err_fatal = "Failed to load any Faster-Whisper model on either CUDA or CPU."
+                logger.error(err_fatal)
+                print(f"[whisper_cuda] ✖ {err_fatal}", file=sys.stderr, flush=True)
         else:
-            logger.warning("faster-whisper is not installed. Running in mock/fallback mode.")
+            warn_no_fw = "faster-whisper is not installed. Running in mock/fallback mode."
+            logger.warning(warn_no_fw)
+            print(f"[whisper_cuda] ⚠ {warn_no_fw}", file=sys.stderr, flush=True)
 
         # partial キャッシュ
         self._last_partial_text = ""

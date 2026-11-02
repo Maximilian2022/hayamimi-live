@@ -8,7 +8,7 @@ where pwsh >nul 2>&1
 if %errorlevel% equ 0 set "PS_CMD=pwsh"
 
 :: Remove Mark of the Web (Zone.Identifier) from scripts & tools to prevent Smart App Control / SmartScreen blocks (P-1: .venv除外で起動高速化)
-%PS_CMD% -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command "try { Get-ChildItem -LiteralPath '%~dp0' -File -ErrorAction SilentlyContinue | Unblock-File -ErrorAction SilentlyContinue; foreach ($d in @('%~dp0scripts', '%~dp0tools', '%~dp0.venv\Scripts')) { if (Test-Path $d) { Get-ChildItem -LiteralPath $d -Recurse -File -ErrorAction SilentlyContinue | Unblock-File -ErrorAction SilentlyContinue } } } catch {}"
+%PS_CMD% -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command "try { Get-ChildItem -LiteralPath '%~dp0' -File -ErrorAction SilentlyContinue | Unblock-File -ErrorAction SilentlyContinue; foreach ($d in @('%~dp0scripts', '%~dp0tools', '%~dp0.venv\Scripts', '%~dp0.venv_gpu\Scripts')) { if (Test-Path $d) { Get-ChildItem -LiteralPath $d -Recurse -File -ErrorAction SilentlyContinue | Unblock-File -ErrorAction SilentlyContinue } } } catch {}"
 
 :: Smart App Control (SAC) 判定:
 :: Windows 11 の SAC 有効時 (0x1) は未署名 VBScript (wscript.exe) がブロックされるため、直接 PowerShell で起動
