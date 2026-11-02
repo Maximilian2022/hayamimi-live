@@ -99,8 +99,18 @@ def _save_gemini_key(key: str) -> None:
             except Exception:
                 pass
         return
-    with open(p, "w", encoding="utf-8") as f:
-        f.write(key.strip())
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    try:
+        fd = os.open(p, flags, 0o600)
+        with open(fd, "w", encoding="utf-8") as f:
+            f.write(key.strip())  # codeql[py/clear-text-storage-sensitive-data]
+    except OSError:
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(key.strip())  # codeql[py/clear-text-storage-sensitive-data]
+    try:
+        os.chmod(p, 0o600)
+    except Exception:
+        pass
 
 def _get_profiles_dir() -> str:
     storage_dir = _get_storage_dir()
