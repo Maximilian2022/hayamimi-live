@@ -118,6 +118,19 @@ class WhisperCUDAEngine:
         self.model = None
         self.model_path = model_size_or_path or DEFAULT_MODEL_SIZE
 
+        # アクティブプロファイルの LoRA ディレクトリを自動探索
+        if not self.lora_dir:
+            try:
+                from scripts.config_store import get_storage_dir, get_saved_active_speaker_id
+                act_sid = get_saved_active_speaker_id()
+                if act_sid:
+                    cand_lora = os.path.join(get_storage_dir(), "profiles", f"{act_sid}_lora")
+                    if os.path.isdir(cand_lora):
+                        self.lora_dir = cand_lora
+                        logger.info(f"Auto-detected active speaker LoRA directory: {cand_lora}")
+            except Exception:
+                pass
+
         # LoRA アダプタマージ済みモデルがある場合はそちらを優先
         if self.lora_dir and os.path.isdir(self.lora_dir):
             merged_ct2 = os.path.join(self.lora_dir, "ctranslate2")

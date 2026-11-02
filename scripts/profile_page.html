@@ -985,6 +985,45 @@
   </div>
 </div>
 
+<!-- Voiceprint Recording Modal (GPU Mode Only) -->
+<div id="voiceprintModal" class="modal-backdrop">
+  <div class="modal" style="max-width: 540px;">
+    <div class="modal-header">
+      <div class="modal-title">🎙️ 話者声紋の手動録音・登録 (GPU / LoRA用)</div>
+      <button id="btnCloseVpModal" class="btn btn-secondary" style="padding: 4px 10px;">✕</button>
+    </div>
+    <div class="modal-body" style="display: flex; flex-direction: column; gap: 14px;">
+      <div style="font-size: 0.84rem; color: var(--paper-dim); line-height: 1.5;">
+        対象プロファイル: <b id="vpTargetSpeakerName" style="color: var(--blue);">--</b>
+      </div>
+      <div style="background: rgba(91, 127, 212, 0.1); border: 1px solid rgba(91, 127, 212, 0.3); border-radius: var(--radius-sm); padding: 12px; font-size: 0.8rem; color: var(--paper);">
+        💡 <b>録音のコツ（約10〜15秒）:</b><br>
+        マイクに向かって、いつもの配信オープニング挨拶（例: <i>「こんにちは、〇〇です！今日も配信を始めていきます、よろしくお願いします〜」</i>）などをリラックスしてお話しください。<br>
+        声紋（512次元）を確定することで、YouTube動画から<b>コメント読み上げやゲーム音を100%除外し、本人の声だけを厳選して LoRA を学習</b>できるようになります。
+      </div>
+
+      <div style="display: flex; flex-direction: column; align-items: center; gap: 10px; margin: 10px 0;">
+        <button type="button" id="btnRecordVpStart" class="btn btn-primary" style="padding: 10px 24px; font-size: 1rem; border-radius: 24px;">
+          🎙️ 録音を開始する
+        </button>
+        <button type="button" id="btnRecordVpStop" class="btn btn-danger" style="display: none; padding: 10px 24px; font-size: 1rem; border-radius: 24px;">
+          ■ 録音を完了して登録
+        </button>
+        <div id="vpRecordStatus" style="font-size: 0.85rem; color: var(--paper-muted); font-family: var(--mono); min-height: 1.4rem;">
+          待機中
+        </div>
+        <div id="vpProgressWrap" style="display: none; width: 100%; background: var(--ink-2); height: 8px; border-radius: 4px; overflow: hidden; border: 1px solid var(--line);">
+          <div id="vpProgressBar" style="width: 0%; height: 100%; background: var(--blue); transition: width 0.1s linear;"></div>
+        </div>
+      </div>
+      <div id="vpFeedbackMsg" style="font-size: 0.82rem; min-height: 1.2rem; text-align: center;"></div>
+    </div>
+    <div class="modal-footer">
+      <button id="btnCancelVp" class="btn btn-secondary">閉じる</button>
+    </div>
+  </div>
+</div>
+
 <script>
   let profiles = [];
   let activeProfileId = null;
@@ -994,6 +1033,14 @@
   let pollTimer = null;
   let isTaskRunning = false;
   let hasApiKey = false;
+  let isGpuMode = false;
+  let vpRecordingSpeakerId = null;
+  let vpAudioContext = null;
+  let vpMediaStream = null;
+  let vpAudioProcessor = null;
+  let vpRecordedSamples = [];
+  let vpRecordTimer = null;
+  let vpRecordStartTime = 0;
 
   // 誤ってタブを閉じる/リロードする操作への離脱ガード
   window.addEventListener("beforeunload", (e) => {
@@ -1005,11 +1052,24 @@
   });
 
   async function init() {
+    await checkSystemMode();
     await checkActiveProfile();
     await checkApiKey();
     await loadProfiles();
     setupDropzone();
     await checkActiveTask(); // F5やタブ再オープン時の自動復旧
+  }
+
+  async function checkSystemMode() {
+    try {
+      const res = await fetch("/api/system/mode");
+      if (res.ok) {
+        const d = await res.json();
+        isGpuMode = !!d.is_gpu_mode;
+      }
+    } catch (e) {
+      console.warn("Failed to check system mode:", e);
+    }
   }
 
   async function checkActiveProfile() {
@@ -1355,6 +1415,7 @@
               <div class="profile-card-id">${escapeHtml(p.speaker_id)}</div>
             </div>
             <div style="display:flex; gap:6px; align-items:center;">
+              ${p.has_lora ? '<span class="badge" style="background:rgba(224, 79, 47, 0.18); color:#F87171; border:1px solid rgba(224, 79, 47, 0.4); font-size:0.7rem; padding: 2px 7px;">🔥 LoRA学習済</span>' : ''}
               ${p.voiceprint && p.voiceprint.length ? '<span class="badge" style="background:rgba(91, 127, 212, 0.15); color:#8da6e8; border:1px solid rgba(91, 127, 212, 0.35); font-size:0.7rem; padding: 2px 7px;">🎙️ 声紋選別済</span>' : ''}
               ${p.speaker_id === activeProfileId ? '<span class="badge" style="background:var(--green); color:#fff; box-shadow:0 0 8px var(--green-glow); font-size:0.7rem; padding: 2px 7px;">適用中</span>' : ''}
             </div>
@@ -1364,6 +1425,7 @@
             ${p.archived_replacements && p.archived_replacements.length ? `<span style="color: var(--paper-muted);">休眠: <b>${p.archived_replacements.length}</b> 件</span>` : ''}
             <span style="color: var(--gold);">学習動画: <b>${vCount}</b> 本</span>
             <span>声紋: <b style="color: ${p.voiceprint && p.voiceprint.length ? 'var(--blue)' : 'var(--paper-muted)'}">${p.voiceprint && p.voiceprint.length ? '学習済' : '未学習'}</b></span>
+            ${isGpuMode ? `<span>LoRA: <b style="color: ${p.has_lora ? '#F87171' : 'var(--paper-muted)'}">${p.has_lora ? '学習済 (11MB)' : '未学習'}</b></span>` : ''}
             <span>🛡️ コラボ除外: <b style="color: ${p.collab_filter_enabled !== false ? 'var(--green)' : 'var(--paper-muted)'}">${p.collab_filter_enabled !== false ? 'ON' : 'OFF'}</b></span>
             ${p.youtube_channel_url ? `<span style="color: var(--blue);">📺 チャンネル連携済</span>` : ''}
             ${p.extracted_section ? `<span>直近抽出: ${p.extracted_section.duration_sec}秒</span>` : ''}
@@ -1402,6 +1464,7 @@
         </div>
         <div class="profile-actions">
           <button class="btn btn-success btn-sm" onclick="applyProfile('${escapeHtml(p.speaker_id)}')" style="font-size:0.75rem; padding: 5px 10px;">⚡ 適用</button>
+          ${isGpuMode ? `<button class="btn btn-secondary btn-sm" onclick="openVoiceprintModal('${escapeHtml(p.speaker_id)}', '${escapeHtml(p.display_name)}')" style="font-size:0.75rem; padding: 5px 10px; border-color:#8da6e8; color:#8da6e8;" title="マイクから声紋を手動録音して登録">🎙️ 声紋録音</button>` : ''}
           <button class="btn btn-primary btn-sm" onclick="startGrowProfile('${escapeHtml(p.speaker_id)}')" style="font-size:0.75rem; padding: 5px 10px;">🌱 育てる</button>
           <button class="btn btn-secondary btn-sm" onclick="exportProfile('${escapeHtml(p.speaker_id)}')" style="font-size:0.75rem; padding: 5px 10px;">📤 出力</button>
           <button class="btn btn-secondary btn-sm" onclick="openEditModal('${escapeHtml(p.speaker_id)}')" style="font-size:0.75rem; padding: 5px 10px;">✏ 編集</button>
@@ -1962,7 +2025,170 @@
       .replace(/'/g, "&#39;");
   }
 
-  window.onload = init;
+// --- Voiceprint Audio Recording & WAV Encoding ---
+  window.openVoiceprintModal = function(speakerId, displayName) {
+    vpRecordingSpeakerId = speakerId;
+    document.getElementById("vpTargetSpeakerName").textContent = `${displayName} (${speakerId})`;
+    document.getElementById("vpRecordStatus").textContent = "準備完了: マイクを準備してください";
+    document.getElementById("vpFeedbackMsg").innerHTML = "";
+    document.getElementById("vpProgressWrap").style.display = "none";
+    document.getElementById("btnRecordVpStart").style.display = "inline-block";
+    document.getElementById("btnRecordVpStop").style.display = "none";
+    document.getElementById("voiceprintModal").classList.add("open");
+  };
+
+  function closeVoiceprintModal() {
+    stopVpRecording(false);
+    document.getElementById("voiceprintModal").classList.remove("open");
+  }
+
+  document.getElementById("btnCloseVpModal").onclick = closeVoiceprintModal;
+  document.getElementById("btnCancelVp").onclick = closeVoiceprintModal;
+
+  document.getElementById("btnRecordVpStart").onclick = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+      vpMediaStream = stream;
+      vpAudioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+      const source = vpAudioContext.createMediaStreamSource(stream);
+      vpAudioProcessor = vpAudioContext.createScriptProcessor(4096, 1, 1);
+      vpRecordedSamples = [];
+
+      vpAudioProcessor.onaudioprocess = (e) => {
+        const inputData = e.inputBuffer.getChannelData(0);
+        vpRecordedSamples.push(new Float32Array(inputData));
+      };
+
+      source.connect(vpAudioProcessor);
+      vpAudioProcessor.connect(vpAudioContext.destination);
+
+      document.getElementById("btnRecordVpStart").style.display = "none";
+      document.getElementById("btnRecordVpStop").style.display = "inline-block";
+      document.getElementById("vpProgressWrap").style.display = "block";
+      document.getElementById("vpFeedbackMsg").innerHTML = "";
+
+      vpRecordStartTime = Date.now();
+      const maxDurationSec = 15.0;
+
+      vpRecordTimer = setInterval(() => {
+        const elapsed = (Date.now() - vpRecordStartTime) / 1000;
+        const remaining = Math.max(0, maxDurationSec - elapsed);
+        const pct = Math.min(100, (elapsed / maxDurationSec) * 100);
+        document.getElementById("vpProgressBar").style.width = `${pct}%`;
+        document.getElementById("vpRecordStatus").innerHTML = `<span style="color:#F87171;">● 録音中...</span> (残り ${remaining.toFixed(1)} 秒)`;
+
+        if (elapsed >= maxDurationSec) {
+          stopVpRecording(true);
+        }
+      }, 100);
+
+    } catch (err) {
+      alert("マイクへのアクセスに失敗しました: " + err.message);
+    }
+  };
+
+  document.getElementById("btnRecordVpStop").onclick = () => stopVpRecording(true);
+
+  async function stopVpRecording(save = true) {
+    if (vpRecordTimer) {
+      clearInterval(vpRecordTimer);
+      vpRecordTimer = null;
+    }
+    if (vpAudioProcessor) {
+      try { vpAudioProcessor.disconnect(); } catch (e) {}
+      vpAudioProcessor = null;
+    }
+    if (vpAudioContext) {
+      try { vpAudioContext.close(); } catch (e) {}
+      vpAudioContext = null;
+    }
+    if (vpMediaStream) {
+      vpMediaStream.getTracks().forEach(t => t.stop());
+      vpMediaStream = null;
+    }
+
+    document.getElementById("btnRecordVpStart").style.display = "inline-block";
+    document.getElementById("btnRecordVpStop").style.display = "none";
+
+    if (!save || !vpRecordingSpeakerId) return;
+
+    // Calculate total samples
+    let totalLength = 0;
+    for (const chunk of vpRecordedSamples) totalLength += chunk.length;
+    if (totalLength < 16000 * 5) { // less than 5s
+      document.getElementById("vpFeedbackMsg").innerHTML = '<span style="color:#F87171;">⚠️ 録音時間が短すぎます（最低5秒以上、推奨10〜15秒話してください）。</span>';
+      document.getElementById("vpRecordStatus").textContent = "録音中断 (音声不足)";
+      return;
+    }
+
+    const merged = new Float32Array(totalLength);
+    let offset = 0;
+    for (const chunk of vpRecordedSamples) {
+      merged.set(chunk, offset);
+      offset += chunk.length;
+    }
+
+    document.getElementById("vpRecordStatus").innerHTML = '<span style="color:#60A5FA;">⏳ 声紋ベクトル（512次元）を解析・登録中...</span>';
+
+    // Encode to 16kHz 16-bit mono WAV
+    const wavBlob = encodeWavMono16(merged, 16000);
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const b64Wav = reader.result;
+      try {
+        const res = await fetch(`/api/profiles/${encodeURIComponent(vpRecordingSpeakerId)}/voiceprint/record`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ audio_base64: b64Wav })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          document.getElementById("vpRecordStatus").textContent = "登録完了";
+          document.getElementById("vpFeedbackMsg").innerHTML = `<span style="color:#34D399;">${escapeHtml(data.message)}</span>`;
+          await loadProfiles();
+          setTimeout(() => closeVoiceprintModal(), 1600);
+        } else {
+          document.getElementById("vpRecordStatus").textContent = "登録失敗";
+          document.getElementById("vpFeedbackMsg").innerHTML = `<span style="color:#F87171;">エラー: ${escapeHtml(data.error || "声紋登録に失敗しました")}</span>`;
+        }
+      } catch (err) {
+        document.getElementById("vpRecordStatus").textContent = "通信エラー";
+        document.getElementById("vpFeedbackMsg").innerHTML = `<span style="color:#F87171;">通信エラー: ${escapeHtml(err.message)}</span>`;
+      }
+    };
+    reader.readAsDataURL(wavBlob);
+  }
+
+  function encodeWavMono16(samples, sampleRate) {
+    const buffer = new ArrayBuffer(44 + samples.length * 2);
+    const view = new DataView(buffer);
+    function writeString(view, offset, str) {
+      for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+    }
+    writeString(view, 0, "RIFF");
+    view.setUint32(4, 36 + samples.length * 2, true);
+    writeString(view, 8, "WAVE");
+    writeString(view, 12, "fmt ");
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true); // PCM
+    view.setUint16(22, 1, true); // mono
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true); // block align
+    view.setUint16(34, 16, true); // 16-bit
+    writeString(view, 36, "data");
+    view.setUint32(40, samples.length * 2, true);
+
+    let offset = 44;
+    for (let i = 0; i < samples.length; i++) {
+      const s = Math.max(-1, Math.min(1, samples[i]));
+      view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+      offset += 2;
+    }
+    return new Blob([buffer], { type: "audio/wav" });
+  }
+
+    window.onload = init;
 </script>
 </body>
 </html>

@@ -267,6 +267,124 @@ class SpeakerLoRATrainer:
         self.peft_model.save_pretrained(output_dir)
         logger.info(f"LoRA adapter saved to {output_dir}")
 
+    def merge_and_export_ct2(self, output_dir: str) -> Optional[str]:
+        """Merge trained LoRA weights into base model and convert to CTranslate2 for Faster-Whisper."""
+        if self.peft_model is None:
+            return None
+        import tempfile
+        ct2_dir = os.path.join(output_dir, "ctranslate2")
+        try:
+            logger.info("Merging LoRA adapter into base model for CTranslate2 export...")
+            merged = self.peft_model.merge_and_unload()
+            with tempfile.TemporaryDirectory() as tmp_hf_dir:
+                merged.save_pretrained(tmp_hf_dir)
+                if self.processor:
+                    self.processor.save_pretrained(tmp_hf_dir)
+                try:
+                    import ctranslate2.converters.transformers as ct2_conv
+                    conv = ct2_conv.TransformersConverter(
+                        model_name_or_path=tmp_hf_dir,
+                        load_as_float16=True,
+                    )
+                    conv.convert(
+                        output_dir=ct2_dir,
+                        quantization="float16",
+                        force=True,
+                    )
+                    logger.info("✔ Successfully exported LoRA merged model to CTranslate2: %s", ct2_dir)
+                    return ct2_dir
+                except Exception as ce:
+                    logger.warning("CTranslate2 conversion failed: %s", ce)
+        except Exception as e:
+            logger.warning("LoRA merge failed: %s", e)
+        return None
+
+
+def train_profile_lora(
+    wav_path: str,
+    profile,
+    output_dir: str,
+    allow_cuda: bool = True,
+    epochs: int = 15,
+    log_callback: Optional[Callable[[str, str], None]] = None,
+) -> bool:
+    """Train speaker LoRA using audio segments filtered by profile's voiceprint."""
+    _maybe_reexec_with_gpu_venv()
+    if not HAVE_TRAIN_DEPENDENCIES:
+        if log_callback:
+            log_callback("WARN", "LoRA依存パッケージ (peft/torch) が未検出のためLoRA学習をスキップしました。")
+        return False
+
+    import soundfile as sf
+    try:
+        audio, sr = sf.read(wav_path, dtype="float32")
+        if audio.ndim > 1:
+            audio = audio.mean(axis=1)
+    except Exception as e:
+        logger.error("Failed to read wav %s: %s", wav_path, e)
+        return False
+
+    vp = getattr(profile, "voiceprint", None)
+    vp_thresh = getattr(profile, "voiceprint_threshold", 0.40) or 0.40
+
+    from tools.profile_builder.voiceprint_extractor import VoiceprintExtractor
+    extractor = VoiceprintExtractor() if vp else None
+
+    chunk_len = int(4.0 * sr)
+    step_len = int(3.0 * sr)
+    candidates = []
+
+    for s_idx in range(0, len(audio) - chunk_len, step_len):
+        chunk = audio[s_idx : s_idx + chunk_len]
+        rms = np.sqrt(np.mean(chunk**2))
+        if rms < 0.015:
+            continue
+        start_s = float(s_idx) / sr
+        end_s = float(s_idx + chunk_len) / sr
+
+        if extractor and extractor.is_available and vp:
+            emb = extractor.compute_chunk_embedding(chunk, sr=sr)
+            if emb is not None:
+                sim = extractor.cosine_similarity(emb, vp)
+                if sim < vp_thresh:
+                    continue
+
+        candidates.append((start_s, end_s, "音声認識"))
+
+    if not candidates:
+        if log_callback:
+            log_callback("WARN", "声紋に一致する本人の発話区間が不足していたため、LoRA学習をスキップしました。")
+        return False
+
+    selected_pairs = candidates[:30]
+    if log_callback:
+        log_callback("LORA", f"本人の確定声紋に合致する {len(selected_pairs)} 区間の高純度音声を抽出。LoRA 学習を開始します...")
+
+    trainer = SpeakerLoRATrainer(allow_cuda=allow_cuda)
+    try:
+        def on_prog(ep, tot, loss):
+            if log_callback and (ep == 1 or ep % 5 == 0 or ep == tot):
+                log_callback("LORA", f"LoRA 学習中 [{ep}/{tot}] (Loss: {loss:.4f})")
+
+        trainer.train(
+            audio_samples=audio,
+            sample_rate=sr,
+            training_pairs=selected_pairs,
+            epochs=epochs,
+            base_lora_dir=output_dir if os.path.isdir(output_dir) else None,
+            on_progress=on_prog,
+        )
+        trainer.save_adapter(output_dir)
+        trainer.merge_and_export_ct2(output_dir)
+        if log_callback:
+            log_callback("SUCCESS", f"✔ 話者特化 LoRA の学習と CTranslate2 マージが完了しました！ ({output_dir})")
+        return True
+    except Exception as e:
+        logger.error("LoRA training error: %s", e)
+        if log_callback:
+            log_callback("WARN", f"LoRA 学習中にエラーが発生しました: {e}")
+        return False
+
 
 def main():
     _maybe_reexec_with_gpu_venv()

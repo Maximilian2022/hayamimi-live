@@ -487,6 +487,29 @@ class ProfileBuilderPipeline:
             else:
                 final_profile = profile
 
+            # 5.8 GPU モードかつ声紋登録済みの場合、本人の発話区間から LoRA を自動学習
+            is_gpu_mode = os.environ.get("HAYAMIMI_DEVICE") == "gpu"
+            if is_gpu_mode and final_profile.voiceprint:
+                report("lora", 0.93, "🔥 GPU モード: 本人の声紋区間から話者 LoRA アダプタを生成中...")
+                try:
+                    from scripts.speaker_lora import train_profile_lora
+                    pdir = os.path.join(REPO_ROOT, "config", "profiles")
+                    lora_out_dir = os.path.join(pdir, f"{final_profile.speaker_id}_lora")
+                    lora_ok = train_profile_lora(
+                        wav_path=wav_path,
+                        profile=final_profile,
+                        output_dir=lora_out_dir,
+                        allow_cuda=True,
+                        log_callback=log_callback,
+                    )
+                    if lora_ok and os.path.isdir(lora_out_dir):
+                        final_profile.lora_adapter_path = lora_out_dir
+                        final_profile.lora_trained_video_count += 1
+                        log("LORA", f"✔ 話者特化 LoRA アダプタの学習が完了しました！ ({lora_out_dir})")
+                except Exception as le:
+                    logger.warning("LoRA training error: %s", le)
+                    log("WARN", f"LoRA 学習中に警告が発生しました (スキップして継続): {le}")
+
             report("save", 0.95, "プロファイルおよび置換辞書を保存中...")
             saved_path = save_profile(final_profile)
             v_count = len(final_profile.processed_video_ids) or len(final_profile.source_video_urls) or (1 if final_profile.source_video_url else 0)

@@ -480,15 +480,26 @@ def _execute_maintenance(server, log_callback=None):
                 if log_callback: log_callback(msg_lora)
                 with _maintenance_lock:
                     _maintenance_status["run_message"] = msg_lora
-                from scripts.speaker_lora import SpeakerLoRATrainer
+                from scripts.speaker_lora import train_profile_lora
                 target_pids = set(v["speaker_id"] for v in vids_to_process if v.get("speaker_id"))
                 for pid in target_pids:
                     p = load_profile(pid, pdir)
-                    if p:
+                    if p and getattr(p, "voiceprint", None):
                         lora_out_dir = os.path.join(pdir, f"{pid}_lora")
-                        if os.path.isdir(lora_out_dir):
-                            trainer = SpeakerLoRATrainer(allow_cuda=True)
-                            logger.info(f"LoRA continuation trainer initialized for {pid}")
+                        # Pick last downloaded video wav if available
+                        for v_info in vids_to_process:
+                            if v_info.get("speaker_id") == pid and v_info.get("wav_path") and os.path.isfile(v_info["wav_path"]):
+                                train_profile_lora(
+                                    wav_path=v_info["wav_path"],
+                                    profile=p,
+                                    output_dir=lora_out_dir,
+                                    allow_cuda=True,
+                                    log_callback=log_callback,
+                                )
+                                p.lora_adapter_path = lora_out_dir
+                                p.lora_trained_video_count += 1
+                                save_profile(p)
+                                break
             except Exception as le:
                 logger.warning(f"Maintenance LoRA growth error: {le}")
 
@@ -1626,6 +1637,15 @@ class SubtitleServer:
                 elif req_path == "/api/profiles/task-status":
                     with _generation_lock:
                         self._json(200, dict(_generation_task))
+                elif req_path == "/api/system/mode":
+                    is_gpu = os.environ.get("HAYAMIMI_DEVICE") == "gpu" or getattr(getattr(server, "asr", None), "engine_name", "") in ("whisper_cuda", "whisper_dml")
+                    dev = "gpu" if is_gpu else os.environ.get("HAYAMIMI_DEVICE", "cpu")
+                    eng = getattr(getattr(server, "asr", None), "engine_name", "reazonspeech")
+                    self._json(200, {
+                        "device": dev,
+                        "is_gpu_mode": is_gpu,
+                        "engine": eng,
+                    })
                 elif req_path == "/api/profiles":
                     try:
                         from tools.profile_builder.profile_exporter import list_profiles
@@ -1635,6 +1655,9 @@ class SubtitleServer:
                         for p in profs:
                             d = p.model_dump()
                             d["available_tags"] = p.get_available_tags()
+                            lora_st = _check_profile_lora_status(p.speaker_id, server)
+                            d["has_lora"] = bool(lora_st.get("lora_exists"))
+                            d["lora_status"] = lora_st
                             res_list.append(d)
                         self._json(200, res_list)
                     except Exception as e:
@@ -2125,6 +2148,79 @@ class SubtitleServer:
                     except Exception as exc:
                         self._json(400, {"error": str(exc)})
                     return
+                if req_path.startswith("/api/profiles/") and req_path.endswith("/voiceprint/record"):
+                    parts = req_path.split("/")
+                    if len(parts) == 6:
+                        speaker_id = urllib.parse.unquote(parts[3])
+                        if not is_safe_speaker_id(speaker_id):
+                            self._json(400, {"error": "Invalid speaker_id format"})
+                            return
+                        code, payload = self._read_json_body(max_bytes=10 * 1024 * 1024)
+                        if code != 200 or payload is None or not isinstance(payload, dict):
+                            self._json(400, {"error": "JSON body with audio_base64 is required"})
+                            return
+                        b64_data = payload.get("audio_base64")
+                        if not b64_data:
+                            self._json(400, {"error": "audio_base64 is required"})
+                            return
+                        import base64, tempfile
+                        try:
+                            if "," in b64_data:
+                                b64_data = b64_data.split(",", 1)[1]
+                            raw_wav = base64.b64decode(b64_data)
+
+                            try:
+                                from scripts.download_models import ensure_campplus_model
+                            except ImportError:
+                                from download_models import ensure_campplus_model
+                            ensure_campplus_model()
+
+                            from tools.profile_builder.voiceprint_extractor import VoiceprintExtractor
+                            from tools.profile_builder.profile_exporter import load_profile, save_profile
+                            extractor = VoiceprintExtractor()
+                            if not extractor.is_available:
+                                self._json(500, {"error": "CAM++ 声紋モデル (campplus_sv.onnx) のロードに失敗しました。"})
+                                return
+
+                            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
+                                temp_wav_path = tf.name
+                                tf.write(raw_wav)
+
+                            try:
+                                vp_vec, sample_count = extractor.extract_voiceprint(temp_wav_path)
+                            finally:
+                                try:
+                                    os.remove(temp_wav_path)
+                                except OSError:
+                                    pass
+
+                            if not vp_vec or sample_count == 0:
+                                self._json(400, {"error": "音声から声紋特徴量を抽出できませんでした。マイクの音量や録音時間(10秒以上)を確認してください。"})
+                                return
+
+                            pdir = _get_profiles_dir()
+                            prof = load_profile(speaker_id, pdir)
+                            if not prof:
+                                self._json(404, {"error": f"プロファイル '{speaker_id}' が見つかりません。"})
+                                return
+
+                            prof.voiceprint = vp_vec
+                            prof.voiceprint_sample_count = sample_count
+                            save_profile(prof, storage_dir=pdir)
+
+                            logger.info("✔ 手動マイク録音から話者声紋（512次元）を登録しました: %s (サンプル: %d)", speaker_id, sample_count)
+                            self._json(200, {
+                                "ok": True,
+                                "speaker_id": speaker_id,
+                                "sample_count": sample_count,
+                                "message": f"✔ マイク音声から話者声紋（512次元）を正常に登録しました！（サンプル数: {sample_count}）"
+                            })
+                            return
+                        except Exception as e:
+                            logger.error("Voiceprint record error: %s", e)
+                            self._json(500, {"error": f"声紋登録処理でエラーが発生しました: {e}"})
+                            return
+
                 if req_path == "/api/profiles/update-tags":
                     code, payload = self._read_json_body()
                     if code != 200 or payload is None:

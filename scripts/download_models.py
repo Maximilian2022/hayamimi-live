@@ -244,6 +244,21 @@ def download_hf_repo(repo: str, dest_dir: str, label: str, ignore_patterns=None)
     snapshot_download(repo_id=repo, local_dir=target, ignore_patterns=ignore_patterns)
 
 
+def ensure_campplus_model(log_callback=None) -> str:
+    """Ensure campplus_sv.onnx exists in models/ dir, downloading if needed (~25MB)."""
+    cam_dest = os.path.join(MODELS_DIR, "campplus_sv.onnx")
+    if os.path.isfile(cam_dest) and os.path.getsize(cam_dest) > 1000000:
+        return cam_dest
+    os.makedirs(MODELS_DIR, exist_ok=True)
+    if log_callback:
+        log_callback("INFO", "CAM++ 話者声紋モデル (campplus_sv.onnx, ~25MB) をダウンロード中...")
+    else:
+        print("Downloading CAM++ speaker embedding model (campplus_sv.onnx, ~25MB)...")
+    url = f"{GITHUB_RELEASES}/{SPEAKER_TAG}/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx"
+    download_file(url, cam_dest, "CAM++ speaker embedding")
+    return cam_dest
+
+
 def download_opt_ins(args) -> None:
     """Opt-in downloads (--en-parakeet-v2, --punct-4class, --eval-baselines,
     --lid-candidates, --translate-candidates).
@@ -357,6 +372,9 @@ def download_opt_ins(args) -> None:
               "setup' section for the ct2-transformers-converter commands to produce "
               "models/<name>-ct2/.")
 
+    if getattr(args, "campplus", False):
+        ensure_campplus_model()
+
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -398,6 +416,8 @@ def main():
                           "translation models (~600MB total)")
     ap.add_argument("--whisper-dml", action="store_true",
                      help="download Kotoba-Whisper-v2.2 ONNX for DirectML iGPU mode (~500MB)")
+    ap.add_argument("--campplus", action="store_true",
+                    help="download CAM++ speaker embedding model for voiceprint learning (~25MB)")
     args = ap.parse_args()
 
     os.makedirs(MODELS_DIR, exist_ok=True)

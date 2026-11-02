@@ -568,3 +568,59 @@ def test_scan_channels_for_maintenance_archive_replenish(monkeypatch, tmp_path):
         assert pending[2]["id"] == "vid_arc2"
         assert pending[2].get("is_archive") is True
 
+
+
+def test_system_mode_api(running_server):
+    base_url, _ = running_server
+    req = urllib.request.Request(f"{base_url}/api/system/mode")
+    with urllib.request.urlopen(req) as res:
+        assert res.status == 200
+        data = json.loads(res.read().decode("utf-8"))
+        assert "device" in data
+        assert "is_gpu_mode" in data
+        assert "engine" in data
+
+
+def test_voiceprint_manual_record_api(running_server, monkeypatch):
+    base_url, server = running_server
+    from tools.profile_builder.profile_exporter import save_profile
+    from tools.profile_builder.profile_model import SpeakerProfile
+    from scripts.subtitle_server import _get_profiles_dir
+    pdir = _get_profiles_dir()
+    p = SpeakerProfile(
+        speaker_id="rec_spk",
+        display_name="録音テスト話者",
+        replacements=[],
+    )
+    save_profile(p, storage_dir=pdir)
+
+    class MockExtractor:
+        is_available = True
+        def extract_voiceprint(self, wav_path):
+            return [0.1] * 512, 10
+
+    monkeypatch.setattr("tools.profile_builder.voiceprint_extractor.VoiceprintExtractor", MockExtractor)
+
+    import base64
+    dummy_wav_b64 = base64.b64encode(b"RIFF$   WAVEfmt     data    ").decode("utf-8")
+    payload = json.dumps({"audio_base64": dummy_wav_b64}).encode("utf-8")
+    req = urllib.request.Request(
+        f"{base_url}/api/profiles/rec_spk/voiceprint/record",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req) as res:
+        assert res.status == 200
+        data = json.loads(res.read().decode("utf-8"))
+        assert data["ok"] is True
+        assert data["sample_count"] == 10
+        assert "512次元" in data["message"]
+
+    with urllib.request.urlopen(f"{base_url}/api/profiles") as res:
+        profs = json.loads(res.read().decode("utf-8"))
+        target = next((x for x in profs if x["speaker_id"] == "rec_spk"), None)
+        assert target is not None
+        assert target["voiceprint"] is not None
+        assert len(target["voiceprint"]) == 512
+        assert "has_lora" in target

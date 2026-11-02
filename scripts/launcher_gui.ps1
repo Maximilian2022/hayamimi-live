@@ -1,4 +1,4 @@
-﻿$script:AppVersion = "2.2.5"
+﻿$script:AppVersion = "2.3.0"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $versionTxtFile = Join-Path $repoRoot "version.txt"
 if (Test-Path $versionTxtFile) {
@@ -540,7 +540,7 @@ function Update-ContainerLogFile {
 [xml]$xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Hayamimi Live ランチャー (GUI v2.2.5)"
+        Title="Hayamimi Live ランチャー (GUI v2.3.0)"
         Height="780" Width="780"
         MinHeight="680" MinWidth="720"
         WindowStartupLocation="CenterScreen"
@@ -618,7 +618,7 @@ function Update-ContainerLogFile {
                         <TextBlock x:Name="GpuBadge" Text="⚡ GPU: 検出中..." FontSize="11" Foreground="#10B981" FontWeight="SemiBold"/>
                     </Border>
                     <Border Background="#1E1B4B" CornerRadius="12" Padding="10,5" Margin="0,0,8,0" BorderBrush="#4338CA" BorderThickness="1">
-                        <TextBlock x:Name="VersionBadge" Text="GUI v2.2.5" FontSize="11" Foreground="#A5B4FC" FontWeight="Bold" FontFamily="{StaticResource MonoFont}"/>
+                        <TextBlock x:Name="VersionBadge" Text="GUI v2.3.0" FontSize="11" Foreground="#A5B4FC" FontWeight="Bold" FontFamily="{StaticResource MonoFont}"/>
                     </Border>
                     <Border Background="#141B2D" CornerRadius="12" Padding="10,5" BorderBrush="#253350" BorderThickness="1">
                         <TextBlock x:Name="RuntimeBadge" Text="Python venv" FontSize="11" Foreground="#38BDF8" FontWeight="SemiBold"/>
@@ -2347,6 +2347,27 @@ function Start-PythonVenvApp {
             $venvScripts = Join-Path $venvDir "Scripts"
         }
         Write-AppLog "推論デバイス: GPU (CUDA) 起動 (Whisper+LoRA / 高精度)" "INFO"
+
+        # GPU モード時: 声紋モデル (models/campplus_sv.onnx) の存在確認 & 自動ダウンロード (約25MB)
+        $camModel = Join-Path $ProjectRoot "models\campplus_sv.onnx"
+        if (-not (Test-Path $camModel) -or (Get-Item $camModel -ErrorAction SilentlyContinue).Length -lt 1000000) {
+            Write-AppLog "CAM++ 話者声紋モデルを準備しています (約25MB)..." "INFO"
+            $dlScript = Join-Path $ProjectRoot "scripts\download_models.py"
+            if (Test-Path $dlScript) {
+                $pinfoDl = [System.Diagnostics.ProcessStartInfo]::new()
+                $pinfoDl.FileName = $venvPython
+                $pinfoDl.Arguments = "-B `"$dlScript`" --minimal --campplus"
+                $pinfoDl.WorkingDirectory = $ProjectRoot
+                $pinfoDl.RedirectStandardOutput = $true
+                $pinfoDl.RedirectStandardError = $true
+                $pinfoDl.UseShellExecute = $false
+                $pinfoDl.CreateNoWindow = $true
+                $pinfoDl.Environment["PYTHONDONTWRITEBYTECODE"] = "1"
+                $procDl = [System.Diagnostics.Process]::Start($pinfoDl)
+                Wait-ProcessWithUiPump -Proc $procDl -LogPrefix "[声紋モデル取得]"
+                Protect-ModelFiles
+            }
+        }
     } elseif ($script:CurrentDeviceMode -eq "Npu" -and $script:HasNpu) {
         $devEnv = "npu"
         $deviceOptArg = "--device npu"
