@@ -366,13 +366,27 @@
     @keyframes blink { 50% { opacity: 0; } }
 
     .feed-list {
-      flex: 1;
+      flex: 1 1 0;
+      min-height: 180px;
       overflow-y: auto;
-      max-height: 200px;
       display: flex;
       flex-direction: column;
       gap: 0.6rem;
       padding-right: 0.4rem;
+    }
+    .feed-list::-webkit-scrollbar {
+      width: 6px;
+    }
+    .feed-list::-webkit-scrollbar-track {
+      background: rgba(0, 0, 0, 0.2);
+      border-radius: 3px;
+    }
+    .feed-list::-webkit-scrollbar-thumb {
+      background: #2a2f3a;
+      border-radius: 3px;
+    }
+    .feed-list::-webkit-scrollbar-thumb:hover {
+      background: var(--line);
     }
     .feed-item {
       display: flex;
@@ -1920,6 +1934,7 @@
             while (finalFeed.children.length > 200) {
               finalFeed.removeChild(finalFeed.lastElementChild);
             }
+            finalFeed.scrollTop = 0;
 
             if (ev.latency_ms != null) {
               latVal.textContent = Math.round(ev.latency_ms);
@@ -2046,12 +2061,13 @@
   };
 
   function updateTransPillStates() {
+    const transEnabled = document.getElementById("cfg-trans-enable")?.checked ?? true;
     const chks = document.querySelectorAll('input[name="trans-lang"]');
     let activeCount = 0;
     chks.forEach(chk => {
       const parent = chk.closest('.lang-pill-item');
       if (parent) {
-        if (chk.checked) {
+        if (chk.checked && transEnabled) {
           parent.classList.add('active');
           activeCount++;
         } else {
@@ -2061,8 +2077,17 @@
     });
     const badge = document.getElementById("trans-active-badge");
     if (badge) {
-      badge.textContent = `${activeCount}言語選択中`;
-      badge.style.display = activeCount > 0 ? "inline-block" : "none";
+      if (!transEnabled) {
+        badge.textContent = "翻訳オフ";
+        badge.style.display = "inline-block";
+        badge.style.background = "rgba(100, 116, 139, 0.2)";
+        badge.style.color = "#94a3b8";
+      } else {
+        badge.textContent = `${activeCount}言語選択中`;
+        badge.style.display = activeCount > 0 ? "inline-block" : "none";
+        badge.style.background = "rgba(224, 79, 47, 0.2)";
+        badge.style.color = "#FF7A59";
+      }
     }
   }
 
@@ -2847,6 +2872,119 @@
     const el = document.getElementById(id);
     if (el) el.addEventListener("change", saveCommentSyncConfig);
   });
+
+  // --- ASR & リアルタイム翻訳設定の即時同期 (マイク稼働中の動的言語増減対応) ---
+  let _asrConfigSyncTimer = null;
+  async function syncAsrConfig(immediate = false) {
+    if (_asrConfigSyncTimer) {
+      clearTimeout(_asrConfigSyncTimer);
+      _asrConfigSyncTimer = null;
+    }
+    const doSync = async () => {
+      const lang = document.getElementById("cfg-lang")?.value || "";
+      const transToggle = document.getElementById("cfg-trans-enable");
+      const transEnabled = transToggle ? transToggle.checked : false;
+      const transLangGroup = document.getElementById("trans-lang-group");
+      if (transLangGroup) {
+        transLangGroup.style.display = transEnabled ? "flex" : "none";
+      }
+
+      let transTargets = [];
+      if (transEnabled) {
+        document.querySelectorAll('input[name="trans-lang"]:checked').forEach(c => {
+          transTargets.push(c.value);
+        });
+      }
+      const punct = document.getElementById("cfg-punct") ? document.getElementById("cfg-punct").checked : true;
+
+      const asrPayload = {
+        lang: lang || null,
+        translate: transTargets,
+        punctuate: punct
+      };
+
+      // クライアント側 localStorage へ即時保存
+      try {
+        localStorage.setItem("hayamimi_asr_config", JSON.stringify(asrPayload));
+      } catch (_) {}
+
+      // UI 状態とピルを更新
+      updateTransPillStates();
+      if (typeof updatePreview === "function") {
+        updatePreview();
+      }
+
+      // バッジのロード中フィードバック
+      const badge = document.getElementById("trans-active-badge");
+      if (badge && transEnabled) {
+        badge.textContent = `🔄 反映中...`;
+        badge.style.display = "inline-block";
+      }
+
+      try {
+        const res = await fetch("/config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(asrPayload)
+        });
+        if (res.ok) {
+          const saveMsg = document.getElementById("save-msg");
+          if (saveMsg) {
+            const count = transTargets.length;
+            const langStr = count > 0 ? ` (${transTargets.join(", ")})` : "";
+            saveMsg.textContent = transEnabled 
+              ? `翻訳言語を更新しました${langStr}` 
+              : "リアルタイム翻訳をオフにしました";
+            saveMsg.style.display = "block";
+            setTimeout(() => { if (saveMsg) saveMsg.style.display = "none"; }, 2500);
+          }
+        }
+      } catch (e) {
+        console.warn("ASR config sync error:", e);
+      } finally {
+        updateTransPillStates();
+      }
+    };
+
+    if (immediate) {
+      await doSync();
+    } else {
+      _asrConfigSyncTimer = setTimeout(doSync, 150);
+    }
+  }
+
+  // リアルタイム翻訳トグル変更時
+  const transToggleEl = document.getElementById("cfg-trans-enable");
+  if (transToggleEl) {
+    transToggleEl.addEventListener("change", () => {
+      // ONにした際に言語が1つも選択されていなければ、デフォルトでenをチェック
+      if (transToggleEl.checked) {
+        const checkedLangs = document.querySelectorAll('input[name="trans-lang"]:checked');
+        if (checkedLangs.length === 0) {
+          const enChk = document.getElementById("trans-chk-en");
+          if (enChk) enChk.checked = true;
+        }
+      }
+      syncAsrConfig(true);
+    });
+  }
+
+  // 言語ピル変更時 (マイク認識中の動的増減に即時追従)
+  document.querySelectorAll('input[name="trans-lang"]').forEach(chk => {
+    chk.addEventListener("change", () => {
+      // ユーザーが言語にチェックを入れたら、もしトグルがOFFなら自動的にONにする親切設計
+      if (chk.checked && transToggleEl && !transToggleEl.checked) {
+        transToggleEl.checked = true;
+      }
+      syncAsrConfig(false);
+    });
+  });
+
+  // 音声認識言語 & 句読点変更時
+  const cfgLangEl = document.getElementById("cfg-lang");
+  if (cfgLangEl) cfgLangEl.addEventListener("change", () => syncAsrConfig(true));
+  const cfgPunctEl = document.getElementById("cfg-punct");
+  if (cfgPunctEl) cfgPunctEl.addEventListener("change", () => syncAsrConfig(true));
 
   loadConfigAndStyle();
   loadSpeakerProfiles();

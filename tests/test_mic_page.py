@@ -73,3 +73,34 @@ def test_obs_mute_sync_js_logic():
         "Level meter mute indicator missing in updateMeter"
     )
 
+def test_preview_feed_auto_expand_and_no_max_height():
+    """Verify preview feed does not have hardcoded max-height and expands to card bottom."""
+    with open(MIC_PAGE_PATH, "r", encoding="utf-8") as f:
+        html = f.read()
+
+    assert "max-height: 200px;" not in html, "Hardcoded max-height 200px must be removed from feed-list"
+    assert "flex: 1 1 0;" in html or "flex: 1;" in html, "feed-list must expand to card bottom using flex"
+    assert "min-height: 180px;" in html, "feed-list must have min-height"
+    assert "finalFeed.scrollTop = 0;" in html, "finalFeed must keep newest item visible at top"
+
+
+def test_realtime_trans_dynamic_sync_listeners():
+    """Verify dynamic language addition/removal and live sync without app restart."""
+    with open(MIC_PAGE_PATH, "r", encoding="utf-8") as f:
+        html = f.read()
+
+    # Dynamic ASR/translate sync function
+    assert "async function syncAsrConfig" in html, "syncAsrConfig function missing"
+    assert 'localStorage.setItem("hayamimi_asr_config"' in html, "Instant localStorage backup missing"
+
+    # Event listeners
+    assert 'transToggleEl.addEventListener("change"' in html, "Translate toggle change listener missing"
+    assert 'chk.addEventListener("change"' in html, "Lang pill checkbox change listener missing"
+    assert 'cfgLangEl.addEventListener("change"' in html, "ASR lang select change listener missing"
+    assert 'cfgPunctEl.addEventListener("change"' in html, "Punctuation toggle change listener missing"
+
+    # Pill state reflects toggle state
+    assert 'const transEnabled = document.getElementById("cfg-trans-enable")?.checked' in html, (
+        "updateTransPillStates must reflect transEnabled state"
+    )
+
