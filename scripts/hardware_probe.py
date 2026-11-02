@@ -346,7 +346,11 @@ def probe_npu_device() -> Optional[NpuDevice]:
         try:
             ps_cmd = (
                 "Get-CimInstance Win32_PnPEntity | "
-                "Where-Object { $_.Name -like '*AI Boost*' -or $_.Name -like '*NPU*' -or $_.PNPClass -eq 'ComputeAccelerator' } | "
+                "Where-Object { "
+                "($_.Name -match 'AI Boost|\\bNPU\\b|\\bIPU\\b' -or $_.PNPClass -eq 'ComputeAccelerator') -and "
+                "$_.PNPClass -notmatch 'Mouse|Keyboard|HIDClass|Media' -and "
+                "$_.Name -notmatch 'Input|Receiver|Mouse|Keyboard|Audio|Controller' "
+                "} | "
                 "Select-Object -First 1 Name, DeviceID, Status | "
                 "ConvertTo-Json -Compress"
             )

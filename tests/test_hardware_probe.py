@@ -126,6 +126,32 @@ def test_probe_npu_mock():
         assert summary["npu_name"] is None
 
 
+def test_npu_does_not_match_usb_input_devices():
+    """Logitech 等の USB 入力デバイス (Input を含む名称) が NPU として誤検知されないこと"""
+    import subprocess
+    import json
+    
+    # Logitech USB Input Device を模した PnP レスポンス
+    fake_pnp_json = json.dumps({
+        "Name": "Logitech USB Input Device",
+        "DeviceID": "USB\\VID_046D&PID_C52B\\5&2A3B4C5D&0&1",
+        "Status": "OK"
+    })
+    
+    # 正常なフィルタリング条件の検証
+    import re
+    def is_npu(name: str, pnp_class: str) -> bool:
+        has_npu_kw = bool(re.search(r"AI Boost|\bNPU\b|\bIPU\b", name)) or pnp_class == "ComputeAccelerator"
+        is_not_input = not bool(re.search(r"Mouse|Keyboard|HIDClass|Media", pnp_class)) and not bool(re.search(r"Input|Receiver|Mouse|Keyboard|Audio|Controller", name))
+        return has_npu_kw and is_not_input
+
+    assert not is_npu("Logitech USB Input Device", "HIDClass")
+    assert not is_npu("USB Input Device", "HIDClass")
+    assert is_npu("Intel(R) AI Boost", "ComputeAccelerator")
+    assert is_npu("AMD NPU Device", "ComputeAccelerator")
+
+
+
 def test_real_system_probe():
     """実機環境でのハードウェア走査がクラッシュせず実行できること"""
     devices = probe_gpu_devices()

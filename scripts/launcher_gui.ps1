@@ -1022,8 +1022,11 @@ function Update-DeviceBadgeDisplay {
 function Update-GpuDeviceBadge {
     try {
         # 1. NPU (Neural Processing Unit) の検出
+        # 注意: "Input" などの単語に "npu" が含まれる USB 入力デバイス (Logitech USB Input Device 等) を誤検知しないよう厳格に判定
         $npu = Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue | Where-Object {
-            $_.Name -like "*AI Boost*" -or $_.Name -like "*NPU*" -or $_.PNPClass -eq "ComputeAccelerator"
+            ($_.Name -match "AI Boost|\bNPU\b|\bIPU\b" -or $_.PNPClass -eq "ComputeAccelerator") -and
+            $_.PNPClass -notmatch "Mouse|Keyboard|HIDClass|Media" -and
+            $_.Name -notmatch "Input|Receiver|Mouse|Keyboard|Audio|Controller"
         } | Select-Object -First 1
 
         if ($npu -and $npu.Status -eq "OK") {
@@ -1031,7 +1034,11 @@ function Update-GpuDeviceBadge {
             $script:NpuName = $npu.Name
             if ($rbDeviceNpu) {
                 $rbDeviceNpu.IsEnabled = $true
+                $rbDeviceNpu.Visibility = [System.Windows.Visibility]::Visible
                 $rbDeviceNpu.Content = "⚡ NPU 起動"
+                $rbDeviceNpu.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#F1F5F9")
+                $rbDeviceNpu.Opacity = 1.0
+                $rbDeviceNpu.Cursor = [System.Windows.Input.Cursors]::Hand
                 $rbDeviceNpu.ToolTip = "NPU: $($npu.Name) (CPU・GPU負荷ゼロ)"
             }
             Write-AppLog "✔ NPU 検出: $($npu.Name) (ReazonSpeech NPU 高速推論対応 / CPU・GPU負荷ゼロ)" "INFO"
@@ -1040,8 +1047,12 @@ function Update-GpuDeviceBadge {
             $script:NpuName = ""
             if ($rbDeviceNpu) {
                 $rbDeviceNpu.IsEnabled = $false
+                # 非搭載時は暗いスレートグレー & 半透明(Opacity 0.35)で選択不能であることを明示
                 $rbDeviceNpu.Content = "⚡ NPU 起動 (非搭載)"
-                $rbDeviceNpu.ToolTip = "システムに NPU が検出されませんでした"
+                $rbDeviceNpu.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#475569")
+                $rbDeviceNpu.Opacity = 0.35
+                $rbDeviceNpu.Cursor = [System.Windows.Input.Cursors]::No
+                $rbDeviceNpu.ToolTip = "システムに NPU が検出されませんでした (CPU 起動のみ利用可能です)"
             }
             if ($rbDeviceCpu) {
                 $rbDeviceCpu.IsChecked = $true
@@ -1065,7 +1076,11 @@ function Update-GpuDeviceBadge {
         $script:NpuName = ""
         if ($rbDeviceNpu) {
             $rbDeviceNpu.IsEnabled = $false
-            $rbDeviceNpu.Content = "⚡ NPU 起動 (検出エラー)"
+            $rbDeviceNpu.Content = "⚡ NPU 起動 (非搭載)"
+            $rbDeviceNpu.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#475569")
+            $rbDeviceNpu.Opacity = 0.35
+            $rbDeviceNpu.Cursor = [System.Windows.Input.Cursors]::No
+            $rbDeviceNpu.ToolTip = "システムに NPU が検出されませんでした"
         }
         if ($rbDeviceCpu) {
             $rbDeviceCpu.IsChecked = $true
