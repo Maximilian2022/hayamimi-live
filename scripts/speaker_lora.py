@@ -70,6 +70,19 @@ def _maybe_reexec_with_gpu_venv():
             logger.warning(f"Failed to re-exec with .venv_gpu: {e}")
 
 
+def _cuda_execution_error() -> Optional[str]:
+    """PyTorch が実際に CUDA 演算を実行できるか確認し、不可なら理由を返す。
+
+    is_available() は True でも、GPU が wheel の対応アーキテクチャ外だと演算時に
+    失敗する (例: RTX 5090 / sm_120 と torch 2.6.0+cu124)。
+    """
+    try:
+        (torch.zeros(1, device="cuda") + 1).item()
+        return None
+    except Exception as e:
+        return str(e).splitlines()[0]
+
+
 class SpeakerLoRATrainer:
     """
     エンコーダ出力事前キャッシュ技術 & 動的 GPU 制限を用いた超低負荷・爆速な話者 LoRA 学習クラス。
@@ -279,12 +292,18 @@ class SpeakerLoRATrainer:
             with tempfile.TemporaryDirectory() as tmp_hf_dir:
                 merged.save_pretrained(tmp_hf_dir)
                 if self.processor:
-                    self.processor.save_pretrained(tmp_hf_dir)
+                    # processor.save_pretrained は transformers 5 で preprocessor_config.json を
+                    # 個別に出力しないため、CT2 変換が必要とするファイルを構成要素ごとに保存する
+                    self.processor.tokenizer.save_pretrained(tmp_hf_dir)
+                    self.processor.feature_extractor.save_pretrained(tmp_hf_dir)
                 try:
                     import ctranslate2.converters.transformers as ct2_conv
                     conv = ct2_conv.TransformersConverter(
                         model_name_or_path=tmp_hf_dir,
                         load_as_float16=True,
+                        # 無いと faster-whisper が whisper-tiny の語彙と 80 メルに
+                        # フォールバックし、128 メルの kotoba v2.2 と合わなくなる
+                        copy_files=["tokenizer.json", "preprocessor_config.json"],
                     )
                     conv.convert(
                         output_dir=ct2_dir,
@@ -307,13 +326,35 @@ def train_profile_lora(
     allow_cuda: bool = True,
     epochs: int = 15,
     log_callback: Optional[Callable[[str, str], None]] = None,
+    transcript_segments: Optional[list] = None,
 ) -> bool:
-    """Train speaker LoRA using audio segments filtered by profile's voiceprint."""
+    """Train speaker LoRA on transcribed segments filtered by the profile's voiceprint.
+
+    transcript_segments: objects with start_sec / end_sec / text. Their text is the
+    training label, so training is skipped without them: the merged model is loaded
+    for live inference and must never learn from placeholder labels.
+    """
     _maybe_reexec_with_gpu_venv()
     if not HAVE_TRAIN_DEPENDENCIES:
         if log_callback:
             log_callback("WARN", "LoRA依存パッケージ (peft/torch) が未検出のためLoRA学習をスキップしました。")
         return False
+
+    if not transcript_segments:
+        if log_callback:
+            log_callback("WARN", "LoRA学習に使える文字起こしがないため、LoRA学習をスキップしました。")
+        return False
+
+    if allow_cuda and torch.cuda.is_available():
+        cuda_error = _cuda_execution_error()
+        if cuda_error:
+            logger.warning("LoRA training skipped, CUDA is not executable: %s", cuda_error)
+            if log_callback:
+                log_callback(
+                    "WARN",
+                    f"PyTorch がこの GPU で CUDA 演算を実行できないため、LoRA学習をスキップしました: {cuda_error}",
+                )
+            return False
 
     import soundfile as sf
     try:
@@ -330,17 +371,16 @@ def train_profile_lora(
     from tools.profile_builder.voiceprint_extractor import VoiceprintExtractor
     extractor = VoiceprintExtractor() if vp else None
 
-    chunk_len = int(4.0 * sr)
-    step_len = int(3.0 * sr)
     candidates = []
 
-    for s_idx in range(0, len(audio) - chunk_len, step_len):
-        chunk = audio[s_idx : s_idx + chunk_len]
+    for seg in transcript_segments:
+        text = (seg.text or "").strip()
+        chunk = audio[int(seg.start_sec * sr) : int(seg.end_sec * sr)]
+        if not text or len(chunk) == 0:
+            continue
         rms = np.sqrt(np.mean(chunk**2))
         if rms < 0.015:
             continue
-        start_s = float(s_idx) / sr
-        end_s = float(s_idx + chunk_len) / sr
 
         if extractor and extractor.is_available and vp:
             emb = extractor.compute_chunk_embedding(chunk, sr=sr)
@@ -349,7 +389,7 @@ def train_profile_lora(
                 if sim < vp_thresh:
                     continue
 
-        candidates.append((start_s, end_s, "音声認識"))
+        candidates.append((seg.start_sec, seg.end_sec, text))
 
     if not candidates:
         if log_callback:
@@ -375,7 +415,11 @@ def train_profile_lora(
             on_progress=on_prog,
         )
         trainer.save_adapter(output_dir)
-        trainer.merge_and_export_ct2(output_dir)
+        if not trainer.merge_and_export_ct2(output_dir):
+            # 推論が読むのは CT2 モデルのみ。アダプタだけでは字幕に反映されない
+            if log_callback:
+                log_callback("WARN", "LoRA 学習は完了しましたが CTranslate2 への変換に失敗したため、推論には反映されません。")
+            return False
         if log_callback:
             log_callback("SUCCESS", f"✔ 話者特化 LoRA の学習と CTranslate2 マージが完了しました！ ({output_dir})")
         return True

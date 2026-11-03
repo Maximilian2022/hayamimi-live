@@ -1,9 +1,9 @@
 # GPU (NVIDIA CUDA) Runtime dependencies for hayamimi (早耳).
-# Includes PyTorch with CUDA 12.4+, faster-whisper, and PEFT for LoRA training/inference.
+# Includes PyTorch with CUDA 12.8 (first official wheels with RTX 50 series / sm_120 kernels), faster-whisper, and PEFT for LoRA training/inference.
 
---extra-index-url https://download.pytorch.org/whl/cu124
+--extra-index-url https://download.pytorch.org/whl/cu128
 -r requirements.txt
-torch==2.6.0+cu124
+torch==2.11.0+cu128
 transformers>=4.44.0
 peft>=0.12.0
 accelerate>=0.33.0

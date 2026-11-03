@@ -1861,7 +1861,7 @@ function Invoke-SetupGpuVenv {
             try {
                 $pinfoVenv = [System.Diagnostics.ProcessStartInfo]::new()
                 $pinfoVenv.FileName = $uvCmd
-                # PyTorch CUDA 12.4+ に最も安定して対応する Python 3.12 を指定 (--seed で pip 同梱)
+                # PyTorch CUDA 12.8 に最も安定して対応する Python 3.12 を指定 (--seed で pip 同梱)
                 $pinfoVenv.Arguments = "venv .venv_gpu --python 3.12 --seed"
                 $pinfoVenv.WorkingDirectory = $ProjectRoot
                 $pinfoVenv.RedirectStandardOutput = $true
@@ -1912,14 +1912,14 @@ function Invoke-SetupGpuVenv {
     }
 
     $reqFile = Join-Path $ProjectRoot "requirements-gpu.txt"
-    Write-AppLog "GPU依存パッケージ (PyTorch cu124, faster-whisper, peft等) をインストール中 (数分)..." "INFO"
+    Write-AppLog "GPU依存パッケージ (PyTorch cu128, faster-whisper, peft等) をインストール中 (数分)..." "INFO"
 
     $installed = $false
     if ($uvCmd) {
         try {
             $pinfoPip = [System.Diagnostics.ProcessStartInfo]::new()
             $pinfoPip.FileName = $uvCmd
-            $pinfoPip.Arguments = "pip install --extra-index-url https://download.pytorch.org/whl/cu124 --index-strategy unsafe-best-match -r `"$reqFile`" --python `"$gpuVenvPython`""
+            $pinfoPip.Arguments = "pip install --extra-index-url https://download.pytorch.org/whl/cu128 --index-strategy unsafe-best-match -r `"$reqFile`" --python `"$gpuVenvPython`""
             $pinfoPip.WorkingDirectory = $ProjectRoot
             $pinfoPip.RedirectStandardOutput = $true
             $pinfoPip.RedirectStandardError = $true
@@ -1939,7 +1939,7 @@ function Invoke-SetupGpuVenv {
             Unblock-File -LiteralPath $gpuVenvPython -ErrorAction SilentlyContinue
             $pinfoPipSys = [System.Diagnostics.ProcessStartInfo]::new()
             $pinfoPipSys.FileName = $gpuVenvPython
-            $pinfoPipSys.Arguments = "-B -m pip install --extra-index-url https://download.pytorch.org/whl/cu124 -r `"$reqFile`""
+            $pinfoPipSys.Arguments = "-B -m pip install --extra-index-url https://download.pytorch.org/whl/cu128 -r `"$reqFile`""
             $pinfoPipSys.WorkingDirectory = $ProjectRoot
             $pinfoPipSys.RedirectStandardOutput = $true
             $pinfoPipSys.RedirectStandardError = $true
@@ -1985,15 +1985,17 @@ function Ensure-GpuVenvReady {
     $title = "GPU (CUDA) 環境のセットアップ - Hayamimi Live"
     $msg = ""
     if ($diag.status -eq "not_installed") {
-        $msg = "🔥 GPU (CUDA) 起動を利用するには、専用のGPU仮想環境 (.venv_gpu) のセットアップが必要です。`r`n`r`n・PyTorch (CUDA 12.4+)、Faster-Whisper、PEFT (LoRA) を導入します。`r`n・所要時間: 約 1〜3 分（回線速度による）`r`n`r`n今すぐセットアップを開始しますか？"
+        $msg = "🔥 GPU (CUDA) 起動を利用するには、専用のGPU仮想環境 (.venv_gpu) のセットアップが必要です。`r`n`r`n・PyTorch (CUDA 12.8)、Faster-Whisper、PEFT (LoRA) を導入します。`r`n・所要時間: 約 1〜3 分（回線速度による）`r`n`r`n今すぐセットアップを開始しますか？"
     } elseif ($diag.status -eq "incompatible_directml") {
         $msg = "⚠️ 旧バージョン (v2.0.0 以前) の DirectML 環境が残留しているため、最新の CUDA 環境に再構築（自己修復）が必要です。`r`n`r`n今すぐ自動再構築を実行しますか？"
     } elseif ($diag.status -eq "incompatible_python") {
         $msg = "⚠️ GPU仮想環境の Python バージョンが PyTorch CUDA 未対応です。`r`n`r`n安定した Python 3.12 環境へ自動再構築しますか？"
     } elseif ($diag.status -eq "incomplete") {
         $msg = "⚠️ GPU環境に不足パッケージが検出されました: $($diag.message)`r`n`r`n差分パッケージを高速インストール（約10〜30秒）して修復しますか？"
+    } elseif ($diag.status -eq "outdated_torch") {
+        $msg = "⚠️ $($diag.message)`r`n`r`nPyTorch を更新しますか？ (約 3GB のダウンロードが発生します)"
     } elseif ($diag.status -eq "no_cuda") {
-        $msg = "⚠️ GPU環境で CUDA が利用できません: $($diag.message)`r`n`r`nCUDA 12.4 対応環境へ自動再構築しますか？"
+        $msg = "⚠️ GPU環境で CUDA が利用できません: $($diag.message)`r`n`r`nCUDA 12.8 対応環境へ自動再構築しますか？"
     } else {
         $msg = "⚠️ GPU環境に不整合または不足パッケージが検出されました: $($diag.message)`r`n`r`nGPU環境を修復・再セットアップしますか？"
     }
@@ -3645,7 +3647,7 @@ if ($btnRebuild) {
         try {
             if ($script:CurrentEngineMode -eq "Venv") {
                 if ($script:CurrentDeviceMode -eq "Gpu") {
-                    $confirm = Show-AppConfirm -Message "GPU (CUDA) 仮想環境 (.venv_gpu) を再セットアップしますか？`r`n`r`n※ PyTorch cu124, faster-whisper, peft 等を再インストールします。" -Title "GPU環境セットアップ - hayamimi"
+                    $confirm = Show-AppConfirm -Message "GPU (CUDA) 仮想環境 (.venv_gpu) を再セットアップしますか？`r`n`r`n※ PyTorch cu128, faster-whisper, peft 等を再インストールします。" -Title "GPU環境セットアップ - hayamimi"
                     if ($confirm -eq [System.Windows.MessageBoxResult]::Yes) {
                         Invoke-SetupGpuVenv -ForceRecreate $true | Out-Null
                     }

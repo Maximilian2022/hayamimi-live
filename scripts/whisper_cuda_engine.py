@@ -57,6 +57,10 @@ DEFAULT_MODEL_SIZE = "kotoba-tech/kotoba-whisper-v2.0-faster"
 FALLBACK_MODEL_SIZE = "large-v3-turbo"
 
 
+# 品質判定に合格した LoRA だけが持つファイル。未合格の学習結果を字幕へ自動反映しない
+LORA_APPROVAL_FILENAME = "lora_approved.json"
+
+
 class WhisperCUDAEngine:
     """
     Faster-Whisper (CTranslate2 CUDA FP16) を活用した超低遅延・高精度 ASR エンジン。
@@ -125,9 +129,11 @@ class WhisperCUDAEngine:
                 act_sid = get_saved_active_speaker_id()
                 if act_sid:
                     cand_lora = os.path.join(get_storage_dir(), "profiles", f"{act_sid}_lora")
-                    if os.path.isdir(cand_lora):
+                    if os.path.isfile(os.path.join(cand_lora, LORA_APPROVAL_FILENAME)):
                         self.lora_dir = cand_lora
-                        logger.info(f"Auto-detected active speaker LoRA directory: {cand_lora}")
+                        logger.info(f"Auto-detected approved speaker LoRA directory: {cand_lora}")
+                    elif os.path.isdir(cand_lora):
+                        logger.info(f"Speaker LoRA is not approved yet, using base model: {cand_lora}")
             except Exception:
                 pass
 

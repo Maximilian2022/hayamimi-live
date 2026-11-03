@@ -18,7 +18,8 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 
-CURRENT_GPU_ENV_VERSION = "cuda_v2.2.3"
+CURRENT_GPU_ENV_VERSION = "cuda_v2.3.3_cu128"
+REQUIRED_TORCH_BUILD = "+cu128"
 
 
 def get_project_root() -> str:
@@ -216,7 +217,7 @@ def run_gpu_env_probe(force: bool = False) -> dict:
         return {
             "status": "no_cuda",
             "ready": False,
-            "message": f"PyTorch で CUDA が利用できません (検出: {torch_ver or 'CPU版'})。CUDA 12.4 版 (torch==2.6.0+cu124) の再セットアップが必要です。",
+            "message": f"PyTorch で CUDA が利用できません (検出: {torch_ver or 'CPU版'})。CUDA 12.8 版 (torch==2.11.0+cu128) の再セットアップが必要です。",
             "diag": diag,
             "installed_version": installed_version,
             "current_version": CURRENT_GPU_ENV_VERSION,
@@ -238,6 +239,18 @@ def run_gpu_env_probe(force: bool = False) -> dict:
             "status": "incomplete",
             "ready": False,
             "message": f"必須ライブラリが不足しています: {', '.join(missing)}。再セットアップが必要です。",
+            "diag": diag,
+            "installed_version": installed_version,
+            "current_version": CURRENT_GPU_ENV_VERSION,
+        }
+
+    # 4. PyTorch ビルドチェック (旧ビルドは is_available() が True でも RTX 50 系で演算できない)
+    torch_ver = diag.get("torch_version") or ""
+    if not torch_ver.endswith(REQUIRED_TORCH_BUILD):
+        return {
+            "status": "outdated_torch",
+            "ready": False,
+            "message": f"PyTorch ({torch_ver}) が古いため LoRA 学習を実行できない場合があります。torch==2.11.0+cu128 への更新が必要です。",
             "diag": diag,
             "installed_version": installed_version,
             "current_version": CURRENT_GPU_ENV_VERSION,

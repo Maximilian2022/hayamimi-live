@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from tools.profile_builder.gemini_analyzer import DEFAULT_GEMINI_MODEL, GeminiProfileAnalyzer, load_gemini_api_key
 from tools.profile_builder.local_transcribe import LocalTranscriber
-from tools.profile_builder.profile_exporter import load_profile, save_profile
+from tools.profile_builder.profile_exporter import get_default_profiles_dir, load_profile, save_profile
 from tools.profile_builder.profile_model import ExtractedSection, SpeakerProfile
 from tools.profile_builder.voiceprint_extractor import VoiceprintExtractor
 from tools.profile_builder.youtube_fetcher import (
@@ -493,7 +493,7 @@ class ProfileBuilderPipeline:
                 report("lora", 0.93, "🔥 GPU モード: 本人の声紋区間から話者 LoRA アダプタを生成中...")
                 try:
                     from scripts.speaker_lora import train_profile_lora
-                    pdir = os.path.join(REPO_ROOT, "config", "profiles")
+                    pdir = get_default_profiles_dir()
                     lora_out_dir = os.path.join(pdir, f"{final_profile.speaker_id}_lora")
                     lora_ok = train_profile_lora(
                         wav_path=wav_path,
@@ -501,6 +501,7 @@ class ProfileBuilderPipeline:
                         output_dir=lora_out_dir,
                         allow_cuda=True,
                         log_callback=log_callback,
+                        transcript_segments=trans_res.segments,
                     )
                     if lora_ok and os.path.isdir(lora_out_dir):
                         final_profile.lora_adapter_path = lora_out_dir

@@ -166,7 +166,7 @@ def test_probe_ready_success(tmp_path, monkeypatch):
     monkeypatch.setattr("scripts.check_gpu_env.get_gpu_venv_dir", lambda: str(tmp_path))
 
     fake_output = {
-        "torch_version": "2.4.0+cu124",
+        "torch_version": "2.11.0+cu128",
         "cuda_available": True,
         "device_name": "NVIDIA GeForce RTX 5090",
         "device_count": 1,
@@ -208,3 +208,29 @@ def test_probe_fast_path(tmp_path, monkeypatch):
         mock_sub.assert_not_called()
 
 
+def test_probe_outdated_torch_build(tmp_path, monkeypatch):
+    """cu124 は is_available() が True でも RTX 50 系で演算できないため更新対象にする"""
+    fake_py = tmp_path / "python.exe"
+    fake_py.write_text("#!/bin/sh\n")
+    monkeypatch.setattr("scripts.check_gpu_env.get_gpu_python_path", lambda: str(fake_py))
+    monkeypatch.setattr("scripts.check_gpu_env.get_marker_file_path", lambda: str(tmp_path / ".gpu_env_version"))
+    monkeypatch.setattr("scripts.check_gpu_env.get_gpu_venv_dir", lambda: str(tmp_path))
+
+    mock_proc = MagicMock()
+    mock_proc.returncode = 0
+    mock_proc.stdout = json.dumps({
+        "torch_version": "2.6.0+cu124",
+        "cuda_available": True,
+        "directml_detected": False,
+        "faster_whisper": True,
+        "peft": True,
+        "ctranslate2": True,
+        "ctranslate2_cuda": True,
+    })
+    mock_proc.stderr = ""
+
+    with patch("subprocess.run", return_value=mock_proc):
+        res = run_gpu_env_probe()
+    assert res["status"] == "outdated_torch"
+    assert res["ready"] is False
+    assert read_marker_version() != CURRENT_GPU_ENV_VERSION

@@ -124,3 +124,32 @@ def test_whisper_cuda_close():
 
         with pytest.raises(RuntimeError):
             engine.transcribe(np.zeros(16000, dtype=np.float32))
+
+
+@pytest.mark.parametrize("approved, uses_lora", [(False, False), (True, True)])
+def test_active_speaker_lora_requires_approval(tmp_path, approved, uses_lora):
+    """品質判定に合格していない LoRA は自動で読み込まない"""
+    from scripts.whisper_cuda_engine import LORA_APPROVAL_FILENAME
+
+    ct2_dir = tmp_path / "profiles" / "spk_lora" / "ctranslate2"
+    ct2_dir.mkdir(parents=True)
+    if approved:
+        (ct2_dir.parent / LORA_APPROVAL_FILENAME).write_text("{}", encoding="utf-8")
+
+    with patch("scripts.whisper_cuda_engine.HAVE_FASTER_WHISPER", True), \
+         patch("scripts.whisper_cuda_engine.WhisperModel", return_value=MagicMock()), \
+         patch("scripts.config_store.get_storage_dir", return_value=str(tmp_path)), \
+         patch("scripts.config_store.get_saved_active_speaker_id", return_value="spk"):
+        engine = WhisperCUDAEngine(model_size_or_path="base-model")
+
+    assert (engine.model_path == str(ct2_dir)) is uses_lora
+
+
+def test_explicit_lora_dir_is_honored_without_approval(tmp_path):
+    """--lora-dir の明示指定は実験用に従来どおり読み込む"""
+    ct2_dir = tmp_path / "ctranslate2"
+    ct2_dir.mkdir()
+    with patch("scripts.whisper_cuda_engine.HAVE_FASTER_WHISPER", True), \
+         patch("scripts.whisper_cuda_engine.WhisperModel", return_value=MagicMock()):
+        engine = WhisperCUDAEngine(lora_dir=str(tmp_path))
+    assert engine.model_path == str(ct2_dir)
