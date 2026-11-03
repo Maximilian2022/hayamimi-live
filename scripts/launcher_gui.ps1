@@ -3855,11 +3855,13 @@ function Show-MaintenanceExitDialog {
             }
 
             # ポーリングタイマー
-            $pollTimer = [System.Windows.Threading.DispatcherTimer]::new()
-            $pollTimer.Interval = [TimeSpan]::FromMilliseconds(800)
+            # 注意: Tick ハンドラは生成元のスコープを捕捉しない (動的スコープ) ため、ローカル変数ではなく
+            # 専用の $script: 変数で参照する。$pollTimer はメイン画面の定期ポーリングと同名なので使わないこと。
+            $script:MaintPollTimer = [System.Windows.Threading.DispatcherTimer]::new()
+            $script:MaintPollTimer.Interval = [TimeSpan]::FromMilliseconds(800)
             $script:maintPollElapsed = 0
 
-            $pollTimer.Add_Tick({
+            $script:MaintPollTimer.Add_Tick({
                 $script:maintPollElapsed += 1
                 try {
                     $st = Invoke-RestMethod -Uri "http://localhost:8833/api/maintenance/status" -Method Get -TimeoutSec 3 -ErrorAction Stop
@@ -3872,32 +3874,32 @@ function Show-MaintenanceExitDialog {
                         $isError = ($st.status -eq "error") -or ($st.error -and -not $st.running)
 
                         if ($isCompleted) {
-                            $pollTimer.Stop()
+                            $script:MaintPollTimer.Stop()
                             $txtStatus.Text = "✅ メンテナンスが完了しました"
                             $txtDetail.Text = if ($msg) { $msg } else { "最新の辞書ルールを保存しました。終了します..." }
-                            $closeTimer = [System.Windows.Threading.DispatcherTimer]::new()
-                            $closeTimer.Interval = [TimeSpan]::FromMilliseconds(700)
-                            $closeTimer.Add_Tick({
-                                $closeTimer.Stop()
+                            $script:MaintCloseTimer = [System.Windows.Threading.DispatcherTimer]::new()
+                            $script:MaintCloseTimer.Interval = [TimeSpan]::FromMilliseconds(700)
+                            $script:MaintCloseTimer.Add_Tick({
+                                $script:MaintCloseTimer.Stop()
                                 $script:MaintenanceExitChoice = "MAINTAIN"
                                 $dlg.DialogResult = $true
                                 $dlg.Close()
                             })
-                            $closeTimer.Start()
+                            $script:MaintCloseTimer.Start()
                             return
                         } elseif ($isError) {
-                            $pollTimer.Stop()
+                            $script:MaintPollTimer.Stop()
                             $txtStatus.Text = "⚠️ メンテナンス中にエラーが発生しました"
                             $txtDetail.Text = if ($st.error) { "$($st.error)。そのまま終了します..." } else { "エラーが発生したため、そのまま終了します..." }
-                            $closeTimer = [System.Windows.Threading.DispatcherTimer]::new()
-                            $closeTimer.Interval = [TimeSpan]::FromMilliseconds(1000)
-                            $closeTimer.Add_Tick({
-                                $closeTimer.Stop()
+                            $script:MaintCloseTimer = [System.Windows.Threading.DispatcherTimer]::new()
+                            $script:MaintCloseTimer.Interval = [TimeSpan]::FromMilliseconds(1000)
+                            $script:MaintCloseTimer.Add_Tick({
+                                $script:MaintCloseTimer.Stop()
                                 $script:MaintenanceExitChoice = "MAINTAIN"
                                 $dlg.DialogResult = $true
                                 $dlg.Close()
                             })
-                            $closeTimer.Start()
+                            $script:MaintCloseTimer.Start()
                             return
                         }
                     }
@@ -3905,7 +3907,7 @@ function Show-MaintenanceExitDialog {
 
                 # 最大 300 秒でタイムアウト (動画DLとGemini分析を考慮)
                 if ($script:maintPollElapsed -gt 375) {
-                    $pollTimer.Stop()
+                    $script:MaintPollTimer.Stop()
                     $txtStatus.Text = "⏱️ メンテナンスがタイムアウトしました"
                     $txtDetail.Text = "処理を中断し、終了します..."
                     $script:MaintenanceExitChoice = "MAINTAIN"
@@ -3913,7 +3915,7 @@ function Show-MaintenanceExitDialog {
                     $dlg.Close()
                 }
             })
-            $pollTimer.Start()
+            $script:MaintPollTimer.Start()
         })
 
         $dlg.ShowDialog() | Out-Null
