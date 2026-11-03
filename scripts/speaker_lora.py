@@ -40,7 +40,7 @@ try:
     from peft import LoraConfig, get_peft_model, PeftModel
     from transformers.modeling_outputs import BaseModelOutput
     HAVE_TRAIN_DEPENDENCIES = True
-except ImportError:
+except (ImportError, OSError):  # 壊れた DLL は OSError になる。ここで起動全体を止めない
     torch = None
     WhisperProcessor = None
     WhisperForConditionalGeneration = None

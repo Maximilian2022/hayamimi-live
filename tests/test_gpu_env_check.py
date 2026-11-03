@@ -234,3 +234,41 @@ def test_probe_outdated_torch_build(tmp_path, monkeypatch):
     assert res["status"] == "outdated_torch"
     assert res["ready"] is False
     assert read_marker_version() != CURRENT_GPU_ENV_VERSION
+
+
+def _make_stale_torchaudio(venv):
+    site_packages = venv / "Lib" / "site-packages"
+    for name in ("torchaudio/lib", "torio/lib", "torchaudio-2.6.0+cu124.dist-info", "torch/lib"):
+        (site_packages / name).mkdir(parents=True)
+        (site_packages / name / "f.txt").write_text("x")
+    return site_packages
+
+
+def test_stale_torchaudio_is_removed_before_fast_path(tmp_path, monkeypatch):
+    """マーカーが最新でも残留を削除し、torch 本体には触れない"""
+    site_packages = _make_stale_torchaudio(tmp_path)
+    fake_py = tmp_path / "python.exe"
+    fake_py.write_text("")
+    monkeypatch.setattr("scripts.check_gpu_env.get_gpu_python_path", lambda: str(fake_py))
+    monkeypatch.setattr("scripts.check_gpu_env.get_gpu_venv_dir", lambda: str(tmp_path))
+    monkeypatch.setattr("scripts.check_gpu_env.read_marker_version", lambda *_: CURRENT_GPU_ENV_VERSION)
+
+    res = run_gpu_env_probe()
+
+    assert res["status"] == "ready"
+    assert not (site_packages / "torchaudio").exists()
+    assert not (site_packages / "torio").exists()
+    assert not list(site_packages.glob("torchaudio-*.dist-info"))
+    assert (site_packages / "torch" / "lib" / "f.txt").exists()
+
+
+def test_locked_torchaudio_is_reported(tmp_path, monkeypatch):
+    fake_py = tmp_path / "python.exe"
+    fake_py.write_text("")
+    monkeypatch.setattr("scripts.check_gpu_env.get_gpu_python_path", lambda: str(fake_py))
+    monkeypatch.setattr("scripts.check_gpu_env.remove_stale_torchaudio", lambda: False)
+
+    res = run_gpu_env_probe()
+
+    assert res["status"] == "stale_torchaudio"
+    assert res["ready"] is False

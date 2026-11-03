@@ -30,7 +30,7 @@ try:
     from optimum.onnxruntime import ORTModelForSpeechSeq2Seq
     import onnxruntime as ort
     HAVE_DML_DEPENDENCIES = True
-except ImportError:
+except (ImportError, OSError):  # 壊れた DLL は OSError になる。ここで起動全体を止めない
     AutoProcessor = None
     GenerationConfig = None
     ORTModelForSpeechSeq2Seq = None

@@ -9,8 +9,10 @@ DirectML の残留や CUDA 不整合を瞬時に検知してランチャー GUI 
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import os
+import shutil
 import subprocess
 import sys
 
@@ -72,6 +74,25 @@ def write_marker_version(ver: str = CURRENT_GPU_ENV_VERSION, python_exe: str | N
         return False
 
 
+def remove_stale_torchaudio() -> bool:
+    """Delete torchaudio left over from v2.3.0 or earlier. Returns False if it could not be removed.
+
+    v2.3.1 で依存から外したが既存の環境には残る。cu124 のまま torch だけ cu128 に上がると、
+    transformers が自動で読み込む際に Windows のエラーダイアログが出てアプリが起動できない。
+    pip を持たない uv 製の環境もあるため、ファイルを直接削除する。
+    """
+    site_packages = os.path.join(get_gpu_venv_dir(), "Lib", "site-packages")
+    targets = [
+        os.path.join(site_packages, "torchaudio"),
+        os.path.join(site_packages, "torio"),
+        *glob.glob(os.path.join(glob.escape(site_packages), "torchaudio-*.dist-info")),
+    ]
+    found = [t for t in targets if os.path.isdir(t)]
+    for target in found:
+        shutil.rmtree(target, ignore_errors=True)
+    return not any(os.path.exists(t) for t in found)
+
+
 def run_gpu_env_probe(force: bool = False) -> dict:
     """
     .venv_gpu 内の Python を用いて、CUDA, DirectML, faster-whisper, peft の整合性を診断する。
@@ -86,6 +107,16 @@ def run_gpu_env_probe(force: bool = False) -> dict:
             "gpu_python": python_exe,
             "current_version": CURRENT_GPU_ENV_VERSION,
             "installed_version": None,
+        }
+
+    # Fast Path や診断より先に行う。残っていると診断の import 自体がダイアログで止まる
+    if not remove_stale_torchaudio():
+        return {
+            "status": "stale_torchaudio",
+            "ready": False,
+            "message": "古い torchaudio を削除できませんでした。アプリを終了してからもう一度起動してください。",
+            "gpu_python": python_exe,
+            "current_version": CURRENT_GPU_ENV_VERSION,
         }
 
     installed_version = read_marker_version(python_exe)
