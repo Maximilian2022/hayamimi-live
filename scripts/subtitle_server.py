@@ -229,13 +229,20 @@ _synced_session_hits: dict[str, int] = {}
 
 
 def _check_profile_lora_status(speaker_id: str, server=None) -> dict:
-    from tools.profile_builder.profile_exporter import load_profile
+    from tools.profile_builder.profile_exporter import is_safe_speaker_id, load_profile
+    if not is_safe_speaker_id(speaker_id):
+        return {"exists": False, "channel_linked": False, "needs_init_training": False}
+
     pdir = _get_profiles_dir()
-    prof = load_profile(speaker_id, pdir)
+    real_pdir = os.path.realpath(pdir)
+    lora_dir = os.path.realpath(os.path.join(real_pdir, f"{speaker_id}_lora"))
+    if os.path.commonpath([real_pdir, lora_dir]) != real_pdir:
+        return {"exists": False, "channel_linked": False, "needs_init_training": False}
+
+    prof = load_profile(speaker_id, real_pdir)
     if not prof:
         return {"exists": False, "channel_linked": False, "needs_init_training": False}
 
-    lora_dir = os.path.join(pdir, f"{speaker_id}_lora")
     lora_exists = os.path.isdir(lora_dir) and (
         os.path.exists(os.path.join(lora_dir, "adapter_config.json")) or
         os.path.exists(os.path.join(lora_dir, "adapter_model.safetensors"))
