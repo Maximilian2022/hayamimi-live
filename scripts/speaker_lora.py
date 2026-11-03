@@ -15,8 +15,10 @@ import datetime
 import json
 import logging
 import os
+import re
 import sys
 import time
+import unicodedata
 from typing import Callable, Optional
 
 import numpy as np
@@ -36,6 +38,7 @@ try:
     import torch
     from transformers import WhisperProcessor, WhisperForConditionalGeneration
     from peft import LoraConfig, get_peft_model, PeftModel
+    from transformers.modeling_outputs import BaseModelOutput
     HAVE_TRAIN_DEPENDENCIES = True
 except ImportError:
     torch = None
@@ -44,11 +47,32 @@ except ImportError:
     LoraConfig = None
     get_peft_model = None
     PeftModel = None
+    BaseModelOutput = None
     HAVE_TRAIN_DEPENDENCIES = False
+
+try:
+    from scripts.lora_state import write_lora_meta
+except ModuleNotFoundError:  # python scripts/speaker_lora.py で直接実行した場合
+    from lora_state import write_lora_meta
 
 logger = logging.getLogger("speaker_lora")
 
 DEFAULT_MODEL_ID = "kotoba-tech/kotoba-whisper-v2.2"
+# 動画 6 本分。区間ごとのエンコーダ出力を約 8MB ずつメインメモリに保持する
+MAX_TRAINING_SEGMENTS = 300
+# 学習回数を増やすほど字幕が悪化したため、データが増えた分は繰り返しを減らす
+MAX_TRAINING_STEPS = 750
+_FILLER = re.compile(
+    r"(?:(?<=^)|(?<=[、。,.?？!！\s]))"
+    r"(?:あー?|えー?|えっと|えーと|うーん|うん|んー?|まあ|ま|あの|その|なんか|ね)"
+    r"(?=[、。,.?？!！\s]|$)"
+)
+
+
+def clean_lora_label(text: str) -> str:
+    """Remove fillers and punctuation so training does not change the subtitle style."""
+    text = _FILLER.sub("", unicodedata.normalize("NFKC", text))
+    return re.sub(r"[\s、。,.…]", "", text)
 
 
 def _maybe_reexec_with_gpu_venv():
@@ -140,6 +164,7 @@ class SpeakerLoRATrainer:
             )
 
         self.processor = None
+        self.label_tokenizer = None
         self.model = None
         self.peft_model = None
 
@@ -148,6 +173,13 @@ class SpeakerLoRATrainer:
         if self.model is None:
             logger.info(f"Loading base model {self.model_id} on {self.device}...")
             self.processor = WhisperProcessor.from_pretrained(self.model_id)
+            # 推論時と同じ <|ja|><|transcribe|><|notimestamps|> をラベルの先頭に付ける
+            self.label_tokenizer = WhisperProcessor.from_pretrained(
+                self.model_id, language="japanese", task="transcribe"
+            ).tokenizer
+            self.label_tokenizer.set_prefix_tokens(
+                language="japanese", task="transcribe", predict_timestamps=False
+            )
             self.model = WhisperForConditionalGeneration.from_pretrained(self.model_id)
             self.model.to(self.device)
 
@@ -162,9 +194,9 @@ class SpeakerLoRATrainer:
         sample_rate: int,
         training_pairs: list[tuple[float, float, str]],
         epochs: int = 15,
-        lr: float = 1e-3,
-        lora_rank: int = 16,
-        lora_alpha: int = 32,
+        lr: float = 3e-5,
+        lora_rank: int = 4,
+        lora_alpha: int = 8,
         base_lora_dir: Optional[str] = None,
         on_progress: Optional[Callable[[int, int, float], None]] = None,
     ) -> float:
@@ -209,7 +241,8 @@ class SpeakerLoRATrainer:
             for start_s, end_s, ref_text in training_pairs:
                 start_idx = int(start_s * 16000)
                 end_idx = min(len(audio_samples), int(end_s * 16000))
-                if end_idx <= start_idx:
+                label_text = clean_lora_label(ref_text)
+                if end_idx <= start_idx or not label_text:
                     continue
 
                 chunk = audio_samples[start_idx:end_idx]
@@ -220,14 +253,15 @@ class SpeakerLoRATrainer:
                 # エンコーダの順伝播のみ実行して特徴量をキャッシュ
                 encoder_outputs = self.peft_model.model.model.encoder(feat)
 
-                labels = self.processor.tokenizer(
-                    ref_text, return_tensors="pt"
-                ).input_ids.to(self.device)
-                labels = labels.masked_fill(
-                    labels == self.processor.tokenizer.pad_token_id, -100
-                )
+                # モデルが学習時に開始トークンを自動で前置するので、ここでは除く
+                labels = self.label_tokenizer(
+                    label_text, return_tensors="pt"
+                ).input_ids[:, 1:].to(self.device)
+                # 1 区間ずつ学習するのでパディングはない。Whisper の pad は文末の
+                # <|endoftext|> と同じ番号で、隠すと話の終わりを学習できなくなる
 
-                cached_data.append((encoder_outputs, labels))
+                # 区間が増えても VRAM 上限に収まるよう、学習の直前まで GPU に載せない
+                cached_data.append((encoder_outputs.last_hidden_state.cpu(), labels))
 
         t_cache = time.perf_counter() - t_cache_start
         logger.info(f"Encoder caching completed in {t_cache:.2f}s")
@@ -238,7 +272,9 @@ class SpeakerLoRATrainer:
 
         # 3. LoRA デコーダのみの超軽量学習 (他プロセス共存スロットリング付き)
         effective_lr = lr if base_lora_dir is None else (lr * 0.2)  # 継続学習時は学習率を微小化
-        optimizer = torch.optim.AdamW(self.peft_model.parameters(), lr=effective_lr)
+        optimizer = torch.optim.AdamW(
+            [p for p in self.peft_model.parameters() if p.requires_grad], lr=effective_lr
+        )
         self.peft_model.train()
 
         t_train_start = time.perf_counter()
@@ -246,10 +282,12 @@ class SpeakerLoRATrainer:
 
         for epoch in range(epochs):
             total_loss = 0.0
-            for encoder_outputs, labels in cached_data:
+            for index in np.random.permutation(len(cached_data)):
+                hidden_state, labels = cached_data[index]
                 optimizer.zero_grad()
                 outputs = self.peft_model(
-                    encoder_outputs=encoder_outputs, labels=labels
+                    encoder_outputs=BaseModelOutput(last_hidden_state=hidden_state.to(self.device)),
+                    labels=labels,
                 )
                 loss = outputs.loss
                 loss.backward()
@@ -320,7 +358,7 @@ class SpeakerLoRATrainer:
 
 
 def train_profile_lora(
-    wav_path: str,
+    wav_path: "str | tuple[np.ndarray, int]",
     profile,
     output_dir: str,
     allow_cuda: bool = True,
@@ -358,7 +396,7 @@ def train_profile_lora(
 
     import soundfile as sf
     try:
-        audio, sr = sf.read(wav_path, dtype="float32")
+        audio, sr = wav_path if isinstance(wav_path, tuple) else sf.read(wav_path, dtype="float32")
         if audio.ndim > 1:
             audio = audio.mean(axis=1)
     except Exception as e:
@@ -396,7 +434,12 @@ def train_profile_lora(
             log_callback("WARN", "声紋に一致する本人の発話区間が不足していたため、LoRA学習をスキップしました。")
         return False
 
-    selected_pairs = candidates[:30]
+    selected_pairs = candidates
+    if len(candidates) > MAX_TRAINING_SEGMENTS:
+        # 特定の動画に偏らないよう、全体から等間隔に選ぶ
+        picks = np.linspace(0, len(candidates) - 1, MAX_TRAINING_SEGMENTS).astype(int)
+        selected_pairs = [candidates[i] for i in picks]
+    epochs = min(epochs, max(1, MAX_TRAINING_STEPS // len(selected_pairs)))
     if log_callback:
         log_callback("LORA", f"本人の確定声紋に合致する {len(selected_pairs)} 区間の高純度音声を抽出。LoRA 学習を開始します...")
 
@@ -411,7 +454,6 @@ def train_profile_lora(
             sample_rate=sr,
             training_pairs=selected_pairs,
             epochs=epochs,
-            base_lora_dir=output_dir if os.path.isdir(output_dir) else None,
             on_progress=on_prog,
         )
         trainer.save_adapter(output_dir)
@@ -420,6 +462,7 @@ def train_profile_lora(
             if log_callback:
                 log_callback("WARN", "LoRA 学習は完了しましたが CTranslate2 への変換に失敗したため、推論には反映されません。")
             return False
+        write_lora_meta(output_dir, trained_segments=len(selected_pairs))
         if log_callback:
             log_callback("SUCCESS", f"✔ 話者特化 LoRA の学習と CTranslate2 マージが完了しました！ ({output_dir})")
         return True

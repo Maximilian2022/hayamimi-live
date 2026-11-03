@@ -760,6 +760,10 @@
       <div class="form-group">
         <label class="form-label">YouTube 配信/動画 URL、チャンネルURL、または 再生リストURL</label>
         <input type="text" id="inputYtUrl" class="input-text" placeholder="https://www.youtube.com/watch?v=... または @チャンネル名 または playlist?list=...">
+        <div style="font-size: 0.72rem; color: var(--paper-muted); margin-top: 4px;">
+          🔒 動画の音声は学習のため Gemini API（Google）へ送信されます。無料枠のキーでは、送信内容が Google のサービス改善に使われ、担当者が内容を確認する場合があります（課金キーでは改善に使われません）。自分の声や配信を送ってよいか確認のうえご利用ください。<a href="https://aistudio.google.com/docs/terms" target="_blank" rel="noopener noreferrer" style="color: var(--blue);">利用規約</a><br>
+          🔥 GPU モードでは LoRA（実験的機能）も学習します。本人の発話区間を追加で送信し、モデルと学習用の音声を話者ごとに約 1.5GB、この PC に保存します。字幕が悪くなる場合はプロファイル画面で無効にできます。
+        </div>
         <div style="font-size: 0.75rem; color: var(--paper-dim); margin-top: 4px;">
           💡 <b>チャンネルURL（@チャンネル名）</b> や <b>再生リストURL（playlist?list=...）</b> を指定すると、含まれる動画群から自動で一括学習します。過去に学習済みの動画は自動スキップされ、途中でエラーが発生した場合も学習済みプロファイルは確実に保存されます。
         </div>
@@ -912,6 +916,10 @@
       <div class="form-group">
         <label class="form-label">連携 YouTube チャンネル URL / @ハンドル</label>
         <input type="text" id="modalYoutubeChannel" class="input-text" placeholder="https://www.youtube.com/@ChannelName">
+        <div style="font-size: 0.72rem; color: var(--paper-muted); margin-top: 4px;">
+          🔒 動画の音声は学習のため Gemini API（Google）へ送信されます。無料枠のキーでは、送信内容が Google のサービス改善に使われ、担当者が内容を確認する場合があります（課金キーでは改善に使われません）。自分の声や配信を送ってよいか確認のうえご利用ください。<a href="https://aistudio.google.com/docs/terms" target="_blank" rel="noopener noreferrer" style="color: var(--blue);">利用規約</a><br>
+          🔥 GPU モードでは LoRA（実験的機能）も学習します。本人の発話区間を追加で送信し、モデルと学習用の音声を話者ごとに約 1.5GB、この PC に保存します。字幕が悪くなる場合はプロファイル画面で無効にできます。
+        </div>
         <div style="font-size: 0.72rem; color: var(--paper-muted); margin-top: 3px;">※起動時・終了時に新着動画を自動検知し、辞書学習・マージを行う対象チャンネル</div>
       </div>
       <div class="form-group">
@@ -1383,6 +1391,25 @@
   };
 
   // --- Profiles CRUD ---
+  async function toggleLora(button) {
+    const enabled = button.dataset.enable === "true";
+    try {
+      const res = await fetch("/api/profiles/lora/enabled", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ speaker_id: button.dataset.speaker, enabled }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        return alert("LoRA の切り替えに失敗しました: " + (err.error || res.statusText));
+      }
+      alert(`LoRA を${enabled ? "有効" : "無効"}にしました。次回の起動から字幕に反映されます。`);
+      loadProfiles();
+    } catch (e) {
+      alert("通信エラー: " + e.message);
+    }
+  }
+
   async function loadProfiles() {
     try {
       const res = await fetch("/api/profiles");
@@ -1425,7 +1452,7 @@
             ${p.archived_replacements && p.archived_replacements.length ? `<span style="color: var(--paper-muted);">休眠: <b>${p.archived_replacements.length}</b> 件</span>` : ''}
             <span style="color: var(--gold);">学習動画: <b>${vCount}</b> 本</span>
             <span>声紋: <b style="color: ${p.voiceprint && p.voiceprint.length ? 'var(--blue)' : 'var(--paper-muted)'}">${p.voiceprint && p.voiceprint.length ? '学習済' : '未学習'}</b></span>
-            ${isGpuMode ? `<span>LoRA: <b style="color: ${p.has_lora ? '#F87171' : 'var(--paper-muted)'}">${p.has_lora ? '学習済 (11MB)' : '未学習'}</b></span>` : ''}
+            ${isGpuMode ? `<span title="実験的機能です。字幕が悪くなる場合は無効にしてください。">LoRA (実験的): <b style="color: ${p.has_lora && p.lora_enabled !== false ? '#F87171' : 'var(--paper-muted)'}">${p.has_lora ? (p.lora_enabled !== false ? '有効' : '無効') : '未学習'}</b>${p.has_lora ? ` <button type="button" data-speaker="${escapeHtml(p.speaker_id)}" data-enable="${p.lora_enabled === false}" onclick="toggleLora(this)" style="font-size:0.68rem; padding:1px 6px; cursor:pointer;">${p.lora_enabled !== false ? '無効にする' : '有効にする'}</button>` : ''}</span>` : ''}
             <span>🛡️ コラボ除外: <b style="color: ${p.collab_filter_enabled !== false ? 'var(--green)' : 'var(--paper-muted)'}">${p.collab_filter_enabled !== false ? 'ON' : 'OFF'}</b></span>
             ${p.youtube_channel_url ? `<span style="color: var(--blue);">📺 チャンネル連携済</span>` : ''}
             ${p.extracted_section ? `<span>直近抽出: ${p.extracted_section.duration_sec}秒</span>` : ''}

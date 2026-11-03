@@ -596,6 +596,9 @@ def test_voiceprint_manual_record_api(running_server, monkeypatch):
 
     class MockExtractor:
         is_available = True
+        def calibrate_threshold(self, wav_path):
+            return 0.6
+
         def extract_voiceprint(self, wav_path):
             return [0.1] * 512, 10
 

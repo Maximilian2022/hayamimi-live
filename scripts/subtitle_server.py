@@ -243,10 +243,10 @@ def _check_profile_lora_status(speaker_id: str, server=None) -> dict:
     if not prof:
         return {"exists": False, "channel_linked": False, "needs_init_training": False}
 
-    lora_exists = os.path.isdir(lora_dir) and (
-        os.path.exists(os.path.join(lora_dir, "adapter_config.json")) or
-        os.path.exists(os.path.join(lora_dir, "adapter_model.safetensors"))
-    )
+    from scripts.lora_state import has_usable_model, is_lora_enabled
+
+    # 過去の形式のモデルは字幕に使わないため、未学習として扱い作り直しを促す
+    lora_exists = has_usable_model(lora_dir)
     chan_url = getattr(prof, "youtube_channel_url", None)
     channel_linked = bool(chan_url)
 
@@ -256,6 +256,7 @@ def _check_profile_lora_status(speaker_id: str, server=None) -> dict:
     return {
         "speaker_id": speaker_id,
         "lora_exists": lora_exists,
+        "lora_enabled": is_lora_enabled(lora_dir),
         "channel_linked": channel_linked,
         "channel_url": chan_url,
         "is_gpu_mode": is_gpu,
@@ -478,37 +479,6 @@ def _execute_maintenance(server, log_callback=None):
                         pass
                 except Exception as ve:
                     logger.error("Maintenance video %s failed: %s", v_info["url"], ve)
-
-        # 2.5. GPU モード時の LoRA 継続成長 (Incremental Optimization)
-        is_gpu_mode = os.environ.get("HAYAMIMI_DEVICE") == "gpu" or getattr(getattr(server, "asr", None), "engine_name", "") == "whisper_cuda"
-        if is_gpu_mode and learned_videos > 0:
-            try:
-                msg_lora = "🔥 GPU モード: 新着動画データから話者 LoRA を継続最適化中..."
-                if log_callback: log_callback(msg_lora)
-                with _maintenance_lock:
-                    _maintenance_status["run_message"] = msg_lora
-                from scripts.speaker_lora import train_profile_lora
-                target_pids = set(v["speaker_id"] for v in vids_to_process if v.get("speaker_id"))
-                for pid in target_pids:
-                    p = load_profile(pid, pdir)
-                    if p and getattr(p, "voiceprint", None):
-                        lora_out_dir = os.path.join(pdir, f"{pid}_lora")
-                        # Pick last downloaded video wav if available
-                        for v_info in vids_to_process:
-                            if v_info.get("speaker_id") == pid and v_info.get("wav_path") and os.path.isfile(v_info["wav_path"]):
-                                train_profile_lora(
-                                    wav_path=v_info["wav_path"],
-                                    profile=p,
-                                    output_dir=lora_out_dir,
-                                    allow_cuda=True,
-                                    log_callback=log_callback,
-                                )
-                                p.lora_adapter_path = lora_out_dir
-                                p.lora_trained_video_count += 1
-                                save_profile(p)
-                                break
-            except Exception as le:
-                logger.warning(f"Maintenance LoRA growth error: {le}")
 
         # 3. Migrate legacy profiles & tags (schema 1.2.0, one-time automatic execution)
         from tools.profile_builder.youtube_fetcher import extract_hashtags_from_metadata, YouTubeFetcher
@@ -1562,7 +1532,9 @@ class SubtitleServer:
             def do_GET(self):
                 if not self._validate_host():
                     return
-                req_path = urllib.parse.urlsplit(self.path).path
+                url_parts = urllib.parse.urlsplit(self.path)
+                req_path = url_parts.path
+                query = urllib.parse.parse_qs(url_parts.query)
                 origin = self.headers.get("Origin")
                 if req_path == "/events":
                     self.send_response(200)
@@ -1664,6 +1636,7 @@ class SubtitleServer:
                             d["available_tags"] = p.get_available_tags()
                             lora_st = _check_profile_lora_status(p.speaker_id, server)
                             d["has_lora"] = bool(lora_st.get("lora_exists"))
+                            d["lora_enabled"] = bool(lora_st.get("lora_enabled", True))
                             d["lora_status"] = lora_st
                             res_list.append(d)
                         self._json(200, res_list)
@@ -2071,6 +2044,24 @@ class SubtitleServer:
                         sys.stderr.flush()
                     self._json(200, {"ok": True})
                     return
+                if req_path == "/api/profiles/lora/enabled":
+                    code, payload = self._read_json_body()
+                    if code != 200 or not isinstance(payload, dict):
+                        self._json(400, {"error": "Invalid body"})
+                        return
+                    sid = payload.get("speaker_id")
+                    enabled = payload.get("enabled")
+                    if not isinstance(sid, str) or not isinstance(enabled, bool):
+                        self._json(400, {"error": "speaker_id and enabled are required"})
+                        return
+                    st = _check_profile_lora_status(sid, server)
+                    if not st.get("lora_dir"):
+                        self._json(404, {"error": "この話者の LoRA はまだ学習されていません"})
+                        return
+                    from scripts.lora_state import set_lora_enabled
+                    set_lora_enabled(st["lora_dir"], enabled)
+                    self._json(200, {"ok": True, "enabled": enabled})
+                    return
                 if req_path == "/api/profiles/lora/train":
                     code, payload = self._read_json_body()
                     if code != 200 or not isinstance(payload, dict):
@@ -2195,6 +2186,7 @@ class SubtitleServer:
 
                             try:
                                 vp_vec, sample_count = extractor.extract_voiceprint(temp_wav_path)
+                                vp_threshold = extractor.calibrate_threshold(temp_wav_path)
                             finally:
                                 try:
                                     os.remove(temp_wav_path)
@@ -2213,6 +2205,8 @@ class SubtitleServer:
 
                             prof.voiceprint = vp_vec
                             prof.voiceprint_sample_count = sample_count
+                            if vp_threshold is not None:
+                                prof.voiceprint_threshold = vp_threshold
                             save_profile(prof, storage_dir=pdir)
 
                             logger.info("✔ 手動マイク録音から話者声紋（512次元）を登録しました: %s (サンプル: %d)", speaker_id, sample_count)

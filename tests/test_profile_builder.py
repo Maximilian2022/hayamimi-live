@@ -423,6 +423,7 @@ def test_voiceprint_model_merging():
         display_name="話者A",
         voiceprint=v1.tolist(),
         voiceprint_sample_count=10,
+        voiceprint_threshold=0.0,
     )
 
     prof2 = SpeakerProfile(
@@ -1154,3 +1155,150 @@ def test_fetch_maintenance_candidates_and_180_day_filter(monkeypatch):
     )
     assert len(empty_candidates) == 0
 
+
+def test_safe_parse_json_reraises_original_error_when_unrepairable():
+    """修復できない JSON は NameError ではなく元の JSONDecodeError を送出する"""
+    import json
+    from tools.profile_builder.gemini_analyzer import safe_parse_json
+
+    with pytest.raises(json.JSONDecodeError):
+        safe_parse_json("this is not json")
+
+
+def test_voiceprint_merge_rejects_a_different_speaker():
+    """閾値を下回る声紋は平均せず、既存の声紋を守る"""
+    v1 = [1.0, 0.0, 0.0]
+    prof = SpeakerProfile(
+        speaker_id="a", display_name="A", voiceprint=v1,
+        voiceprint_sample_count=10, voiceprint_threshold=0.6,
+    )
+    other = SpeakerProfile(
+        speaker_id="a", display_name="A", voiceprint=[0.0, 1.0, 0.0], voiceprint_sample_count=10,
+    )
+    prof.merge_profile(other, reject_other_voice=True)
+    assert prof.voiceprint == v1
+    assert prof.voiceprint_sample_count == 10
+
+
+def test_gemini_cannot_set_machine_owned_profile_fields():
+    from tools.profile_builder.gemini_analyzer import _clear_machine_owned_fields
+
+    prof = SpeakerProfile(
+        speaker_id="a", display_name="A", voiceprint=[1.0], voiceprint_threshold=0.72,
+        voiceprint_sample_count=46, lora_adapter_path="x", lora_trained_video_count=3,
+    )
+    _clear_machine_owned_fields(prof)
+    assert prof.voiceprint is None
+    assert prof.voiceprint_threshold == 0.72  # CPU/NPU の挙動を変えないため保持する
+    assert prof.voiceprint_sample_count == 0
+    assert prof.lora_adapter_path is None
+    assert prof.lora_trained_video_count == 0
+
+
+class TestCalibrateThreshold:
+    @staticmethod
+    def _run(tmp_path, seconds, sims_embedding):
+        import numpy as np
+        import soundfile as sf
+        from tools.profile_builder.voiceprint_extractor import VoiceprintExtractor
+
+        wav = tmp_path / "a.wav"
+        noise = np.random.default_rng(0).uniform(-0.3, 0.3, 16000 * seconds).astype(np.float32)
+        sf.write(str(wav), noise, 16000)
+        ex = VoiceprintExtractor.__new__(VoiceprintExtractor)
+        ex._extractor = object()
+        ex.compute_chunk_embedding = sims_embedding
+        return ex.calibrate_threshold(str(wav))
+
+    def test_too_little_speech_returns_none(self, tmp_path):
+        import numpy as np
+        assert self._run(tmp_path, 10, lambda c, sr=16000: np.array([1.0, 0.0])) is None
+
+    def test_identical_voice_is_capped(self, tmp_path):
+        import numpy as np
+        assert self._run(tmp_path, 40, lambda c, sr=16000: np.array([1.0, 0.0])) == 0.70
+
+    def test_no_dominant_voice_returns_none(self, tmp_path):
+        import numpy as np
+        rng = np.random.default_rng(1)
+
+        def emb(c, sr=16000):
+            v = rng.normal(size=8)
+            return v / np.linalg.norm(v)
+
+        assert self._run(tmp_path, 40, emb) is None
+
+
+def test_dominant_voice_group_ignores_read_aloud_voice():
+    import numpy as np
+    from tools.profile_builder.voiceprint_extractor import dominant_voice_group
+
+    main = [np.array([1.0, 0.0]), np.array([0.95, 0.31]), np.array([0.99, 0.14])]
+    tts = [np.array([0.0, 1.0])]
+    group = dominant_voice_group(tts + main)
+    assert len(group) == 3
+    assert all(e[0] > 0.9 for e in group)
+
+
+def test_find_speaker_segments_cuts_out_other_voices():
+    """本人 10 秒、読み上げ 9 秒、本人 30 秒の音声から本人の区間だけを返す"""
+    import numpy as np
+    from tools.profile_builder.voiceprint_extractor import VoiceprintExtractor
+
+    sr = 16000
+    audio = np.concatenate([
+        np.full(10 * sr, 0.3, dtype=np.float32),
+        np.full(9 * sr, 0.1, dtype=np.float32),
+        np.full(30 * sr, 0.3, dtype=np.float32),
+    ])
+
+    ex = VoiceprintExtractor.__new__(VoiceprintExtractor)
+    ex._extractor = object()
+    # 窓の平均振幅で話者を区別する: 本人が多数を占める窓だけ声紋に一致する
+    ex.compute_chunk_embedding = lambda c, sr=sr: (
+        np.array([1.0, 0.0]) if np.mean(c) > 0.2 else np.array([0.0, 1.0])
+    )
+
+    segments = ex.find_speaker_segments(audio, sr, [1.0, 0.0], 0.6)
+
+    assert segments
+    assert all(end - start <= 12.0 for start, end in segments)
+    assert all(end <= 11.5 or start >= 18.0 for start, end in segments)
+    covered = sum(end - start for start, end in segments)
+    assert covered > 30.0
+
+
+def test_merge_keeps_blending_voiceprints_outside_gpu_mode():
+    """CPU/NPU の既定動作: 声紋が離れていても従来どおり統合する"""
+    prof = SpeakerProfile(
+        speaker_id="a", display_name="A", voiceprint=[1.0, 0.0],
+        voiceprint_sample_count=1, voiceprint_threshold=0.6,
+    )
+    other = SpeakerProfile(
+        speaker_id="a", display_name="A", voiceprint=[0.0, 1.0], voiceprint_sample_count=1,
+    )
+    prof.merge_profile(other)
+    assert prof.voiceprint_sample_count == 2
+    assert prof.voiceprint[1] > 0.5
+
+
+def test_pipeline_limits_voiceprint_changes_to_gpu_mode():
+    """声紋の改善とLoRA学習が HAYAMIMI_DEVICE=gpu の分岐の外に漏れないこと"""
+    import ast
+    import pathlib
+
+    source = pathlib.Path("tools/profile_builder/pipeline.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    guarded = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.If) and "is_gpu_mode" in ast.unparse(node.test):
+            for child in node.body:
+                guarded.update(id(n) for n in ast.walk(child))
+    calls = [
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+        and n.func.attr in ("calibrate_threshold", "find_speaker_segments")
+    ]
+    assert len(calls) == 2
+    assert all(id(c) in guarded for c in calls)
+    assert "from tools.profile_builder.lora_labeler" not in source.split("def run", 1)[0]

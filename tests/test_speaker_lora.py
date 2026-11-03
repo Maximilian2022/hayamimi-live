@@ -195,3 +195,56 @@ def _run_with_export_result(tmp_path, export_result):
             transcript_segments=[TranscribedSegment(0.0, 5.0, "こんにちは")],
         )
     return ok, logs
+
+
+def test_clean_lora_label_removes_fillers_and_punctuation():
+    from scripts.speaker_lora import clean_lora_label
+
+    assert clean_lora_label("あ、シールドだ。ま、ちゃんとやってんな") == "シールドだちゃんとやってんな"
+    assert clean_lora_label("えっと、") == ""
+
+
+def test_labels_use_japanese_prefix_without_start_token():
+    """<|startoftranscript|> はモデルが前置するので、ラベルには <|ja|> から入れる"""
+    import torch
+    import scripts.speaker_lora as sl
+
+    with patch.object(sl, "WhisperProcessor") as proc_cls, \
+         patch.object(sl, "WhisperForConditionalGeneration"), \
+         patch.object(sl, "get_peft_model") as peft:
+        proc = proc_cls.from_pretrained.return_value
+        proc.tokenizer.pad_token_id = 50257
+        proc.tokenizer.return_value.input_ids = torch.tensor([[50258, 50266, 50360, 50364, 7, 50257]])
+        param = torch.nn.Parameter(torch.zeros(1))
+        peft.return_value.parameters.return_value = [param]
+        peft.return_value.return_value.loss = (param * 0).sum()
+
+        trainer = SpeakerLoRATrainer(allow_cuda=False)
+        trainer.train(np.zeros(16000, dtype=np.float32), 16000, [(0.0, 1.0, "テスト")], epochs=1)
+
+    labels = peft.return_value.call_args.kwargs["labels"]
+    assert labels.tolist() == [[50266, 50360, 50364, 7, 50257]]
+    proc.tokenizer.set_prefix_tokens.assert_called_once_with(
+        language="japanese", task="transcribe", predict_timestamps=False
+    )
+
+
+def test_training_restarts_from_scratch_with_step_budget(tmp_path):
+    """プール全体で最初から学習し、データが増えた分は繰り返しを減らす"""
+    import soundfile as sf
+    import scripts.speaker_lora as sl
+    from tools.profile_builder.local_transcribe import TranscribedSegment
+
+    (tmp_path / "lora").mkdir()
+    (tmp_path / "lora" / "adapter_config.json").write_text("{}", encoding="utf-8")
+    audio = np.full(16000 * 300, 0.2, dtype=np.float32)
+    segments = [TranscribedSegment(float(i), float(i + 1), "はい") for i in range(250)]
+    with patch.object(sl, "SpeakerLoRATrainer") as trainer_cls, \
+         patch.object(sl, "_cuda_execution_error", return_value=None):
+        ok = sl.train_profile_lora((audio, 16000), MagicMock(voiceprint=None), str(tmp_path / "lora"), transcript_segments=segments)
+
+    assert ok is True
+    kwargs = trainer_cls.return_value.train.call_args.kwargs
+    assert kwargs["epochs"] == 3
+    assert "base_lora_dir" not in kwargs
+    assert len(kwargs["training_pairs"]) == 250

@@ -58,7 +58,6 @@ FALLBACK_MODEL_SIZE = "large-v3-turbo"
 
 
 # 品質判定に合格した LoRA だけが持つファイル。未合格の学習結果を字幕へ自動反映しない
-LORA_APPROVAL_FILENAME = "lora_approved.json"
 
 
 class WhisperCUDAEngine:
@@ -126,14 +125,15 @@ class WhisperCUDAEngine:
         if not self.lora_dir:
             try:
                 from scripts.config_store import get_storage_dir, get_saved_active_speaker_id
+                from scripts.lora_state import should_apply_lora
                 act_sid = get_saved_active_speaker_id()
                 if act_sid:
                     cand_lora = os.path.join(get_storage_dir(), "profiles", f"{act_sid}_lora")
-                    if os.path.isfile(os.path.join(cand_lora, LORA_APPROVAL_FILENAME)):
+                    if should_apply_lora(cand_lora):
                         self.lora_dir = cand_lora
-                        logger.info(f"Auto-detected approved speaker LoRA directory: {cand_lora}")
+                        logger.info(f"Auto-detected speaker LoRA directory: {cand_lora}")
                     elif os.path.isdir(cand_lora):
-                        logger.info(f"Speaker LoRA is not approved yet, using base model: {cand_lora}")
+                        logger.info(f"Speaker LoRA is disabled or outdated, using base model: {cand_lora}")
             except Exception:
                 pass
 

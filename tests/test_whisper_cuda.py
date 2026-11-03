@@ -126,15 +126,20 @@ def test_whisper_cuda_close():
             engine.transcribe(np.zeros(16000, dtype=np.float32))
 
 
-@pytest.mark.parametrize("approved, uses_lora", [(False, False), (True, True)])
-def test_active_speaker_lora_requires_approval(tmp_path, approved, uses_lora):
-    """品質判定に合格していない LoRA は自動で読み込まない"""
-    from scripts.whisper_cuda_engine import LORA_APPROVAL_FILENAME
+@pytest.mark.parametrize(
+    "current_format, disabled, uses_lora",
+    [(True, False, True), (True, True, False), (False, False, False)],
+)
+def test_active_speaker_lora_on_by_default(tmp_path, current_format, disabled, uses_lora):
+    """新形式の LoRA は既定で使い、無効化されたものと過去の形式のものは使わない"""
+    from scripts.lora_state import set_lora_enabled, write_lora_meta
 
     ct2_dir = tmp_path / "profiles" / "spk_lora" / "ctranslate2"
     ct2_dir.mkdir(parents=True)
-    if approved:
-        (ct2_dir.parent / LORA_APPROVAL_FILENAME).write_text("{}", encoding="utf-8")
+    if current_format:
+        write_lora_meta(str(ct2_dir.parent))
+    if disabled:
+        set_lora_enabled(str(ct2_dir.parent), False)
 
     with patch("scripts.whisper_cuda_engine.HAVE_FASTER_WHISPER", True), \
          patch("scripts.whisper_cuda_engine.WhisperModel", return_value=MagicMock()), \
@@ -145,7 +150,7 @@ def test_active_speaker_lora_requires_approval(tmp_path, approved, uses_lora):
     assert (engine.model_path == str(ct2_dir)) is uses_lora
 
 
-def test_explicit_lora_dir_is_honored_without_approval(tmp_path):
+def test_explicit_lora_dir_is_honored(tmp_path):
     """--lora-dir の明示指定は実験用に従来どおり読み込む"""
     ct2_dir = tmp_path / "ctranslate2"
     ct2_dir.mkdir()

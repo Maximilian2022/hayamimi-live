@@ -390,6 +390,8 @@ class ProfileBuilderPipeline:
                 log_callback=log_callback,
             )
 
+            is_gpu_mode = os.environ.get("HAYAMIMI_DEVICE") == "gpu"
+
             # 3.5 Voiceprint preparation for speaker verification
             target_voiceprint = None
             vp_threshold = 0.40
@@ -407,6 +409,7 @@ class ProfileBuilderPipeline:
                     extracted_current_vp, extracted_current_vp_count = voice_extractor.extract_voiceprint(
                         wav_path=wav_path,
                         log_callback=log_callback,
+                        dominant_voice_only=is_gpu_mode,
                     )
                     if extracted_current_vp:
                         target_voiceprint = extracted_current_vp
@@ -468,10 +471,17 @@ class ProfileBuilderPipeline:
                     extracted_current_vp, extracted_current_vp_count = voice_extractor.extract_voiceprint(
                         wav_path=wav_path,
                         log_callback=log_callback,
+                        dominant_voice_only=is_gpu_mode,
                     )
                 if extracted_current_vp:
                     profile.voiceprint = extracted_current_vp
                     profile.voiceprint_sample_count = extracted_current_vp_count
+                    if is_gpu_mode:
+                        calibrated = voice_extractor.calibrate_threshold(wav_path)
+                        profile.voiceprint_threshold = (
+                            calibrated if calibrated is not None
+                            else SpeakerProfile.model_fields["voiceprint_threshold"].default
+                        )
                     log("VOICE", f"声紋登録完了: {extracted_current_vp_count} サンプルから話者特徴量を学習しました。")
                 elif not voice_extractor.is_available:
                     log("INFO", "声紋モデル (campplus_sv.onnx) が未検出のため声紋抽出はスキップされました。")
@@ -482,30 +492,71 @@ class ProfileBuilderPipeline:
             # 6. Save Profile (with merge if growing)
             if existing_profile:
                 report("save", 0.92, "既存プロファイルに新動画の知見（辞書・活舌・声紋）を統合・マージ中...")
-                existing_profile.merge_profile(profile)
+                existing_profile.merge_profile(profile, reject_other_voice=is_gpu_mode)
                 final_profile = existing_profile
             else:
                 final_profile = profile
 
             # 5.8 GPU モードかつ声紋登録済みの場合、本人の発話区間から LoRA を自動学習
-            is_gpu_mode = os.environ.get("HAYAMIMI_DEVICE") == "gpu"
             if is_gpu_mode and final_profile.voiceprint:
                 report("lora", 0.93, "🔥 GPU モード: 本人の声紋区間から話者 LoRA アダプタを生成中...")
                 try:
+                    import soundfile as sf
                     from scripts.speaker_lora import train_profile_lora
+                    from tools.profile_builder import lora_pool
+                    from tools.profile_builder.lora_labeler import (
+                        choose_label_model,
+                        label_segments_with_gemini,
+                        transcribe_ranges,
+                    )
                     pdir = get_default_profiles_dir()
                     lora_out_dir = os.path.join(pdir, f"{final_profile.speaker_id}_lora")
-                    lora_ok = train_profile_lora(
-                        wav_path=wav_path,
-                        profile=final_profile,
-                        output_dir=lora_out_dir,
-                        allow_cuda=True,
-                        log_callback=log_callback,
-                        transcript_segments=trans_res.segments,
+                    audio, audio_sr = sf.read(wav_path, dtype="float32")
+                    speaker_ranges = voice_extractor.find_speaker_segments(
+                        audio, audio_sr, final_profile.voiceprint, final_profile.voiceprint_threshold
                     )
-                    if lora_ok and os.path.isdir(lora_out_dir):
-                        final_profile.lora_adapter_path = lora_out_dir
-                        final_profile.lora_trained_video_count += 1
+                    ratio = lora_pool.speaker_ratio(speaker_ranges, len(audio) / audio_sr)
+                    labelled = []
+                    if ratio < lora_pool.MIN_SPEAKER_RATIO:
+                        log(
+                            "LORA",
+                            f"本人の声が {ratio*100:.0f}% と少ないため、この動画は LoRA 学習に使いません"
+                            "（コラボ動画、または声紋の再登録が必要な可能性があります）。",
+                        )
+                    else:
+                        log("LORA", f"本人の発話 {len(speaker_ranges)} 区間を Gemini で書き起こして学習ラベルを作成します。")
+                        labelled = label_segments_with_gemini(
+                            client=analyzer.client,
+                            model=choose_label_model(analyzer.model_name, DEFAULT_GEMINI_MODEL),
+                            audio=audio,
+                            sr=audio_sr,
+                            segments=speaker_ranges,
+                            hints=transcribe_ranges(audio, audio_sr, speaker_ranges),
+                            work_dir=temp_dir,
+                            log_callback=log_callback,
+                        )
+                        log("LORA", f"学習に使えるラベル: {len(labelled)} / {len(speaker_ranges)} 区間")
+                    if labelled:
+                        lora_pool.add_video(lora_out_dir, vid_id or "unknown", audio, audio_sr, labelled)
+                        pool_audio, pool_segments = lora_pool.load_pool(lora_out_dir, target_sr=audio_sr)
+                        pool_videos = lora_pool.video_count(lora_out_dir)
+                        if len(pool_segments) < lora_pool.MIN_TRAINING_SEGMENTS:
+                            log(
+                                "LORA",
+                                f"ラベルが {len(pool_segments)} 区間と少ないため、"
+                                f"{lora_pool.MIN_TRAINING_SEGMENTS} 区間たまるまで LoRA 学習を待ちます。",
+                            )
+                        elif train_profile_lora(
+                            wav_path=(pool_audio, audio_sr),
+                            profile=final_profile,
+                            output_dir=lora_out_dir,
+                            allow_cuda=True,
+                            log_callback=log_callback,
+                            transcript_segments=pool_segments,
+                        ):
+                            log("LORA", f"これまでの {pool_videos} 本分のラベルで学習し直しました。")
+                            final_profile.lora_adapter_path = lora_out_dir
+                            final_profile.lora_trained_video_count = pool_videos
                         log("LORA", f"✔ 話者特化 LoRA アダプタの学習が完了しました！ ({lora_out_dir})")
                 except Exception as le:
                     logger.warning("LoRA training error: %s", le)

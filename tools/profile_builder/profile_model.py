@@ -314,7 +314,7 @@ class SpeakerProfile(BaseModel):
             return True
         return False
 
-    def merge_profile(self, other: "SpeakerProfile") -> "SpeakerProfile":
+    def merge_profile(self, other: "SpeakerProfile", reject_other_voice: bool = False) -> "SpeakerProfile":
         """Merge another profile's findings (from an additional YouTube video) into this profile.
         - Preserves existing rules and appends new unique rules.
         - Combines articulation traits without duplicates.
@@ -410,12 +410,16 @@ class SpeakerProfile(BaseModel):
                 total_n = n1 + n2
                 vec1 = np.array(self.voiceprint, dtype=np.float32)
                 vec2 = np.array(other.voiceprint, dtype=np.float32)
-                merged_vec = (vec1 * n1 + vec2 * n2) / total_n
-                norm = float(np.linalg.norm(merged_vec))
-                if norm > 1e-9:
-                    merged_vec = merged_vec / norm
-                self.voiceprint = merged_vec.tolist()
-                self.voiceprint_sample_count = total_n
+                denom = float(np.linalg.norm(vec1) * np.linalg.norm(vec2))
+                similarity = float(np.dot(vec1, vec2) / denom) if denom > 1e-9 else 0.0
+                # 別人の声が主な動画で平均すると、誰でもない声紋に近づいてしまう
+                if not reject_other_voice or similarity >= self.voiceprint_threshold:
+                    merged_vec = (vec1 * n1 + vec2 * n2) / total_n
+                    norm = float(np.linalg.norm(merged_vec))
+                    if norm > 1e-9:
+                        merged_vec = merged_vec / norm
+                    self.voiceprint = merged_vec.tolist()
+                    self.voiceprint_sample_count = total_n
 
         if other.lora_adapter_path:
             self.lora_adapter_path = other.lora_adapter_path

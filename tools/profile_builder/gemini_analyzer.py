@@ -308,7 +308,9 @@ def safe_parse_json(raw_text: str, log_callback: Optional[Callable[[str, str], N
     # Fast path: try standard json.loads
     try:
         return json.loads(text)
-    except json.JSONDecodeError as initial_err:
+    except json.JSONDecodeError as e:
+        # "as e" の変数は except を抜けると消えるため、再送出用に保持する
+        initial_err = e
         logger.warning("Initial JSON parse failed (%s). Attempting safe truncation repair...", initial_err)
         if log_callback:
             log_callback("WARN", f"Geminiの出力がトークン制限で途中切断された形跡を検出 ({initial_err})。末尾の安全修復を試行します...")
@@ -332,6 +334,14 @@ def safe_parse_json(raw_text: str, log_callback: Optional[Callable[[str, str], N
 
     # Re-raise original error if heuristic could not rescue
     raise initial_err
+
+
+def _clear_machine_owned_fields(profile: SpeakerProfile) -> None:
+    """Discard values Gemini filled in because the response schema exposes every profile field."""
+    # voiceprint_threshold は CPU/NPU の辞書学習の選別に効くため、ここでは変更しない
+    for name in ("voiceprint", "voiceprint_sample_count",
+                 "lora_adapter_path", "lora_trained_video_count"):
+        setattr(profile, name, SpeakerProfile.model_fields[name].default)
 
 
 class GeminiProfileAnalyzer:
@@ -544,6 +554,7 @@ class GeminiProfileAnalyzer:
             raw_text = response.text
             data = safe_parse_json(raw_text, log_callback=log_callback)
             profile = SpeakerProfile.model_validate(data)
+            _clear_machine_owned_fields(profile)
 
             # Ensure speaker_id and display_name are preserved
             profile.speaker_id = speaker_id
