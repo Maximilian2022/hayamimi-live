@@ -1286,7 +1286,7 @@
             </div>
 
             <div id="comment-hotwords-preview" style="font-size: 0.7rem; color: #38BDF8; margin-top: 2px;">
-              獲得ホットワード: 0語
+              獲得語: 0語
             </div>
           </div>
         </details>
@@ -2039,8 +2039,8 @@
                   engChip.style.color = "#10B981";
                   engChip.style.borderColor = "rgba(16, 185, 129, 0.3)";
                 }
-              } else if (ev.device === "NPU" || (serverCfgLoaded && window._currentDevice === "NPU")) {
-                if (engVal) engVal.textContent = "CPU (ReazonSpeech / NPU 準備中)";
+              } else if (ev.device === "NPU") {
+                if (engVal) engVal.textContent = "⚡ NPU (ReazonSpeech)";
                 if (engChip) {
                   engChip.style.background = "rgba(16, 185, 129, 0.15)";
                   engChip.style.color = "#10B981";
@@ -2236,8 +2236,8 @@
               engChip.style.color = "#10B981";
               engChip.style.borderColor = "rgba(16, 185, 129, 0.3)";
             }
-          } else if (cfg.device_name === "NPU" || (cfg.device && cfg.device === "npu")) {
-            if (engVal) engVal.textContent = "CPU (ReazonSpeech / NPU 準備中)";
+          } else if (cfg.device_name === "NPU") {
+            if (engVal) engVal.textContent = "⚡ NPU (ReazonSpeech)";
             if (engChip) {
               engChip.style.background = "rgba(16, 185, 129, 0.15)";
               engChip.style.color = "#10B981";
@@ -3108,8 +3108,8 @@
     if (prev) {
       const words = c.active_words || [];
       prev.textContent = words.length > 0
-        ? `獲得ホットワード (${words.length}語): ${words.slice(0, 12).join(", ")}`
-        : "獲得ホットワード: 0語 (コメント待機中)";
+        ? `獲得語 (${words.length}語): ${words.slice(0, 12).join(", ")}`
+        : "獲得語: 0語 (コメント待機中)";
     }
   }
 

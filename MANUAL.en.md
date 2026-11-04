@@ -27,7 +27,7 @@ This manual details the system requirements, startup procedures, OBS Studio inte
 
 ## 1. System Requirements
 
-The default CPU mode runs efficiently on standard personal computer CPUs without a dedicated GPU. NVIDIA GPUs can use the experimental GPU mode. NPU mode is in preparation.
+The default CPU mode runs efficiently on standard personal computer CPUs without a dedicated GPU. Intel NPUs can use the experimental NPU mode, and NVIDIA GPUs can use the experimental GPU mode.
 
 | Component | Recommended Specs | Minimum Requirements |
 | :--- | :--- | :--- |
@@ -58,7 +58,7 @@ Select these options in the launcher:
 - **Runtime: Python venv (recommended)**: Runs directly in the local virtual environment (`.venv`).
 - **Runtime: WSL Containers**: Runs inside an isolated Microsoft WSL 3.0 container.
 - **Inference: CPU**: The default mode, running ReazonSpeech on the CPU.
-- **Inference: NPU (in preparation)**: Shown on PCs with a supported NPU, but currently runs on the CPU, the same as CPU mode.
+- **Inference: NPU (experimental)**: Available on PCs with an Intel NPU. Japanese recognition runs on the NPU, which lowers CPU load but delays subtitles slightly. Other languages run on the CPU. The first launch takes a few minutes to prepare (using about 1.1 GB) and runs on the CPU meanwhile.
 - **Inference: GPU (experimental / LoRA)**: Runs Whisper on an NVIDIA GPU. The first launch creates a dedicated environment (`.venv_gpu`) and downloads about 3 GB, including PyTorch.
 
 If Windows Smart App Control (SAC) is on, the launcher automatically starts through `start.bat`.

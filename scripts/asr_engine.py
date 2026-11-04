@@ -355,6 +355,23 @@ def _build_reazon(threads: int, hotwords_file: str = "",
     )
 
 
+def _reazon_npu_module():
+    # Imported on demand so CPU mode never loads OpenVINO.
+    try:
+        import reazon_npu
+    except ImportError:
+        from scripts import reazon_npu
+    return reazon_npu
+
+
+def _npu_model_dir() -> str:
+    try:
+        from config_store import get_storage_dir
+    except ImportError:
+        from scripts.config_store import get_storage_dir
+    return os.path.join(get_storage_dir(), "npu_reazon")
+
+
 def _build_paraformer_zh(threads: int):
     return sherpa_onnx.OfflineRecognizer.from_paraformer(
         paraformer=_find(PARA_ZH_DIR, "model*.onnx"),
@@ -851,7 +868,8 @@ class RoutedASR:
         # same EventHub every other structured event goes through.
         self._on_event = on_event
         self.device = device
-        self.device_name = "NPU" if device == "npu" else "CPU"
+        # Becomes "NPU" only once the ja tier really runs there (see _build_ja).
+        self.device_name = "CPU"
         self.engine_name = "reazonspeech"
         self._threads = threads
         # close() bookkeeping. Set before ANY thread is started below (the
@@ -1165,7 +1183,7 @@ class RoutedASR:
                                "ms": None})
                     try:
                         if name == "rz":
-                            rec = _build_reazon(self._threads, self._hotwords_file)
+                            rec = self._build_ja()
                         else:
                             rec = _BUILDERS[name](self._threads)
                     except Exception as exc:
@@ -1182,6 +1200,52 @@ class RoutedASR:
                         self._models[name] = rec
         self._last_used[name] = time.monotonic()
         return rec
+
+    def _build_ja(self):
+        """Build the ja tier on the requested device. Any NPU problem falls back to the CPU."""
+        if self.device == "npu":
+            try:
+                rec = self._build_ja_npu()
+                if rec is not None:
+                    return rec
+            except Exception as exc:
+                self._warn_npu(f"NPU を使えないため CPU で認識します: {exc}")
+        return _build_reazon(self._threads, self._hotwords_file)
+
+    def _build_ja_npu(self):
+        npu = _reazon_npu_module()
+        if not npu.has_npu():
+            self._warn_npu("NPU が見つからないため CPU で認識します。")
+            return None
+        out_dir = _npu_model_dir()
+        if npu.is_prepared(out_dir):
+            rec = npu.ReazonNpuRecognizer(RZ_MODEL_DIR, out_dir)
+            self.device_name = "NPU"
+            return rec
+        # The first preparation takes minutes. Subtitles keep running on the CPU meanwhile.
+        print("[hayamimi] NPU の準備を開始します。完了するまで CPU で認識します。", file=sys.stderr)
+        self._spawn_bg(self._prepare_npu_and_switch, npu, out_dir)
+        return None
+
+    def _prepare_npu_and_switch(self, npu, out_dir: str) -> None:
+        if not npu.prepare_in_subprocess(RZ_MODEL_DIR, out_dir):
+            self._warn_npu("NPU の準備に失敗したため CPU で認識します。")
+            return
+        if self._closed:
+            return
+        try:
+            rec = npu.ReazonNpuRecognizer(RZ_MODEL_DIR, out_dir)
+        except Exception as exc:
+            self._warn_npu(f"NPU を使えないため CPU で認識します: {exc}")
+            return
+        with self._model_locks["rz"]:
+            self._models["rz"] = rec
+            self.device_name = "NPU"
+        print("[hayamimi] NPU での認識に切り替えました。", file=sys.stderr)
+
+    def _warn_npu(self, message: str) -> None:
+        print(f"[hayamimi] {message}", file=sys.stderr)
+        self._emit({"type": "warning", "code": "npu_unavailable", "message": message})
 
     def _get_with_fallback(self, name: str) -> tuple[object, str]:
         # An opt-in tier that is a strict alternative to a default tier must
