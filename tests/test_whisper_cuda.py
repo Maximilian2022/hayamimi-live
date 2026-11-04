@@ -102,8 +102,10 @@ def test_whisper_cuda_compatibility_layer():
         engine.set_min_switch_s(1.5)
         assert engine.min_switch_s == 1.5
 
-        engine.set_dynamic_comment_replacements([("A", "B")])
-        assert ("A", "B") in engine._replacements
+        from scripts.comment_matcher import CommentTerm
+
+        engine.set_comment_terms([CommentTerm("バイパー", "バイパー")])
+        assert engine._comment_corrector.active
 
         engine.reset_session()
         assert engine._last_partial_text == ""

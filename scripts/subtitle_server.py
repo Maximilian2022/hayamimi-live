@@ -1998,7 +1998,7 @@ class SubtitleServer:
                         from comment_sync import get_global_comment_sync, save_global_comment_sync_config
                     syncer = get_global_comment_sync()
                     if server.asr is not None and syncer.on_dictionary_updated is None:
-                        syncer.on_dictionary_updated = lambda m: server.asr.set_dynamic_comment_replacements(m)
+                        syncer.on_dictionary_updated = lambda terms: server.asr.set_comment_terms(terms)
                     status = save_global_comment_sync_config(payload)
                     if status.get("enabled"):
                         if "PYTEST_CURRENT_TEST" not in os.environ:
@@ -2006,7 +2006,7 @@ class SubtitleServer:
                     else:
                         syncer.stop()
                         if server.asr is not None:
-                            server.asr.set_dynamic_comment_replacements({})
+                            server.asr.set_comment_terms([])
                     self._json(200, {"ok": True, **status})
                     return
                 if req_path == "/api/obs-config":
@@ -2429,9 +2429,9 @@ class SubtitleServer:
             try:
                 from comment_sync import get_global_comment_sync
                 csync = get_global_comment_sync()
-                csync.on_dictionary_updated = lambda m: (
-                    self.asr.set_dynamic_comment_replacements(m)
-                    if self.asr is not None and hasattr(self.asr, "set_dynamic_comment_replacements")
+                csync.on_dictionary_updated = lambda terms: (
+                    self.asr.set_comment_terms(terms)
+                    if self.asr is not None and hasattr(self.asr, "set_comment_terms")
                     else None
                 )
                 if csync.enabled:

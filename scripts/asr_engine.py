@@ -42,6 +42,7 @@ import numpy as np
 import sherpa_onnx
 
 import itn_cjk
+from comment_matcher import CommentCorrector
 from lid_preprocessing import trim_lid_clip  # noqa: F401 (re-exported as asr_engine.trim_lid_clip)
 
 try:
@@ -893,6 +894,7 @@ class RoutedASR:
         self._warn_hotwords_encodability(hotwords_file)
         self._replacements = _load_replacements(replace_file)
         self._user_replacements = self._replacements
+        self._comment_corrector = CommentCorrector()
         self._rule_hit_counts: dict[str, int] = {}
         self._rule_last_hit: dict[str, str] = {}
         self._stats_lock = threading.Lock()
@@ -1675,7 +1677,8 @@ class RoutedASR:
             except Exception:
                 pass
 
-        return text
+        corrector = getattr(self, "_comment_corrector", None)
+        return corrector.correct(text) if corrector else text
 
     def get_replacement_stats(self) -> dict[str, dict]:
         """Return snapshot of runtime hit counts and last hit timestamps per replacement rule pattern."""
@@ -1711,25 +1714,12 @@ class RoutedASR:
         self._user_replacements = tuple(user_pairs)
         self._rebuild_merged_replacements()
 
-    def set_dynamic_comment_replacements(self, mapping: dict) -> None:
-        """Atomically update live comment-derived hotword replacements without overwriting user rules."""
-        dyn_pairs = []
-        for k, v in (mapping or {}).items():
-            if isinstance(k, str) and k.strip() != "":
-                dyn_pairs.append((k, v if isinstance(v, str) else str(v)))
-        self._dynamic_comment_replacements = tuple(dyn_pairs)
-        self._rebuild_merged_replacements()
+    def set_comment_terms(self, terms) -> None:
+        """Set the recent comment words. They correct the text only where they are spoken."""
+        self._comment_corrector.set_terms(terms or ())
 
     def _rebuild_merged_replacements(self) -> None:
-        """Combine user/profile replacements (high priority) and dynamic comment replacements."""
-        user_tups = getattr(self, "_user_replacements", ()) or ()
-        dyn_tups = getattr(self, "_dynamic_comment_replacements", ()) or ()
-        user_keys = {k for k, _ in user_tups}
-        combined = list(user_tups)
-        for k, v in dyn_tups:
-            if k not in user_keys:
-                combined.append((k, v))
-        self._replacements = tuple(combined)
+        self._replacements = tuple(getattr(self, "_user_replacements", ()) or ())
 
     def set_itn_overrides(self, exclude: set | None = None,
                            force: dict | None = None) -> None:

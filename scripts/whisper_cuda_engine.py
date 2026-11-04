@@ -22,6 +22,11 @@ from typing import Callable, Optional
 import numpy as np
 
 try:
+    from comment_matcher import CommentCorrector
+except ImportError:
+    from scripts.comment_matcher import CommentCorrector
+
+try:
     from cuda_utils import setup_cuda_dll_path
     setup_cuda_dll_path()
 except Exception:
@@ -97,7 +102,7 @@ class WhisperCUDAEngine:
         self.lid_switch_confirm = 1
         self.min_switch_s = 0.0
         self._user_replacements: tuple[tuple[str, str], ...] = ()
-        self._dynamic_comment_replacements: tuple[tuple[str, str], ...] = ()
+        self._comment_corrector = CommentCorrector()
         self._replacements: tuple[tuple[str, str], ...] = ()
         self._rule_hit_counts: dict[str, int] = {}
         self._rule_last_hit: dict[str, str] = {}
@@ -246,7 +251,7 @@ class WhisperCUDAEngine:
             logger.warning(f"Failed to load replacements from {path}: {e}")
 
     def _rebuild_replacements(self):
-        combined = list(self._dynamic_comment_replacements) + list(self._user_replacements)
+        combined = list(self._user_replacements)
         combined.sort(key=lambda pair: len(pair[0]), reverse=True)
         self._replacements = tuple(combined)
 
@@ -259,17 +264,11 @@ class WhisperCUDAEngine:
             self._user_replacements = tuple((str(k), str(v)) for k, v in mapping)
         self._rebuild_replacements()
 
-    def set_dynamic_comment_replacements(self, mapping: list[tuple[str, str]] | dict[str, str] | None):
-        if not mapping:
-            self._dynamic_comment_replacements = ()
-        elif isinstance(mapping, dict):
-            self._dynamic_comment_replacements = tuple((str(k), str(v)) for k, v in mapping.items())
-        else:
-            self._dynamic_comment_replacements = tuple((str(k), str(v)) for k, v in mapping)
-        self._rebuild_replacements()
+    def set_comment_terms(self, terms) -> None:
+        self._comment_corrector.set_terms(terms or ())
 
     def _replace(self, text: str) -> str:
-        if not text or not self._replacements:
+        if not text:
             return text
         now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
         res = text
@@ -279,7 +278,7 @@ class WhisperCUDAEngine:
                 with self._stats_lock:
                     self._rule_hit_counts[pat] = self._rule_hit_counts.get(pat, 0) + 1
                     self._rule_last_hit[pat] = now_iso
-        return res
+        return self._comment_corrector.correct(res)
 
     def set_forced_lang(self, lang: str | None):
         self.forced_lang = lang or "ja"

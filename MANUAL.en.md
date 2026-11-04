@@ -158,6 +158,14 @@ GPU mode also trains a per-speaker LoRA in addition to the dictionary. Subtitles
 - **Disk use**: About 1.5 GB per speaker.
 - **Voiceprints**: You can also record one manually at `/profile`. If videos keep being skipped, register the voiceprint again.
 
+### Comment-Linked Correction
+When the streamer says a word or a viewer name from recent chat, this corrects misrecognitions of it. It is off by default and can be turned on in the comment settings at `/mic`. It supports OneComme, comment files, and YouTube Live chat. Names come from OneComme and YouTube Live chat.
+
+- **Corrected**: Misrecognitions that sound close (for example, subtitle "バイバー" for the chat word "バイパー").
+- **Not corrected**: Misrecognitions that sound different or became ordinary words. These are left alone so ordinary speech stays intact.
+- **Duration**: 5 minutes after the comment.
+- **Review**: Corrections are logged in `logs/python.log` as `[comment-link]`.
+
 ### Priority Tags & Video Title Hashtag Integration
 For creators streaming multiple games or themes, "Priority Tags" let you tag individual vocabulary items and selectively activate them.
 

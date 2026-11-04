@@ -132,7 +132,7 @@ def test_comment_synchronizer_youtube_live_lifecycle():
 
     # Feed comments directly via ingest_comments (simulating YouTube Live stream)
     syncer.ingest_comments(["ウルト溜まったナイス！", "フラットライン強い草"], source_label="youtube_live")
-    active_dyn = syncer.get_dynamic_replacements()
+    active_terms = syncer.get_active_terms()
     # At least some terms should be captured
     status_after = syncer.get_status()
     assert status_after["total_comments_processed"] == 2

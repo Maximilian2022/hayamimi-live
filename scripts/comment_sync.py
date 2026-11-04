@@ -5,10 +5,9 @@ Fetches live viewer comments from:
 1. Primary: OneComme Local HTTP API (http://127.0.0.1:11180/api/comments)
 2. Secondary: Local text file polling (e.g. comment.txt)
 
-Extracts proper nouns and trending stream terms via SudachiPy (Mode C),
-generates phonetic/hiragana/katakana fallback replacement pairs, and
-atomically merges them into the active RoutedASR replacement dictionary
-with a sliding-window TTL (default 5 minutes).
+Extracts proper nouns and viewer names via SudachiPy (Mode C) and hands them
+to the active ASR engine with a sliding-window TTL (default 5 minutes). The
+engine corrects a word only when the streamer says it: see comment_matcher.py.
 """
 
 from __future__ import annotations
@@ -29,6 +28,13 @@ if __name__ == "scripts.comment_sync":
 elif __name__ == "comment_sync":
     sys.modules["scripts.comment_sync"] = sys.modules[__name__]
 
+try:
+    import comment_matcher
+    from comment_matcher import CommentTerm
+except ImportError:
+    from scripts import comment_matcher
+    from scripts.comment_matcher import CommentTerm
+
 logger = logging.getLogger("hayamimi.comment_sync")
 
 # Common stream greetings and noise words to ignore
@@ -42,19 +48,7 @@ _STOPWORDS: Set[str] = {
 }
 
 
-def _katakana_to_hiragana(text: str) -> str:
-    """Convert Katakana characters in text to Hiragana."""
-    res = []
-    for ch in text:
-        code = ord(ch)
-        if 0x30A1 <= code <= 0x30F6:
-            res.append(chr(code - 0x60))
-        else:
-            res.append(ch)
-    return "".join(res)
-
-
-class CommentHotwordExtractor:
+class CommentTermExtractor:
     """Extracts nouns/proper nouns and generates phonetic replacement pairs using SudachiPy."""
 
     def __init__(self):
@@ -87,7 +81,7 @@ class CommentHotwordExtractor:
             self._mode = tokenizer.Tokenizer.SplitMode.C
             self._lock = threading.Lock()
         except Exception as e:
-            logger.debug("SudachiPy not available in CommentHotwordExtractor: %s", e)
+            logger.debug("SudachiPy not available in CommentTermExtractor: %s", e)
             self._lock = threading.Lock()
 
     def extract_terms_from_text(self, text: str) -> List[Tuple[str, str]]:
@@ -144,60 +138,22 @@ class CommentHotwordExtractor:
 
         return results
 
-    def is_common_japanese_reading(self, reading_hira: str) -> bool:
-        """Check if a reading form conflicts with common everyday Japanese words/grammar."""
-        if not reading_hira or len(reading_hira) < 3:
-            return True
-        if self._tokenizer is not None:
-            try:
-                morphemes = self._tokenizer.tokenize(reading_hira, self._mode)
-                for m in morphemes:
-                    pos = m.part_of_speech()
-                    # If reading splits into common verbs, auxiliaries, particles, adjectives, or common nouns
-                    if pos[0] in ("動詞", "助動詞", "助詞", "形容詞", "副詞", "接続詞"):
-                        return True
-                    if pos[0] == "名詞" and len(pos) > 1 and pos[1] in ("普通名詞", "代名詞", "非自立可能", "数詞"):
-                        return True
-            except Exception:
-                pass
-        return False
 
-    def build_replacement_candidates(self, surface: str, reading_katakana: str) -> Dict[str, str]:
-        """Generate safe ASR misrecognition -> correct surface mappings from a term and its reading."""
-        candidates: Dict[str, str] = {}
-        surf = surface.strip()
-        if len(surf) < 2 or len(surf) > 12:
-            return candidates
-
-        # 1. If surface contains Kanji/Alphabet and reading is >= 3 chars, map Hiragana & Katakana readings -> surface
-        # BUT ONLY IF the reading is not a common Japanese word!
-        has_kanji_or_alpha = bool(re.search(r"[一-龥A-Za-z0-9]", surf))
-        if reading_katakana and len(reading_katakana) >= 3:
-            hira = _katakana_to_hiragana(reading_katakana)
-            if has_kanji_or_alpha:
-                if hira != surf and len(hira) >= 3 and not self.is_common_japanese_reading(hira):
-                    candidates[hira] = surf
-                if reading_katakana != surf and len(reading_katakana) >= 3 and not self.is_common_japanese_reading(hira):
-                    candidates[reading_katakana] = surf
-
-        # 2. If surface is Katakana with long vowel 'ー' (>= 4 chars), map vowel-shortened variants -> surface
-        # e.g. "クレーバー" -> "クレバー", "クレーバ", "クレバ", "くれーばー" -> "クレーバー"
-        if "ー" in surf and len(surf) >= 4:
-            shortened_all = surf.replace("ー", "")
-            if len(shortened_all) >= 3 and shortened_all != surf:
-                candidates[shortened_all] = surf
-            for i, ch in enumerate(surf):
-                if ch == "ー":
-                    variant = surf[:i] + surf[i + 1 :]
-                    if len(variant) >= 3 and variant != surf:
-                        candidates[variant] = surf
-            hira_full = _katakana_to_hiragana(surf)
-            if len(hira_full) >= 3 and hira_full != surf:
-                candidates[hira_full] = surf
-
-        return candidates
+_NAME_SEPARATOR = re.compile(r"[\s　/／|｜(（【\[]")
+_NAME_NOISE = re.compile(r"[^0-9A-Za-z_\-一-龥々ぁ-んァ-ヶー]")
 
 
+def clean_author_name(name: object) -> str:
+    """Reduce a viewer's display name or handle to the part a streamer would say."""
+    if not isinstance(name, str):
+        return ""
+    cleaned = name.strip().lstrip("@＠")
+    cleaned = _NAME_SEPARATOR.split(cleaned, maxsplit=1)[0]
+    cleaned = _NAME_NOISE.sub("", cleaned)
+    cleaned = re.sub(r"[-_]?[0-9a-z]{3,}$", "", cleaned) if re.search(r"[-_][0-9a-z]{3,}$", cleaned) else cleaned
+    cleaned = re.sub(r"[-_]?[0-9]+$", "", cleaned)
+    cleaned = re.sub(r"(さん|ちゃん|くん|様)$", "", cleaned)
+    return cleaned if 2 <= len(cleaned) <= 12 and cleaned not in _STOPWORDS else ""
 
 
 def normalize_youtube_channel_url(url: str) -> str:
@@ -319,7 +275,24 @@ def parse_youtube_live_chat_response(data: dict) -> Tuple[List[str], Optional[st
     return texts, next_continuation, timeout_ms
 
 
-def poll_youtube_live_chat_api(continuation: str, timeout_sec: float = 4.0) -> Tuple[List[str], Optional[str], float]:
+def parse_youtube_live_chat_names(data: dict) -> List[str]:
+    """Return the display names of the authors in a get_live_chat response."""
+    if not isinstance(data, dict):
+        return []
+    actions = data.get("continuationContents", {}).get("liveChatContinuation", {}).get("actions", [])
+    names: List[str] = []
+    for act in actions:
+        item = act.get("addChatItemAction", {}).get("item", {})
+        renderer = item.get("liveChatTextMessageRenderer") or item.get("liveChatPaidMessageRenderer")
+        name = (renderer or {}).get("authorName", {}).get("simpleText")
+        if name:
+            names.append(name)
+    return names
+
+
+def poll_youtube_live_chat_api(
+    continuation: str, timeout_sec: float = 4.0, names_out: Optional[List[str]] = None
+) -> Tuple[List[str], Optional[str], float]:
     """POST to YouTube internal get_live_chat endpoint and return (texts, next_continuation, timeout_ms)."""
     if not continuation:
         return [], None, 3000.0
@@ -350,6 +323,8 @@ def poll_youtube_live_chat_api(continuation: str, timeout_sec: float = 4.0) -> T
         with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
             raw = resp.read().decode("utf-8", errors="replace")
             data = json.loads(raw)
+        if names_out is not None:
+            names_out.extend(parse_youtube_live_chat_names(data))
         return parse_youtube_live_chat_response(data)
     except Exception as e:
         logger.debug("Failed poll_youtube_live_chat_api: %s", e)
@@ -368,7 +343,7 @@ class CommentSynchronizer:
         youtube_channel_url: str = "",
         poll_interval_sec: float = 3.0,
         word_ttl_sec: float = 300.0,
-        on_dictionary_updated: Optional[Callable[[Dict[str, str]], None]] = None,
+        on_dictionary_updated: Optional[Callable[[List[CommentTerm]], None]] = None,
     ):
         self._lock = threading.Lock()
         self.enabled = bool(enabled)
@@ -386,8 +361,9 @@ class CommentSynchronizer:
         self.word_ttl_sec = max(0.1, float(word_ttl_sec))
         self.on_dictionary_updated = on_dictionary_updated
 
-        self._extractor = CommentHotwordExtractor()
-        # surface -> { "reading": str, "expires_at": float, "replacements": Dict[str, str] }
+        self._extractor = CommentTermExtractor()
+        self._pending_names: List[str] = []
+        # surface -> { "reading": str, "expires_at": float }
         self._active_terms: Dict[str, Dict[str, Any]] = {}
         self._seen_comment_ids: Set[str] = set()
         self._last_file_mtime: float = 0.0
@@ -415,11 +391,10 @@ class CommentSynchronizer:
             self._thread.join(timeout=2.0)
 
     def get_status(self) -> Dict[str, Any]:
-        """Return current status and active hotwords."""
+        """Return current status and the words currently used for correction."""
         self._prune_expired()
         with self._lock:
             active_words = list(self._active_terms.keys())
-            dyn_replacements = self._build_merged_replacements_unlocked()
             yt_status = self.youtube_live_status if (self.enabled and self.youtube_live_enabled) else "disabled"
             return {
                 "enabled": self.enabled,
@@ -433,7 +408,6 @@ class CommentSynchronizer:
                 "connected_source": self._connected_source if self.enabled else "disabled",
                 "active_words": active_words,
                 "active_words_count": len(active_words),
-                "dynamic_rules_count": len(dyn_replacements),
                 "total_comments_processed": self._total_comments_processed,
                 "last_error": self._last_error,
             }
@@ -483,15 +457,15 @@ class CommentSynchronizer:
 
         if notify_needed and self.on_dictionary_updated:
             try:
-                self.on_dictionary_updated(self.get_dynamic_replacements())
+                self.on_dictionary_updated(self.get_active_terms())
             except Exception as e:
                 logger.warning("Failed on_dictionary_updated callback: %s", e)
 
         return self.get_status()
 
-    def ingest_comments(self, texts: List[str], source_label: str = "manual") -> int:
-        """Process a list of raw comment strings, extract terms, and update sliding window."""
-        if not texts:
+    def ingest_comments(self, texts: List[str], source_label: str = "manual", names: Optional[List[str]] = None) -> int:
+        """Process raw comments and their authors' names, and update the sliding window."""
+        if not texts and not names:
             return 0
         now = time.time()
         added_or_refreshed = 0
@@ -505,18 +479,18 @@ class CommentSynchronizer:
                 self._total_comments_processed += 1
                 pairs = self._extractor.extract_terms_from_text(txt)
                 for surf, reading in pairs:
-                    repls = self._extractor.build_replacement_candidates(surf, reading)
-                    self._active_terms[surf] = {
-                        "reading": reading,
-                        "expires_at": now + self.word_ttl_sec,
-                        "replacements": repls,
-                    }
+                    self._active_terms[surf] = {"reading": reading, "expires_at": now + self.word_ttl_sec}
+                    added_or_refreshed += 1
+            for name in names or []:
+                surf = clean_author_name(name)
+                if surf:
+                    self._active_terms[surf] = {"reading": self._name_reading(surf), "expires_at": now + self.word_ttl_sec}
                     added_or_refreshed += 1
 
         self._prune_expired()
         if added_or_refreshed > 0 and self.on_dictionary_updated:
             try:
-                self.on_dictionary_updated(self.get_dynamic_replacements())
+                self.on_dictionary_updated(self.get_active_terms())
             except Exception as e:
                 logger.warning("Callback error on ingest_comments: %s", e)
 
@@ -532,21 +506,27 @@ class CommentSynchronizer:
                 removed = True
         return removed
 
-    def _build_merged_replacements_unlocked(self) -> Dict[str, str]:
-        if not self.enabled:
-            return {}
-        merged: Dict[str, str] = {}
-        for info in self._active_terms.values():
-            for pat, rep in info.get("replacements", {}).items():
-                if pat and rep and pat != rep:
-                    merged[pat] = rep
-        return merged
-
-    def get_dynamic_replacements(self) -> Dict[str, str]:
-        """Return currently active dynamic replacement dictionary."""
+    def get_active_terms(self) -> List[CommentTerm]:
+        """Return the comment words currently used for correction, newest last."""
         self._prune_expired()
         with self._lock:
-            return self._build_merged_replacements_unlocked()
+            if not self.enabled:
+                return []
+            ordered = sorted(self._active_terms.items(), key=lambda kv: kv[1]["expires_at"])
+            return [CommentTerm(surface, info["reading"]) for surface, info in ordered]
+
+    def _take_pending_names(self) -> List[str]:
+        names, self._pending_names = self._pending_names, []
+        return names
+
+    @staticmethod
+    def _name_reading(surface: str) -> str:
+        if re.fullmatch(r"[0-9A-Za-z_\-]+", surface):
+            return ""
+        try:
+            return comment_matcher.reading_of(surface)
+        except Exception:
+            return surface if re.fullmatch(r"[ァ-ヶーぁ-ん]+", surface) else ""
 
     def _poll_onecomme_api(self) -> List[str]:
         """Poll OneComme local HTTP API and return newly arrived comment texts."""
@@ -587,6 +567,8 @@ class CommentSynchronizer:
                 # Prevent unbounded set growth
                 self._seen_comment_ids = set(list(self._seen_comment_ids)[-1000:])
             new_texts.append(str(comment_body))
+            data_part = item.get("data") if isinstance(item.get("data"), dict) else {}
+            self._pending_names.append(item.get("name") or data_part.get("name") or data_part.get("displayName") or "")
 
         return new_texts
 
@@ -671,7 +653,7 @@ class CommentSynchronizer:
         if now < self._yt_next_poll_time:
             return []
 
-        texts, next_cont, timeout_ms = poll_youtube_live_chat_api(self._yt_continuation)
+        texts, next_cont, timeout_ms = poll_youtube_live_chat_api(self._yt_continuation, names_out=self._pending_names)
         if next_cont:
             self._yt_continuation = next_cont
             self.youtube_live_status = "receiving"
@@ -693,7 +675,7 @@ class CommentSynchronizer:
         try:
             api_texts = self._poll_onecomme_api()
             if api_texts:
-                return self.ingest_comments(api_texts, source_label="onecomme_api")
+                return self.ingest_comments(api_texts, "onecomme_api", self._take_pending_names())
             with self._lock:
                 self._connected_source = "onecomme_api"
                 self._last_error = None
@@ -718,14 +700,14 @@ class CommentSynchronizer:
             try:
                 yt_texts = self._poll_youtube_live_chat()
                 if yt_texts:
-                    return self.ingest_comments(yt_texts, source_label="youtube_live")
+                    return self.ingest_comments(yt_texts, "youtube_live", self._take_pending_names())
             except Exception as yt_err:
                 logger.debug("YouTube Live polling error: %s", yt_err)
 
         # Prune expired terms and notify if changed
         if self._prune_expired() and self.on_dictionary_updated:
             try:
-                self.on_dictionary_updated(self.get_dynamic_replacements())
+                self.on_dictionary_updated(self.get_active_terms())
             except Exception:
                 pass
 

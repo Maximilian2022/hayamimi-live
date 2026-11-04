@@ -26,6 +26,11 @@ except ImportError:
     itn_cjk = None
 
 try:
+    from comment_matcher import CommentCorrector
+except ImportError:
+    from scripts.comment_matcher import CommentCorrector
+
+try:
     from transformers import AutoProcessor, GenerationConfig
     from optimum.onnxruntime import ORTModelForSpeechSeq2Seq
     import onnxruntime as ort
@@ -81,7 +86,7 @@ class WhisperDirectMLEngine:
 
         # 置換辞書 & ITN (RoutedASR 互換インターフェース)
         self._user_replacements: tuple[tuple[str, str], ...] = ()
-        self._dynamic_comment_replacements: tuple[tuple[str, str], ...] = ()
+        self._comment_corrector = CommentCorrector()
         self._replacements: tuple[tuple[str, str], ...] = ()
         self._rule_hit_counts: dict[str, int] = {}
         self._rule_last_hit: dict[str, str] = {}
@@ -230,25 +235,12 @@ class WhisperDirectMLEngine:
         self._user_replacements = tuple(user_pairs)
         self._rebuild_merged_replacements()
 
-    def set_dynamic_comment_replacements(self, mapping: dict) -> None:
-        """配信コメント由来の動的置換辞書を設定する"""
-        dyn_pairs = []
-        for k, v in (mapping or {}).items():
-            if isinstance(k, str) and k.strip() != "":
-                dyn_pairs.append((k, v if isinstance(v, str) else str(v)))
-        self._dynamic_comment_replacements = tuple(dyn_pairs)
-        self._rebuild_merged_replacements()
+    def set_comment_terms(self, terms) -> None:
+        """配信コメントの語を設定する。話された箇所だけ補正する"""
+        self._comment_corrector.set_terms(terms or ())
 
     def _rebuild_merged_replacements(self) -> None:
-        """ユーザー置換辞書とコメント動的辞書をマージ"""
-        user_tups = getattr(self, "_user_replacements", ()) or ()
-        dyn_tups = getattr(self, "_dynamic_comment_replacements", ()) or ()
-        user_keys = {k for k, _ in user_tups}
-        combined = list(user_tups)
-        for k, v in dyn_tups:
-            if k not in user_keys:
-                combined.append((k, v))
-        self._replacements = tuple(combined)
+        self._replacements = tuple(getattr(self, "_user_replacements", ()) or ())
 
     def set_itn_overrides(self, exclude: set | None = None, force: dict | None = None) -> None:
         """ITN (逆テキスト正規化) オーバーライド設定"""
@@ -313,7 +305,7 @@ class WhisperDirectMLEngine:
             except Exception as e:
                 logger.debug(f"ITN ja failed: {e}")
 
-        return text
+        return self._comment_corrector.correct(text)
 
     def partial(
         self,

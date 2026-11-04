@@ -29,6 +29,8 @@ In the default CPU mode, all models run locally using quantized INT8 weights, so
   Analyzes past stream archives (video, playlist, or channel URLs) to detect proper nouns, game terminology, and speech characteristics, automatically generating phonetic replacement dictionaries to prevent misrecognitions.
 - **Stream-Linked Priority Tags**:
   Automatically extracts hashtags from both video titles and descriptions (e.g., `#ApexLegends`, `#StreetFighter6`) and tags each extracted term. Multi-select relevant tags on the Web Mic page (`/mic`) to inject specialized gaming vocabularies directly into the ASR engine.
+- **Comment-Linked Correction**:
+  When the streamer says a word or viewer name from recent chat, similar-sounding misrecognitions of it are corrected (off by default).
 - **Morphological Correction (SudachiPy)**:
   Prevents mis-segmentation of gaming terms, applying fast and natural word-boundary correction during both live drafting and final confirmation with ultra-low latency (~0.02ms).
 - **Privacy**:

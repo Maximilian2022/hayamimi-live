@@ -20,7 +20,7 @@ if os.path.join(_ROOT, "scripts") not in sys.path:
     sys.path.insert(0, os.path.join(_ROOT, "scripts"))
 
 from scripts.audio_dsp import BiquadFilter, BroadcastAudioDSP, get_global_dsp
-from scripts.comment_sync import CommentHotwordExtractor, CommentSynchronizer, get_global_comment_sync
+from scripts.comment_sync import CommentSynchronizer, CommentTermExtractor, get_global_comment_sync
 from tools.profile_builder.profile_model import SpeakerProfile
 
 
@@ -105,9 +105,9 @@ def test_dsp_full_chain_performance_and_bypass():
 # Phase 3: OneComme / Comment Sync Tests & Safety Guards (H-1)
 # =====================================================================
 
-def test_comment_hotword_extractor_safety_guards_h1():
+def test_comment_term_extractor_safety_guards_h1():
     """Verify safety guards (H-1): common everyday nouns are never extracted or replaced."""
-    extractor = CommentHotwordExtractor()
+    extractor = CommentTermExtractor()
 
     # Poisonous comments containing everyday Japanese words
     poison_comments = [
@@ -119,11 +119,6 @@ def test_comment_hotword_extractor_safety_guards_h1():
         # None of these common words should be extracted
         for surf, reading in extracted:
             assert surf not in ("死体", "視聴", "機械", "時間", "意思", "期間", "勉強", "普通", "話")
-            # If any term is extracted, its reading must NOT conflict with common words
-            candidates = extractor.build_replacement_candidates(surf, reading)
-            assert "したい" not in candidates
-            assert "じかん" not in candidates
-            assert "きかい" not in candidates
 
     # Legitimate streamer and game terms MUST still be extracted
     legit_comments = ["渋谷ハル", "葛葉", "クレーバー強い！", "ボセック引いた"]
@@ -144,11 +139,11 @@ def test_comment_sync_sliding_window_ttl():
     syncer = CommentSynchronizer(enabled=True, word_ttl_sec=0.2)
     syncer.ingest_comments(["クレーバー"])
 
-    active_before = syncer.get_dynamic_replacements()
+    active_before = syncer.get_active_terms()
     assert len(active_before) > 0
 
     time.sleep(0.35)
-    active_after = syncer.get_dynamic_replacements()
+    active_after = syncer.get_active_terms()
     assert len(active_after) == 0
 
 
