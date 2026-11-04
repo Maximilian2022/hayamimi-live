@@ -30,7 +30,7 @@ kiwipiepy==0.23.2
 opencc-python-reimplemented==0.1.7
 
 # Speaker Profile Builder dependencies (tools/profile_builder/)
-yt-dlp>=2025.1.0
+yt-dlp>=2026.10.26
 imageio-ffmpeg>=0.5.1
 google-genai>=2.34.0
 pydantic>=2.0.0
