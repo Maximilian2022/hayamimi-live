@@ -627,3 +627,15 @@ def test_voiceprint_manual_record_api(running_server, monkeypatch):
         assert target["voiceprint"] is not None
         assert len(target["voiceprint"]) == 512
         assert "has_lora" in target
+
+
+def test_profile_page_modals_use_defined_css_classes():
+    """未定義のクラスだとダイアログが隠れず、ページの下に出続ける"""
+    import pathlib
+    import re
+
+    html = pathlib.Path("scripts/profile_page.html").read_text(encoding="utf-8")
+    style = html[: html.index("</style>")]
+    for block in re.findall(r'<div id="\w+Modal" class="([\w-]+)">\s*<div class="([\w-]+)"', html):
+        for name in block:
+            assert f".{name}" in style, name

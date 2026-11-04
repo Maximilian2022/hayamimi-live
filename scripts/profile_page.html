@@ -994,10 +994,10 @@
 </div>
 
 <!-- Voiceprint Recording Modal (GPU Mode Only) -->
-<div id="voiceprintModal" class="modal-backdrop">
-  <div class="modal" style="max-width: 540px;">
+<div id="voiceprintModal" class="modal-overlay">
+  <div class="modal-card" style="max-width: 540px;">
     <div class="modal-header">
-      <div class="modal-title">🎙️ 話者声紋の手動録音・登録 (GPU / LoRA用)</div>
+      <h2>🎙️ 話者声紋の手動録音・登録 (GPU / LoRA用)</h2>
       <button id="btnCloseVpModal" class="btn btn-secondary" style="padding: 4px 10px;">✕</button>
     </div>
     <div class="modal-body" style="display: flex; flex-direction: column; gap: 14px;">
@@ -1007,7 +1007,7 @@
       <div style="background: rgba(91, 127, 212, 0.1); border: 1px solid rgba(91, 127, 212, 0.3); border-radius: var(--radius-sm); padding: 12px; font-size: 0.8rem; color: var(--paper);">
         💡 <b>録音のコツ（約10〜15秒）:</b><br>
         マイクに向かって、いつもの配信オープニング挨拶（例: <i>「こんにちは、〇〇です！今日も配信を始めていきます、よろしくお願いします〜」</i>）などをリラックスしてお話しください。<br>
-        声紋（192次元）を確定することで、YouTube動画から<b>コメント読み上げやゲーム音を100%除外し、本人の声だけを厳選して LoRA を学習</b>できるようになります。
+        声紋（192次元）を確定することで、YouTube動画から<b>コメント読み上げやゲーム音をできるだけ除き、本人の声を中心に LoRA を学習</b>できるようになります。
       </div>
 
       <div style="display: flex; flex-direction: column; align-items: center; gap: 10px; margin: 10px 0;">
