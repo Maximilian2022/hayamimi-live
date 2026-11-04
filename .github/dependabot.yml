@@ -9,3 +9,4 @@ updates:
       # Updating to PyPI builds replaces them with CPU-only wheels, breaking GPU inference and LoRA.
       - dependency-name: "torch"
       - dependency-name: "torchaudio"
+
