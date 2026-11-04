@@ -233,17 +233,16 @@ def _check_profile_lora_status(speaker_id: str, server=None) -> dict:
     if not is_safe_speaker_id(speaker_id):
         return {"exists": False, "channel_linked": False, "needs_init_training": False}
 
-    pdir = _get_profiles_dir()
-    real_pdir = os.path.realpath(pdir)
-    lora_dir = os.path.realpath(os.path.join(real_pdir, f"{speaker_id}_lora"))
-    if os.path.commonpath([real_pdir, lora_dir]) != real_pdir:
+    from scripts.lora_state import has_usable_model, is_lora_enabled, resolve_lora_dir
+
+    real_pdir = os.path.realpath(_get_profiles_dir())
+    lora_dir = resolve_lora_dir(real_pdir, speaker_id)
+    if lora_dir is None:
         return {"exists": False, "channel_linked": False, "needs_init_training": False}
 
     prof = load_profile(speaker_id, real_pdir)
     if not prof:
         return {"exists": False, "channel_linked": False, "needs_init_training": False}
-
-    from scripts.lora_state import has_usable_model, is_lora_enabled
 
     # 過去の形式のモデルは字幕に使わないため、未学習として扱い作り直しを促す
     lora_exists = has_usable_model(lora_dir)
@@ -2054,12 +2053,13 @@ class SubtitleServer:
                     if not isinstance(sid, str) or not isinstance(enabled, bool):
                         self._json(400, {"error": "speaker_id and enabled are required"})
                         return
-                    st = _check_profile_lora_status(sid, server)
-                    if not st.get("lora_dir"):
+                    from scripts.lora_state import has_usable_model, resolve_lora_dir, set_lora_enabled
+
+                    lora_dir = resolve_lora_dir(_get_profiles_dir(), sid)
+                    if lora_dir is None or not has_usable_model(lora_dir):
                         self._json(404, {"error": "この話者の LoRA はまだ学習されていません"})
                         return
-                    from scripts.lora_state import set_lora_enabled
-                    set_lora_enabled(st["lora_dir"], enabled)
+                    set_lora_enabled(lora_dir, enabled)
                     self._json(200, {"ok": True, "enabled": enabled})
                     return
                 if req_path == "/api/profiles/lora/train":

@@ -464,8 +464,8 @@ class ProfileBuilderPipeline:
             if vid_id and vid_id not in profile.processed_video_ids:
                 profile.processed_video_ids.append(vid_id)
 
-            # 5.5 Extract/Save Voiceprint (CAM++ 512-dim embedding)
-            report("voiceprint", 0.88, "CAM++ による話者声紋（512次元ベクトル）を確定中...")
+            # 5.5 Extract/Save Voiceprint (CAM++ 192-dim embedding)
+            report("voiceprint", 0.88, "CAM++ による話者声紋（192次元ベクトル）を確定中...")
             try:
                 if extracted_current_vp is None and voice_extractor.is_available:
                     extracted_current_vp, extracted_current_vp_count = voice_extractor.extract_voiceprint(

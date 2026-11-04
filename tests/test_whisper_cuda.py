@@ -158,3 +158,17 @@ def test_explicit_lora_dir_is_honored(tmp_path):
          patch("scripts.whisper_cuda_engine.WhisperModel", return_value=MagicMock()):
         engine = WhisperCUDAEngine(lora_dir=str(tmp_path))
     assert engine.model_path == str(ct2_dir)
+
+
+@pytest.mark.parametrize("speaker_id", ["../../evil", "..\\..\\evil", "a/b", "C:\\Windows", "", None, 1, "x" * 65])
+def test_resolve_lora_dir_rejects_unsafe_ids(tmp_path, speaker_id):
+    from scripts.lora_state import resolve_lora_dir
+
+    assert resolve_lora_dir(str(tmp_path), speaker_id) is None
+
+
+def test_resolve_lora_dir_stays_inside_profiles(tmp_path):
+    import os
+    from scripts.lora_state import resolve_lora_dir
+
+    assert resolve_lora_dir(str(tmp_path), "spk_1") == os.path.join(os.path.realpath(tmp_path), "spk_1_lora")

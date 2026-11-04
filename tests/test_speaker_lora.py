@@ -8,7 +8,12 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from scripts.speaker_lora import SpeakerLoRATrainer
+# GPU モード用の依存は CI の標準構成に含まれない
+pytest.importorskip("torch")
+pytest.importorskip("transformers")
+pytest.importorskip("peft")
+
+from scripts.speaker_lora import SpeakerLoRATrainer  # noqa: E402
 
 
 def test_speaker_lora_trainer_init():

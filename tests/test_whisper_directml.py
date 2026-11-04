@@ -8,7 +8,12 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from scripts.whisper_dml_engine import WhisperDirectMLEngine
+# DirectML 用の依存は開発環境と CI の標準構成に含まれない
+pytest.importorskip("torch")
+pytest.importorskip("transformers")
+pytest.importorskip("optimum")
+
+from scripts.whisper_dml_engine import WhisperDirectMLEngine  # noqa: E402
 
 
 def test_whisper_dml_engine_init_mocked():

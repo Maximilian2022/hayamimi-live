@@ -27,21 +27,21 @@ This manual details the system requirements, startup procedures, OBS Studio inte
 
 ## 1. System Requirements
 
-The system is optimized to run efficiently on standard personal computer CPUs without requiring a dedicated GPU.
+The default CPU mode runs efficiently on standard personal computer CPUs without a dedicated GPU. Supported PCs can also use NPU mode, and NVIDIA GPUs can use the experimental GPU mode.
 
 | Component | Recommended Specs | Minimum Requirements |
 | :--- | :--- | :--- |
 | **OS** | Windows 11 / Windows 10 (64-bit) | Windows 10 (Build 19044 or later) |
 | **CPU** | Intel Core i5 (8th gen+) / AMD Ryzen 5+ | Quad-core x86_64 CPU |
-| **GPU** | Not required (CPU-only inference) | None |
+| **GPU** | Not required (GPU mode needs an NVIDIA GPU) | None |
 | **RAM** | 8 GB or higher | 4 GB |
-| **Disk** | 5 GB free storage (for model weights) | 2 GB |
+| **Disk** | 5 GB free storage (for model weights); GPU mode needs about 10 GB more | 2 GB |
 | **Audio** | Standard USB microphone or headset | Audio input device |
 
 > [!NOTE]
 > **Privacy & Network Architecture**:  
-> Live speech-to-text and real-time translation pipelines execute 100% locally on your CPU. The core transcription works completely offline with zero telemetry; audio streams and transcripts are never uploaded to external servers.  
-> *Note: External network requests occur exclusively when utilizing the automated speaker profile builder to analyze YouTube archives (fetching metadata/captions via yt-dlp) and extracting vocabulary via Google AI Studio (Gemini API). Saved API keys are stored solely in local `config/gemini_key.txt`.*
+> Live speech-to-text and real-time translation run locally and never send microphone audio off your PC.  
+> *Note: Only speaker profile generation uses the network: it downloads YouTube videos (via yt-dlp) and sends their audio to the Google Gemini API. See section 7 for how that data is handled. API keys are stored locally.*
 
 ---
 
@@ -50,13 +50,18 @@ The system is optimized to run efficiently on standard personal computer CPUs wi
 ### Standard Launch
 1. Double-click `start.bat` in the project root directory.
 2. The modern desktop launcher GUI will launch.
-3. Click **"Start Speech Recognition"**.
-4. The status switches to `RUNNING`, and your default browser opens the Web Mic page at `http://localhost:8833/mic`.
+3. Choose the runtime and inference mode, then click the start button (**"アプリ起動 & Webを開く"**).
+4. The status switches to `稼働中 (8833 / 8766)`, and your default browser opens the Web Mic page at `http://localhost:8833/mic`.
 
-### Automatic Runtime Detection
-The runner automatically selects the appropriate environment:
-- **Python venv Mode (Default)**: Direct execution via the local virtual environment (`.venv`).
-- **WSL Containers Mode**: Execution inside an isolated Microsoft WSL 3.0 container.
+### Choosing the Runtime and Inference Mode
+Select these options in the launcher:
+- **Runtime: Python venv (recommended)**: Runs directly in the local virtual environment (`.venv`).
+- **Runtime: WSL Containers**: Runs inside an isolated Microsoft WSL 3.0 container.
+- **Inference: CPU**: The default mode, running ReazonSpeech on the CPU.
+- **Inference: NPU**: Available on PCs with a supported NPU.
+- **Inference: GPU (experimental / LoRA)**: Runs Whisper on an NVIDIA GPU. The first launch creates a dedicated environment (`.venv_gpu`) and downloads about 3 GB, including PyTorch.
+
+If Windows Smart App Control (SAC) is on, the launcher automatically starts through `start.bat`.
 
 ---
 
@@ -138,7 +143,20 @@ Automatically extracts proper nouns and pronunciation patterns from past streams
 1. **Gemini API Key**: Enter your key in the header configuration card (stored locally and masked).
 2. **Input Archive URL**: Enter a YouTube video URL, playlist URL (`playlist?list=...`), or channel handle (`@ChannelName`), then click **"Generate Profile"**.
 3. **Review & Apply**: The system extracts speech segments, transcribes them with local ASR, detects errors and proper nouns, and generates phonetic replacement pairs. Click **"Apply Profile"** to activate.
-4. **Automated Maintenance**: If linked to a channel URL, new video uploads are automatically checked on launcher shutdown to update dictionaries incrementally.
+4. **Automated Maintenance**: If linked to a channel URL, new uploads are checked when the launcher starts and exits to update dictionaries incrementally.
+
+> [!IMPORTANT]
+> **Data sent to Google**: Generating or growing a profile sends audio from the selected videos (up to 12 minutes per video) to the Gemini API. With a free-tier key, Google may use that content to improve its products and human reviewers may read it. Paid keys are not used for product improvement. Handling varies by region, so check the [terms](https://aistudio.google.com/docs/terms). Make sure you are comfortable sending your voice and streams before using this feature.
+
+### Speaker LoRA (GPU mode, experimental)
+GPU mode also trains a per-speaker LoRA in addition to the dictionary. Subtitles are not guaranteed to improve, so this is an experimental feature.
+
+- **Requirements**: A registered voiceprint, and the speaker's own voice in at least 50% of the video. Videos below that are treated as collaborations and skipped.
+- **Training data**: The speaker's segments are cut out by voiceprint and transcribed by Gemini. This sends more audio, roughly doubling Gemini usage per video.
+- **Training**: Labels from up to 6 videos are kept, and each run trains from scratch. Training waits until 25 segments are available.
+- **On / off**: A trained LoRA is on by default. If subtitles get worse, turn it off on the profile card at `/profile`. Changes apply on the next launch.
+- **Disk use**: About 1.5 GB per speaker.
+- **Voiceprints**: You can also record one manually at `/profile`. If videos keep being skipped, register the voiceprint again.
 
 ### Priority Tags & Video Title Hashtag Integration
 For creators streaming multiple games or themes, "Priority Tags" let you tag individual vocabulary items and selectively activate them.

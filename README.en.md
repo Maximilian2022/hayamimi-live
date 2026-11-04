@@ -1,6 +1,6 @@
 # Hayamimi Live
 
-A local, CPU-based real-time speech recognition and multilingual translation subtitle system for live streaming.
+A local real-time speech recognition and multilingual translation subtitle system for live streaming, with CPU, NPU, and experimental GPU modes.
 
 [日本語版 README](README.md) / [User Manual](MANUAL.en.md) / [Technical Benchmarks & Architecture (ORIGINAL.md)](ORIGINAL.md)
 
@@ -12,11 +12,13 @@ This project wraps the upstream Hayamimi fork with an intuitive interface, devel
 
 Hayamimi Live provides real-time speech-to-text and simultaneous translation for live video production and streaming software such as OBS Studio.
 
-All models run locally on the CPU using quantized INT8 weights. Because live speech recognition and translation require neither a dedicated GPU nor external cloud APIs, the core pipeline functions entirely offline without telemetry, recurring API costs, or rate limits.  
-*Note: External network communication occurs only when using the automated dictionary generation feature to fetch YouTube archive metadata and query the Google Gemini API (Google AI Studio).*
+In the default CPU mode, all models run locally using quantized INT8 weights, so live speech recognition and translation need neither a dedicated GPU nor cloud APIs and work offline.
+*Note: Only speaker profile generation uses the network: it downloads the YouTube videos and sends their audio to the Google Gemini API (Google AI Studio).*
 
 ### Key Capabilities
 
+- **Selectable Inference Modes**:
+  Switch between CPU (default), NPU (on supported PCs), and experimental NVIDIA GPU modes in the launcher. GPU mode uses Whisper and can train a per-speaker LoRA.
 - **Low-Latency CPU Inference**:
   Leverages quantized INT8 ONNX models (ReazonSpeech for Japanese, specialist models for other target languages via sherpa-onnx) to finalize utterances roughly 100ms after speech cessation.
 - **Concurrent Multilingual Translation**:
@@ -29,8 +31,8 @@ All models run locally on the CPU using quantized INT8 weights. Because live spe
   Automatically extracts hashtags from both video titles and descriptions (e.g., `#ApexLegends`, `#StreetFighter6`) and tags each extracted term. Multi-select relevant tags on the Web Mic page (`/mic`) to inject specialized gaming vocabularies directly into the ASR engine.
 - **Morphological Correction (SudachiPy)**:
   Prevents mis-segmentation of gaming terms, applying fast and natural word-boundary correction during both live drafting and final confirmation with ultra-low latency (~0.02ms).
-- **Local Data Privacy**:
-  Audio buffers are processed in-memory and discarded. No audio recordings or transcripts are transmitted to external servers.
+- **Privacy**:
+  Live microphone audio and transcripts stay on your PC. Profile generation sends audio from the selected videos to the Gemini API (Google). With a free-tier key, Google may use that content to improve its products and human reviewers may read it. See the [User Manual](MANUAL.en.md).
 
 ---
 
@@ -38,7 +40,7 @@ All models run locally on the CPU using quantized INT8 weights. Because live spe
 
 ### 1. Launch
 Run `start.bat` on Windows.  
-When the desktop launcher appears, click **"Start Speech Recognition"**.
+When the desktop launcher appears, choose the runtime and inference mode, then click the start button (**"アプリ起動 & Webを開く"**).
 
 ### 2. Add to OBS Studio
 1. Under the **Sources** panel in OBS Studio, add a **Browser** source.

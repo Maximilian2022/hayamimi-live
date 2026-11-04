@@ -3,6 +3,7 @@ import json
 from unittest.mock import MagicMock, patch
 
 import numpy as np
+import pytest
 
 from tools.profile_builder import lora_labeler as ll
 from tools.profile_builder.local_transcribe import TranscribedSegment as TS
@@ -35,11 +36,13 @@ def test_usable_label_rules():
 
 
 def test_hints_are_empty_when_whisper_cannot_load():
+    pytest.importorskip("faster_whisper")
     with patch("faster_whisper.WhisperModel", side_effect=RuntimeError("no gpu")):
         assert ll.transcribe_ranges(np.zeros(16000), 16000, [(0.0, 0.5), (0.5, 1.0)]) == ["", ""]
 
 
 def test_hints_are_transcribed_per_range():
+    pytest.importorskip("faster_whisper")
     model = MagicMock()
     model.transcribe.side_effect = [([MagicMock(text=" あ")], None), ([MagicMock(text="い ")], None)]
     with patch("faster_whisper.WhisperModel", return_value=model):

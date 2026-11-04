@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 
 # 学習方法を変えて過去のモデルが使えなくなったら上げる。
 # 1 (メタ情報なし): ラベルの言語指定なし・開始トークンのずれあり。字幕が悪化するため適用しない
@@ -17,6 +18,18 @@ LORA_FORMAT_VERSION = 2
 LORA_META_FILENAME = "lora_meta.json"
 LORA_DISABLED_FILENAME = "lora_disabled.json"
 LORA_CT2_DIRNAME = "ctranslate2"
+_SAFE_SPEAKER_ID = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+
+
+def resolve_lora_dir(profiles_dir: str, speaker_id: object) -> str | None:
+    """Return the speaker's LoRA directory, or None if the ID could leave profiles_dir."""
+    if not isinstance(speaker_id, str) or not _SAFE_SPEAKER_ID.fullmatch(speaker_id):
+        return None
+    root = os.path.realpath(profiles_dir)
+    lora_dir = os.path.realpath(os.path.join(root, f"{speaker_id}_lora"))
+    if not lora_dir.startswith(root + os.sep):
+        return None
+    return lora_dir
 
 
 def write_lora_meta(lora_dir: str, **info) -> None:

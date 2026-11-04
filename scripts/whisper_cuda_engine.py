@@ -125,10 +125,10 @@ class WhisperCUDAEngine:
         if not self.lora_dir:
             try:
                 from scripts.config_store import get_storage_dir, get_saved_active_speaker_id
-                from scripts.lora_state import should_apply_lora
+                from scripts.lora_state import resolve_lora_dir, should_apply_lora
                 act_sid = get_saved_active_speaker_id()
-                if act_sid:
-                    cand_lora = os.path.join(get_storage_dir(), "profiles", f"{act_sid}_lora")
+                cand_lora = resolve_lora_dir(os.path.join(get_storage_dir(), "profiles"), act_sid)
+                if cand_lora:
                     if should_apply_lora(cand_lora):
                         self.lora_dir = cand_lora
                         logger.info(f"Auto-detected speaker LoRA directory: {cand_lora}")
