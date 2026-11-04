@@ -6,7 +6,7 @@
 faster-whisper==1.2.1
 jiwer==4.0.0
 edge-tts==7.2.8
-yt-dlp==2026.8.19
+yt-dlp==2026.10.26
 pytest==9.2.0
 OpenCC==1.4.2
 pykakasi==2.3.0   # kana-space scoring for the singing eval (eval_singing.py)
