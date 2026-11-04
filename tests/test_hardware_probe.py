@@ -193,8 +193,7 @@ def test_amd_gpu_only_environment():
 def test_real_system_probe():
     """実機環境でのハードウェア走査がクラッシュせず実行できること"""
     devices = probe_gpu_devices()
-    assert isinstance(devices, list)
-    assert len(devices) > 0
+    assert isinstance(devices, list)  # CI のサーバーなど GPU のない環境では空になる
     summary = get_hardware_summary()
     assert "has_igpu" in summary
     assert "has_npu" in summary
