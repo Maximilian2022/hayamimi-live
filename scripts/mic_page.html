@@ -2040,7 +2040,7 @@
                   engChip.style.borderColor = "rgba(16, 185, 129, 0.3)";
                 }
               } else if (ev.device === "NPU" || (serverCfgLoaded && window._currentDevice === "NPU")) {
-                if (engVal) engVal.textContent = "⚡ NPU (ReazonSpeech)";
+                if (engVal) engVal.textContent = "CPU (ReazonSpeech / NPU 準備中)";
                 if (engChip) {
                   engChip.style.background = "rgba(16, 185, 129, 0.15)";
                   engChip.style.color = "#10B981";
@@ -2237,7 +2237,7 @@
               engChip.style.borderColor = "rgba(16, 185, 129, 0.3)";
             }
           } else if (cfg.device_name === "NPU" || (cfg.device && cfg.device === "npu")) {
-            if (engVal) engVal.textContent = "⚡ NPU (ReazonSpeech)";
+            if (engVal) engVal.textContent = "CPU (ReazonSpeech / NPU 準備中)";
             if (engChip) {
               engChip.style.background = "rgba(16, 185, 129, 0.15)";
               engChip.style.color = "#10B981";

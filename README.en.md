@@ -1,6 +1,6 @@
 # Hayamimi Live
 
-A local real-time speech recognition and multilingual translation subtitle system for live streaming, with CPU, NPU, and experimental GPU modes.
+A local real-time speech recognition and multilingual translation subtitle system for live streaming, with CPU and experimental GPU modes. NPU mode is in preparation.
 
 [日本語版 README](README.md) / [User Manual](MANUAL.en.md) / [Technical Benchmarks & Architecture (ORIGINAL.md)](ORIGINAL.md)
 
@@ -18,7 +18,7 @@ In the default CPU mode, all models run locally using quantized INT8 weights, so
 ### Key Capabilities
 
 - **Selectable Inference Modes**:
-  Switch between CPU (default), NPU (on supported PCs), and experimental NVIDIA GPU modes in the launcher. GPU mode uses Whisper and can train a per-speaker LoRA.
+  Switch between CPU (default) and experimental NVIDIA GPU modes in the launcher. NPU mode is in preparation and currently runs on the CPU. GPU mode uses Whisper and can train a per-speaker LoRA.
 - **Low-Latency CPU Inference**:
   Leverages quantized INT8 ONNX models (ReazonSpeech for Japanese, specialist models for other target languages via sherpa-onnx) to finalize utterances roughly 100ms after speech cessation.
 - **Concurrent Multilingual Translation**:

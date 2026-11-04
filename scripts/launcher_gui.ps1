@@ -666,7 +666,7 @@ function Update-ContainerLogFile {
                             <TextBlock Text="推論設定:" FontSize="12" FontWeight="SemiBold" Foreground="#94A3B8" VerticalAlignment="Center" Margin="0,0,16,0" Width="68"/>
                             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                                 <RadioButton x:Name="RbDeviceCpu" Content="⚙ CPU 起動" GroupName="DeviceMode" Foreground="#F1F5F9" FontSize="12.5" Margin="0,0,24,0" VerticalAlignment="Center" Cursor="Hand"/>
-                                <RadioButton x:Name="RbDeviceNpu" Content="⚡ NPU 起動" GroupName="DeviceMode" Foreground="#F1F5F9" FontSize="12.5" Margin="0,0,24,0" VerticalAlignment="Center" Cursor="Hand" Visibility="Collapsed"/>
+                                <RadioButton x:Name="RbDeviceNpu" Content="⚡ NPU 起動 (準備中)" GroupName="DeviceMode" Foreground="#F1F5F9" FontSize="12.5" Margin="0,0,24,0" VerticalAlignment="Center" Cursor="Hand" Visibility="Collapsed"/>
                                 <RadioButton x:Name="RbDeviceGpu" Content="🔥 GPU 起動 (実験的 / LoRA)" GroupName="DeviceMode" Foreground="#F1F5F9" FontSize="12.5" VerticalAlignment="Center" Cursor="Hand" Visibility="Collapsed"/>
                             </StackPanel>
                         </Grid>
@@ -1012,7 +1012,7 @@ function Update-DeviceBadgeDisplay {
     } elseif ($script:CurrentDeviceMode -eq "Npu" -and $script:HasNpu) {
         $name = if ($script:NpuName) { $script:NpuName } else { "NPU" }
         if ($gpuBadge) {
-            $gpuBadge.Text = "⚡ NPU 起動: $name"
+            $gpuBadge.Text = "⚡ NPU 準備中 (CPU で動作): $name"
             $gpuBadge.Foreground = $brushGreen
         }
         if ($gpuBadgeBorder) {
@@ -1063,13 +1063,13 @@ function Update-GpuDeviceBadge {
             if ($rbDeviceNpu) {
                 $rbDeviceNpu.IsEnabled = $true
                 $rbDeviceNpu.Visibility = [System.Windows.Visibility]::Visible
-                $rbDeviceNpu.Content = "⚡ NPU 起動"
+                $rbDeviceNpu.Content = "⚡ NPU 起動 (準備中)"
                 $rbDeviceNpu.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#F1F5F9")
                 $rbDeviceNpu.Opacity = 1.0
                 $rbDeviceNpu.Cursor = [System.Windows.Input.Cursors]::Hand
-                $rbDeviceNpu.ToolTip = "NPU: $($npu.Name) (CPU・GPU負荷ゼロ)"
+                $rbDeviceNpu.ToolTip = "NPU: $($npu.Name) (準備中: 現在は CPU で動作します)"
             }
-            Write-AppLog "✔ NPU 検出: $($npu.Name) (ReazonSpeech NPU 高速推論対応 / CPU・GPU負荷ゼロ)" "INFO"
+            Write-AppLog "✔ NPU 検出: $($npu.Name) (NPU 推論は準備中: 現在は CPU で動作します)" "INFO"
         } else {
             $script:HasNpu = $false
             $script:NpuName = ""
@@ -1522,7 +1522,7 @@ function Set-DeviceMode {
     if ($NewMode -eq "Gpu") {
         Write-AppLog "推論設定を「🔥 GPU 起動 (実験的 / LoRA)」に切り替えました。※Whisper+LoRA高精度推論" "INFO"
     } elseif ($NewMode -eq "Npu") {
-        Write-AppLog "推論設定を「⚡ NPU 起動」に切り替えました。※NPU活用・CPU負荷ゼロ" "INFO"
+        Write-AppLog "推論設定を「⚡ NPU 起動 (準備中)」に切り替えました。※現在は CPU で動作します" "INFO"
     } else {
         Write-AppLog "推論設定を「⚙ CPU 起動」に切り替えました。" "INFO"
     }
@@ -2226,7 +2226,7 @@ function Start-PythonVenvApp {
         $hasOpenVino = & "$venvPython" -B -c "import openvino" 2>$null; $?
         if (-not $hasOpenVino) {
             Write-AppLog "==========================================" "INFO"
-            Write-AppLog "【NPU初回準備】NPU推論に必要な OpenVINO ライブラリを自動配備しています (数秒で完了します)..." "INFO"
+            Write-AppLog "【NPU初回準備】NPU 検出に使う OpenVINO ライブラリを自動配備しています (数秒で完了します)..." "INFO"
             Set-UIState "NPU準備中..." $brushOrange $false $false
             if ($initProgressBar) { $initProgressBar.Visibility = "Visible" }
 
@@ -2373,7 +2373,7 @@ function Start-PythonVenvApp {
     } elseif ($script:CurrentDeviceMode -eq "Npu" -and $script:HasNpu) {
         $devEnv = "npu"
         $deviceOptArg = "--device npu"
-        Write-AppLog "推論デバイス: NPU 起動 ($($script:NpuName) / CPU・GPU負荷ゼロ)" "INFO"
+        Write-AppLog "推論デバイス: NPU 起動 (準備中) ($($script:NpuName) / 現在は CPU で動作します)" "INFO"
     } else {
         $devEnv = "cpu"
         $deviceOptArg = "--device cpu"
