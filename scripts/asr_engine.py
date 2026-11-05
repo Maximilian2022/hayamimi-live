@@ -86,6 +86,7 @@ OMNI_MODEL_DIR = os.path.join(MODELS_DIR, "omnilingual-300m-ctc-int8")
 WHISPER_TINY_DIR = os.path.join(MODELS_DIR, "sherpa-onnx-whisper-tiny")
 RZ_MODEL_DIR = os.path.join(MODELS_DIR, "sherpa-onnx-zipformer-ja-en-reazonspeech-2025-01-17")
 HAAS_JA_DIR = os.path.join(MODELS_DIR, "haas-ja-onnx-int8dyn_mm")
+HAAS_NPU_DIR = os.path.join(MODELS_DIR, "haas-ja-onnx-npu")
 # Selects Japanese-only recognition with Haas-ja instead of ReazonSpeech.
 LANG_JA_HAAS = "ja-haas"
 PARA_ZH_DIR = os.path.join(MODELS_DIR, "sherpa-onnx-paraformer-zh-int8-2025-10-07")
@@ -375,6 +376,22 @@ def _reazon_npu_module():
     except ImportError:
         from scripts import reazon_npu
     return reazon_npu
+
+
+def _haas_npu_module():
+    try:
+        import haas_npu
+    except ImportError:
+        from scripts import haas_npu
+    return haas_npu
+
+
+def _haas_npu_output_dir() -> str:
+    return os.path.join(os.path.dirname(_npu_model_dir()), "npu_haas")
+
+
+def _build_haas_npu(threads: int):
+    return _haas_npu_module().HaasNpuRecognizer(HAAS_NPU_DIR, _haas_npu_output_dir())
 
 
 def _npu_model_dir() -> str:
@@ -788,6 +805,7 @@ def _load_replacements(path: str) -> list[tuple[str, str]]:
 _KEY_FILES = {
     "rz": (RZ_MODEL_DIR, RZ_MODEL_FILES["encoder"]),
     "haas": (HAAS_JA_DIR, "encoder.onnx"),
+    "haas_npu": (HAAS_NPU_DIR, "encoder.onnx"),
     "pz": (PARA_ZH_DIR, "model*.onnx"),
     "sv": (SV_MODEL_DIR, "model*.onnx"),
     "v3": (V3_MODEL_DIR, "encoder*.onnx"),
@@ -824,6 +842,7 @@ def _build_lid_guarded(threads: int):
 _BUILDERS = {
     "rz": _build_reazon,
     "haas": _build_haas_ja,
+    "haas_npu": _build_haas_npu,
     "pz": _build_paraformer_zh,
     "sv": _build_sense_voice,
     "v3": _build_v3_recognizer,
@@ -842,7 +861,7 @@ _PRELOAD_ORDER = ("pz", "sv", "v3", "omni")
 # Opt-in tiers that are strict alternatives to a default tier, and the default
 # they must degrade to when missing (consulted by _get_with_fallback before the
 # generic chain). Register every future opt-in tier here.
-_TIER_FALLBACK: dict[str, tuple[str, ...]] = {"v2": ("v3",), "haas": ("rz",)}
+_TIER_FALLBACK: dict[str, tuple[str, ...]] = {"v2": ("v3",), "haas": ("rz",), "haas_npu": ("rz",)}
 
 
 class ModelUnavailable(RuntimeError):
@@ -894,7 +913,7 @@ class RoutedASR:
         self._bg_threads: list[threading.Thread] = []
         self._bg_lock = threading.Lock()  # guards _closed + _bg_threads
         self.dual_confirm = dual_confirm  # --mode balanced (default); False = --mode fast
-        self._ja_model = "haas" if forced_lang == LANG_JA_HAAS and self.haas_available else "rz"
+        self._ja_model = self._haas_tier if forced_lang == LANG_JA_HAAS and self.haas_available else "rz"
         # --mode single: skip all LID/switch logic
         self.forced_lang = "ja" if forced_lang == LANG_JA_HAAS else forced_lang
         self._models: dict[str, object] = {}
@@ -1202,6 +1221,8 @@ class RoutedASR:
                     try:
                         if name == "rz":
                             rec = self._build_ja()
+                        elif name == "haas_npu":
+                            rec = self._build_haas_npu()
                         else:
                             rec = _BUILDERS[name](self._threads)
                     except Exception as exc:
@@ -1260,6 +1281,40 @@ class RoutedASR:
             self._models["rz"] = rec
             self.device_name = "NPU"
         print("[hayamimi] NPU での認識に切り替えました。", file=sys.stderr)
+
+    def _build_haas_npu(self):
+        """Raises while Haas-ja is not ready, so the ja tier falls back to ReazonSpeech."""
+        npu = _haas_npu_module()
+        if not npu.has_npu():
+            self._warn_npu("NPU が見つからないため ReazonSpeech で認識します。")
+            raise RuntimeError("no NPU")
+        out_dir = _haas_npu_output_dir()
+        if npu.is_prepared(out_dir):
+            rec = npu.HaasNpuRecognizer(HAAS_NPU_DIR, out_dir)
+            self.device_name = "NPU"
+            return rec
+        # Subtitles keep running on ReazonSpeech meanwhile.
+        print("[hayamimi] Haas-Ja の NPU 準備を開始します。完了するまで ReazonSpeech で認識します。", file=sys.stderr)
+        self._spawn_bg(self._prepare_haas_npu_and_switch, npu, out_dir)
+        raise RuntimeError("preparing")
+
+    def _prepare_haas_npu_and_switch(self, npu, out_dir: str) -> None:
+        if not npu.prepare_in_subprocess(HAAS_NPU_DIR, out_dir):
+            self._warn_npu("Haas-Ja の NPU 準備に失敗したため ReazonSpeech で認識します。")
+            return
+        if self._closed:
+            return
+        try:
+            rec = npu.HaasNpuRecognizer(HAAS_NPU_DIR, out_dir)
+        except Exception as exc:
+            self._warn_npu(f"Haas-Ja を NPU で使えないため ReazonSpeech で認識します: {exc}")
+            return
+        with self._model_locks["haas_npu"]:
+            self._models["haas_npu"] = rec
+            self._unavailable.discard("haas_npu")
+            self._fallback_warned.discard("haas_npu")
+            self.device_name = "NPU"
+        print("[hayamimi] Haas-Ja を NPU で認識します。", file=sys.stderr)
 
     def _warn_npu(self, message: str) -> None:
         print(f"[hayamimi] {message}", file=sys.stderr)
@@ -1799,22 +1854,26 @@ class RoutedASR:
         if lang is not None and lang != LANG_JA_HAAS and lang not in ROUTABLE_LANGS:
             raise ValueError(f"unsupported language code: {lang!r} "
                              f"(must be one of {sorted(ROUTABLE_LANGS)} or None)")
-        self._ja_model = "haas" if lang == LANG_JA_HAAS and self.haas_available else "rz"
+        self._ja_model = self._haas_tier if lang == LANG_JA_HAAS and self.haas_available else "rz"
         self.forced_lang = "ja" if lang == LANG_JA_HAAS else lang
         self.reset_session()
-        if self._ja_model == "haas" and "haas" not in self._models:
+        if self._ja_model != "rz" and self._ja_model not in self._models:
             # Load before the next utterance so the first subtitle is not delayed.
-            self._spawn_bg(self._get_with_fallback, "haas")
+            self._spawn_bg(self._get_with_fallback, self._ja_model)
 
     @property
     def haas_available(self) -> bool:
-        """Haas-ja runs only in CPU mode. On the NPU its encoder returns wrong results."""
-        return self.device == "cpu"
+        """Haas-ja runs in CPU and NPU mode."""
+        return self.device in ("cpu", "npu")
+
+    @property
+    def _haas_tier(self) -> str:
+        return "haas_npu" if self.device == "npu" else "haas"
 
     @property
     def selected_lang(self) -> str | None:
         """The value set_forced_lang() was given, for reporting back to the settings UI."""
-        return LANG_JA_HAAS if getattr(self, "_ja_model", "rz") == "haas" else self.forced_lang
+        return LANG_JA_HAAS if getattr(self, "_ja_model", "rz") != "rz" else self.forced_lang
 
     def set_dual_confirm(self, enabled: bool) -> None:
         """--mode balanced/fast runtime setter: whether a language switch
@@ -2122,7 +2181,7 @@ class RoutedASR:
             except Exception:
                 pass
         # Haas-ja punctuates only some utterances. Restoring on top of its own marks would double them.
-        has_own_marks = text_model == "haas" and re.search(r"[、。？！?!]", text)
+        has_own_marks = text_model in ("haas", "haas_npu") and re.search(r"[、。？！?!]", text)
         if lang == "ja" and not has_own_marks and text.strip() and self.punct is not None:
             try:
                 text = self.punct.restore(text)

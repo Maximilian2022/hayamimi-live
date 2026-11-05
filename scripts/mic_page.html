@@ -2040,6 +2040,13 @@
                   engChip.style.color = "#10B981";
                   engChip.style.borderColor = "rgba(16, 185, 129, 0.3)";
                 }
+              } else if (ev.tier === "haas_npu") {
+                if (engVal) engVal.textContent = "⚡ NPU (Haas-Ja)";
+                if (engChip) {
+                  engChip.style.background = "rgba(16, 185, 129, 0.15)";
+                  engChip.style.color = "#10B981";
+                  engChip.style.borderColor = "rgba(16, 185, 129, 0.3)";
+                }
               } else if (ev.tier === "haas") {
                 if (engVal) engVal.textContent = "CPU (Haas-Ja)";
               } else if (ev.device === "NPU") {
@@ -2234,6 +2241,13 @@
           if (cfg.engine === "whisper_cuda" || cfg.device === "gpu" || (cfg.device_name && (cfg.device_name.includes("GeForce") || cfg.device_name.includes("RTX") || cfg.device_name.includes("CUDA")))) {
             const shortName = cfg.device_name ? cfg.device_name.replace("NVIDIA ", "").replace("GeForce ", "") : "Kotoba-Whisper";
             if (engVal) engVal.textContent = `🔥 GPU (${shortName})`;
+            if (engChip) {
+              engChip.style.background = "rgba(16, 185, 129, 0.15)";
+              engChip.style.color = "#10B981";
+              engChip.style.borderColor = "rgba(16, 185, 129, 0.3)";
+            }
+          } else if (cfg.lang === "ja-haas" && cfg.device_name === "NPU") {
+            if (engVal) engVal.textContent = "⚡ NPU (Haas-Ja)";
             if (engChip) {
               engChip.style.background = "rgba(16, 185, 129, 0.15)";
               engChip.style.color = "#10B981";
@@ -2643,7 +2657,7 @@
     }
   }
 
-  // Haas-Ja exists only in CPU mode, and the Japanese model depends on the mode.
+  // Haas-Ja exists only in CPU and NPU mode, and the Japanese model depends on the mode.
   function syncJapaneseOptions(cfg) {
     const select = document.getElementById("cfg-lang");
     if (!cfg.haas_available) select.querySelector('option[value="ja-haas"]')?.remove();

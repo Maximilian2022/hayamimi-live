@@ -699,7 +699,7 @@ def _get_saved_asr_config() -> dict:
         return {}
 
 def _config_to_restore(saved: dict, asr) -> dict:
-    """The first start in CPU mode moves Japanese to Haas-ja. Later choices are kept."""
+    """The first start in CPU or NPU mode moves Japanese to Haas-ja. Later choices are kept."""
     if not getattr(asr, "haas_available", False) or saved.get("ja_haas_switched"):
         return saved
     lang = "ja-haas" if saved.get("lang") in (None, "ja") else saved["lang"]
@@ -1324,7 +1324,7 @@ class RuntimeControls:
             if self.asr is None:
                 raise ValueError("no ASR engine attached")
             lang = payload["lang"]
-            # Haas-ja exists only in CPU mode; NPU and the Whisper engines stay on ja.
+            # Haas-ja does not exist in the Whisper engines, which stay on ja.
             if lang == "ja-haas" and not getattr(self.asr, "haas_available", False):
                 lang = "ja"
             self.asr.set_forced_lang(lang)

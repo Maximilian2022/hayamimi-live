@@ -54,7 +54,7 @@ evaluation -- `asr_engine.py`'s routing does not use them.
 | Model (dir under `models/`) | Publisher | License | Source |
 |---|---|---|---|
 | `sherpa-onnx-nemo-parakeet-tdt_ctc-0.6b-ja-35000-int8` | NVIDIA NeMo (trained on ReazonSpeech data) | CC-BY-4.0 | packaged by k2-fsa/sherpa-onnx (`asr-models` release) |
-| `haas-ja-onnx-int8dyn_mm` (Haas-ja-v1.0, ja, CPU mode default, fetched by the launcher or `download_models.py --haas-ja`) | Third Intelligence; unofficial ONNX export and quantization by Sanami | Apache-2.0 | [third-intelligence/Haas-ja-v1.0](https://huggingface.co/third-intelligence/Haas-ja-v1.0), [Sanami/haas-ja-onnx](https://huggingface.co/Sanami/haas-ja-onnx) (`NOTICE` is kept in the model folder) |
+| `haas-ja-onnx-int8dyn_mm` (Haas-ja-v1.0, ja, CPU mode default, fetched by the launcher or `download_models.py --haas-ja`; `haas-ja-onnx-npu` is the NPU mode default, using the same project's int8wo encoder, fetched by the launcher or `--haas-ja-npu`) | Third Intelligence; unofficial ONNX export and quantization by Sanami | Apache-2.0 | [third-intelligence/Haas-ja-v1.0](https://huggingface.co/third-intelligence/Haas-ja-v1.0), [Sanami/haas-ja-onnx](https://huggingface.co/Sanami/haas-ja-onnx) (`NOTICE` is kept in the model folder) |
 | `sherpa-onnx-zipformer-korean-2024-06-24` | k2-fsa / Zipformer (Korean) | Apache-2.0 | [k2-fsa/sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models) |
 | `sherpa-onnx-whisper-base` (LID replacement candidate, `--lid-candidates`) | OpenAI | MIT | [openai/whisper](https://github.com/openai/whisper), ONNX export packaged by k2-fsa/sherpa-onnx -- see `docs/eval/lid_candidates.md` |
 

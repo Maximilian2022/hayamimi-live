@@ -1067,7 +1067,7 @@ function Update-GpuDeviceBadge {
                 $rbDeviceNpu.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#F1F5F9")
                 $rbDeviceNpu.Opacity = 1.0
                 $rbDeviceNpu.Cursor = [System.Windows.Input.Cursors]::Hand
-                $rbDeviceNpu.ToolTip = "NPU: $($npu.Name) (日本語を NPU で認識。CPU 負荷は下がり、字幕は少し遅くなります)"
+                $rbDeviceNpu.ToolTip = "NPU: $($npu.Name) (日本語を Haas-Ja で NPU 認識。CPU 負荷が下がります)"
             }
             Write-AppLog "✔ NPU 検出: $($npu.Name) (日本語の認識を NPU で実行できます)" "INFO"
         } else {
@@ -2373,7 +2373,28 @@ function Start-PythonVenvApp {
     } elseif ($script:CurrentDeviceMode -eq "Npu" -and $script:HasNpu) {
         $devEnv = "npu"
         $deviceOptArg = "--device npu"
-        Write-AppLog "推論デバイス: NPU 起動 (実験的) ($($script:NpuName) / 準備が終わるまでは CPU で動作します)" "INFO"
+
+        # NPU モード時: Haas-Ja モデルの存在確認 & 自動ダウンロード (約630MB)。失敗時は ReazonSpeech で動作する
+        $haasNpuData = Join-Path $ProjectRoot "models\haas-ja-onnx-npu\encoder.onnx.data"
+        if (-not (Test-Path $haasNpuData) -or (Get-Item $haasNpuData -ErrorAction SilentlyContinue).Length -lt 500000000) {
+            Write-AppLog "Haas-Ja モデルを準備しています (約630MB)..." "INFO"
+            $dlScript = Join-Path $ProjectRoot "scripts\download_models.py"
+            if (Test-Path $dlScript) {
+                $pinfoDl = [System.Diagnostics.ProcessStartInfo]::new()
+                $pinfoDl.FileName = $venvPython
+                $pinfoDl.Arguments = "-B `"$dlScript`" --minimal --haas-ja-npu"
+                $pinfoDl.WorkingDirectory = $ProjectRoot
+                $pinfoDl.RedirectStandardOutput = $true
+                $pinfoDl.RedirectStandardError = $true
+                $pinfoDl.UseShellExecute = $false
+                $pinfoDl.CreateNoWindow = $true
+                $pinfoDl.Environment["PYTHONDONTWRITEBYTECODE"] = "1"
+                $procDl = [System.Diagnostics.Process]::Start($pinfoDl)
+                Wait-ProcessWithUiPump -Proc $procDl -LogPrefix "[Haas-Ja取得]"
+                Protect-ModelFiles
+            }
+        }
+        Write-AppLog "推論デバイス: NPU 起動 (実験的) ($($script:NpuName) / Haas-Ja。準備が終わるまでは ReazonSpeech で動作します)" "INFO"
     } else {
         $devEnv = "cpu"
         $deviceOptArg = "--device cpu"

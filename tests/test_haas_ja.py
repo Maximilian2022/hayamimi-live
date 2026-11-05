@@ -104,13 +104,24 @@ def test_mic_page_shows_haas_as_the_active_engine():
     assert html.count('"CPU (Haas-Ja)"') == 2
 
 
-@pytest.mark.parametrize("device", ["npu", "gpu"])
-def test_haas_is_not_available_outside_cpu_mode(device):
-    engine = _engine(device)
+def test_haas_is_not_available_in_gpu_mode():
+    engine = _engine("gpu")
     engine.set_forced_lang(ae.LANG_JA_HAAS)
     assert engine.selected_lang == "ja"
     assert engine._ja_model == "rz"
     engine._spawn_bg.assert_not_called()
+
+
+def test_npu_mode_uses_its_own_haas_tier():
+    engine = _engine("npu")
+    engine.set_forced_lang(ae.LANG_JA_HAAS)
+    assert engine.forced_lang == "ja"
+    assert engine.selected_lang == ae.LANG_JA_HAAS
+    assert engine._ja_model == "haas_npu"
+    engine._spawn_bg.assert_called_once_with(ae.RoutedASR._get_with_fallback.__get__(engine), "haas_npu")
+    engine.set_forced_lang("ja")
+    assert engine._ja_model == "rz"
+    assert engine.selected_lang == "ja"
 
 
 def test_tokenizer_is_loaded_without_passing_its_path_to_sentencepiece(tmp_path):
@@ -140,7 +151,7 @@ def test_choice_saved_after_the_switch_is_kept(lang):
     assert subtitle_server._config_to_restore(saved, SimpleNamespace(haas_available=True)) == saved
 
 
-def test_npu_start_does_not_use_up_the_switch():
+def test_gpu_start_does_not_use_up_the_switch():
     saved = {"lang": "ja"}
     assert subtitle_server._config_to_restore(saved, SimpleNamespace(haas_available=False)) == saved
 
@@ -165,7 +176,7 @@ def test_saving_outside_cpu_mode_keeps_the_cpu_choice(posted, saved, available, 
 
 
 @pytest.mark.parametrize("asr", [SimpleNamespace(haas_available=False, set_forced_lang=MagicMock()),
-                                 SimpleNamespace(set_forced_lang=MagicMock())], ids=["npu", "whisper"])
+                                 SimpleNamespace(set_forced_lang=MagicMock())], ids=["gpu", "whisper"])
 def test_restoring_haas_outside_cpu_mode_applies_japanese(asr):
     subtitle_server.RuntimeControls(asr=asr).apply_config({"lang": "ja-haas"})
     asr.set_forced_lang.assert_called_once_with("ja")
