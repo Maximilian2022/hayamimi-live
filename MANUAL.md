@@ -57,7 +57,7 @@ Hayamimi Live（早耳 Live）の動作環境、起動手順、OBS Studio との
 ランチャーの画面で次の項目を選びます。
 - **実行基盤: Python venv**（推奨）: 本機上の仮想環境（`.venv`）を利用してプロセスを起動します。
 - **実行基盤: WSL Containers**: Windows Subsystem for Linux（WSL 3.0）のコンテナ機能を利用し、システム環境から隔離して実行します。
-- **推論モード: CPU 起動**: 標準モードです。ReazonSpeech を CPU で動かします。
+- **推論モード: CPU 起動**: 標準モードです。日本語は Haas-Ja を CPU で動かします。Web マイク画面（`/mic`）の「認識言語モード」で ReazonSpeech に切り替えられます。初回起動時に Haas-Ja のモデル（約 900MB）をダウンロードし、使えないときは ReazonSpeech で動きます。既存の設定は CPU モードの初回起動時に 1 回だけ Haas-Ja に切り替わり（英語などに固定している場合を除く）、その後に選んだ設定は保持されます。
 - **推論モード: NPU 起動（実験的）**: Intel NPU を持つ PC で選べます。日本語の認識を NPU で実行するので CPU 負荷が下がりますが、字幕は少し遅くなります。日本語以外は CPU で動作します。初回は準備に数分かかり（約 1.1 GB を使用）、その間は CPU で動作します。
 - **推論モード: GPU 起動（実験的 / LoRA）**: NVIDIA GPU で Whisper を動かします。初回は専用の仮想環境（`.venv_gpu`）を作成し、PyTorch など約 3 GB をダウンロードします。
 

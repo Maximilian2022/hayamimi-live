@@ -85,6 +85,9 @@ SV_MODEL_DIR = os.path.join(MODELS_DIR, "sherpa-onnx-sense-voice-zh-en-ja-ko-yue
 OMNI_MODEL_DIR = os.path.join(MODELS_DIR, "omnilingual-300m-ctc-int8")
 WHISPER_TINY_DIR = os.path.join(MODELS_DIR, "sherpa-onnx-whisper-tiny")
 RZ_MODEL_DIR = os.path.join(MODELS_DIR, "sherpa-onnx-zipformer-ja-en-reazonspeech-2025-01-17")
+HAAS_JA_DIR = os.path.join(MODELS_DIR, "haas-ja-onnx-int8dyn_mm")
+# Selects Japanese-only recognition with Haas-ja instead of ReazonSpeech.
+LANG_JA_HAAS = "ja-haas"
 PARA_ZH_DIR = os.path.join(MODELS_DIR, "sherpa-onnx-paraformer-zh-int8-2025-10-07")
 PJA_MODEL_DIR = os.path.join(MODELS_DIR, "sherpa-onnx-nemo-parakeet-tdt_ctc-0.6b-ja-35000-int8")
 VAD_MODEL_PATH = os.path.join(MODELS_DIR, "silero_vad.onnx")
@@ -354,6 +357,15 @@ def _build_reazon(threads: int, hotwords_file: str = "",
         hotwords_score=hotwords_score,
         modeling_unit=RZ_MODELING_UNIT,
     )
+
+
+def _build_haas_ja(threads: int):
+    # Imported on demand so nothing changes unless Haas-ja is selected.
+    try:
+        from haas_ja import HaasJaRecognizer
+    except ImportError:
+        from scripts.haas_ja import HaasJaRecognizer
+    return HaasJaRecognizer(HAAS_JA_DIR, threads)
 
 
 def _reazon_npu_module():
@@ -775,6 +787,7 @@ def _load_replacements(path: str) -> list[tuple[str, str]]:
 # layer exits the process (not a catchable exception) on an empty model path
 _KEY_FILES = {
     "rz": (RZ_MODEL_DIR, RZ_MODEL_FILES["encoder"]),
+    "haas": (HAAS_JA_DIR, "encoder.onnx"),
     "pz": (PARA_ZH_DIR, "model*.onnx"),
     "sv": (SV_MODEL_DIR, "model*.onnx"),
     "v3": (V3_MODEL_DIR, "encoder*.onnx"),
@@ -810,6 +823,7 @@ def _build_lid_guarded(threads: int):
 
 _BUILDERS = {
     "rz": _build_reazon,
+    "haas": _build_haas_ja,
     "pz": _build_paraformer_zh,
     "sv": _build_sense_voice,
     "v3": _build_v3_recognizer,
@@ -828,7 +842,7 @@ _PRELOAD_ORDER = ("pz", "sv", "v3", "omni")
 # Opt-in tiers that are strict alternatives to a default tier, and the default
 # they must degrade to when missing (consulted by _get_with_fallback before the
 # generic chain). Register every future opt-in tier here.
-_TIER_FALLBACK: dict[str, tuple[str, ...]] = {"v2": ("v3",)}
+_TIER_FALLBACK: dict[str, tuple[str, ...]] = {"v2": ("v3",), "haas": ("rz",)}
 
 
 class ModelUnavailable(RuntimeError):
@@ -880,7 +894,9 @@ class RoutedASR:
         self._bg_threads: list[threading.Thread] = []
         self._bg_lock = threading.Lock()  # guards _closed + _bg_threads
         self.dual_confirm = dual_confirm  # --mode balanced (default); False = --mode fast
-        self.forced_lang = forced_lang    # --mode single: skip all LID/switch logic
+        self._ja_model = "haas" if forced_lang == LANG_JA_HAAS and self.haas_available else "rz"
+        # --mode single: skip all LID/switch logic
+        self.forced_lang = "ja" if forced_lang == LANG_JA_HAAS else forced_lang
         self._models: dict[str, object] = {}
         self._last_used: dict[str, float] = {}
         self._max_resident = max_resident
@@ -1563,7 +1579,7 @@ class RoutedASR:
 
     def _route(self, lang: str) -> tuple[object, str]:
         if lang in RZ_LANGS:
-            return self._get_with_fallback("rz")
+            return self._get_with_fallback(getattr(self, "_ja_model", "rz"))
         if lang in PARA_LANGS:
             return self._get_with_fallback("pz")
         if lang in SV_LANGS:
@@ -1780,11 +1796,25 @@ class RoutedASR:
         regime, and turning it OFF must not resume auto-routing already
         "sticky" on whatever language was forced a moment ago.
         """
-        if lang is not None and lang not in ROUTABLE_LANGS:
+        if lang is not None and lang != LANG_JA_HAAS and lang not in ROUTABLE_LANGS:
             raise ValueError(f"unsupported language code: {lang!r} "
                              f"(must be one of {sorted(ROUTABLE_LANGS)} or None)")
-        self.forced_lang = lang
+        self._ja_model = "haas" if lang == LANG_JA_HAAS and self.haas_available else "rz"
+        self.forced_lang = "ja" if lang == LANG_JA_HAAS else lang
         self.reset_session()
+        if self._ja_model == "haas" and "haas" not in self._models:
+            # Load before the next utterance so the first subtitle is not delayed.
+            self._spawn_bg(self._get_with_fallback, "haas")
+
+    @property
+    def haas_available(self) -> bool:
+        """Haas-ja runs only in CPU mode. On the NPU its encoder returns wrong results."""
+        return self.device == "cpu"
+
+    @property
+    def selected_lang(self) -> str | None:
+        """The value set_forced_lang() was given, for reporting back to the settings UI."""
+        return LANG_JA_HAAS if getattr(self, "_ja_model", "rz") == "haas" else self.forced_lang
 
     def set_dual_confirm(self, enabled: bool) -> None:
         """--mode balanced/fast runtime setter: whether a language switch
@@ -2091,7 +2121,9 @@ class RoutedASR:
                 text = self.ko_spacer.space(text, reset_whitespace=True)
             except Exception:
                 pass
-        if lang == "ja" and text.strip() and self.punct is not None:
+        # Haas-ja punctuates only some utterances. Restoring on top of its own marks would double them.
+        has_own_marks = text_model == "haas" and re.search(r"[、。？！?!]", text)
+        if lang == "ja" and not has_own_marks and text.strip() and self.punct is not None:
             try:
                 text = self.punct.restore(text)
             except Exception:

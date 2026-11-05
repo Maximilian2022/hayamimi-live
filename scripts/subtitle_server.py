@@ -698,6 +698,22 @@ def _get_saved_asr_config() -> dict:
                 pass
         return {}
 
+def _config_to_restore(saved: dict, asr) -> dict:
+    """The first start in CPU mode moves Japanese to Haas-ja. Later choices are kept."""
+    if not getattr(asr, "haas_available", False) or saved.get("ja_haas_switched"):
+        return saved
+    lang = "ja-haas" if saved.get("lang") in (None, "ja") else saved["lang"]
+    return {**saved, "lang": lang, "ja_haas_switched": True}
+
+
+def _config_to_save(payload: dict, asr) -> dict:
+    """Keep the CPU-mode Japanese model when saving from a mode that has only one."""
+    if payload.get("lang") not in ("ja", "ja-haas") or getattr(asr, "haas_available", False):
+        return payload
+    saved = _get_saved_asr_config().get("lang")
+    return {**payload, "lang": saved if saved in ("ja", "ja-haas") else "ja-haas"}
+
+
 def _save_asr_config(cfg: dict) -> None:
     try:
         from scripts.config_store import save_asr_config
@@ -707,7 +723,7 @@ def _save_asr_config(cfg: dict) -> None:
         path = os.path.join(storage_dir, _CONFIG_FILENAME)
         try:
             existing = _get_saved_asr_config()
-            save_keys = ("lang", "translate", "punctuate", "dual_confirm", "lid_switch_confirm", "min_switch_s", "vad")
+            save_keys = ("lang", "translate", "punctuate", "dual_confirm", "lid_switch_confirm", "min_switch_s", "vad", "ja_haas_switched")
             for k in save_keys:
                 if k in cfg:
                     existing[k] = cfg[k]
@@ -1280,7 +1296,8 @@ class RuntimeControls:
         if self.asr is not None:
             cfg["engine"] = getattr(self.asr, "engine_name", "reazonspeech")
             cfg["device_name"] = getattr(self.asr, "device_name", "")
-            cfg["lang"] = self.asr.forced_lang
+            cfg["lang"] = getattr(self.asr, "selected_lang", self.asr.forced_lang)
+            cfg["haas_available"] = bool(getattr(self.asr, "haas_available", False))
             cfg["dual_confirm"] = self.asr.dual_confirm
             cfg["punctuate"] = self.asr._punctuate
             cfg["lid_switch_confirm"] = self.asr.lid_switch_confirm
@@ -1306,7 +1323,11 @@ class RuntimeControls:
         if "lang" in payload:
             if self.asr is None:
                 raise ValueError("no ASR engine attached")
-            self.asr.set_forced_lang(payload["lang"])
+            lang = payload["lang"]
+            # Haas-ja exists only in CPU mode; NPU and the Whisper engines stay on ja.
+            if lang == "ja-haas" and not getattr(self.asr, "haas_available", False):
+                lang = "ja"
+            self.asr.set_forced_lang(lang)
         if "dual_confirm" in payload:
             if self.asr is None:
                 raise ValueError("no ASR engine attached")
@@ -1424,7 +1445,10 @@ class SubtitleServer:
     def controls(self, val):
         self._controls = val
         if val is not None and "PYTEST_CURRENT_TEST" not in os.environ:
-            saved = _get_saved_asr_config()
+            stored = _get_saved_asr_config()
+            saved = _config_to_restore(stored, val.asr)
+            if saved != stored:
+                _save_asr_config(saved)
             if saved:
                 try:
                     val.apply_config(saved)
@@ -2398,7 +2422,7 @@ class SubtitleServer:
                 else:  # /config
                     try:
                         server.controls.apply_config(payload)
-                        _save_asr_config(payload)
+                        _save_asr_config(_config_to_save(payload, server.controls.asr))
                     except (ValueError, TypeError) as exc:
                         self._json(400, {"error": str(exc)})
                         return

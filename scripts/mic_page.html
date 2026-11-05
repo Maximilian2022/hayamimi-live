@@ -1186,7 +1186,8 @@
           <label for="cfg-lang">認識言語モード:</label>
           <select id="cfg-lang">
             <option value="">自動検出 (多言語オートルーティング)</option>
-            <option value="ja">日本語 (ja) - ReazonSpeech 固定</option>
+            <option value="ja-haas">日本語（Haas-Ja）</option>
+            <option value="ja">日本語（ReazonSpeech）</option>
             <option value="en">英語 (en) - Parakeet TDT 固定</option>
             <option value="zh">中国語 (zh) - SenseVoice 固定</option>
             <option value="ko">韓国語 (ko) - SenseVoice 固定</option>
@@ -2039,6 +2040,8 @@
                   engChip.style.color = "#10B981";
                   engChip.style.borderColor = "rgba(16, 185, 129, 0.3)";
                 }
+              } else if (ev.tier === "haas") {
+                if (engVal) engVal.textContent = "CPU (Haas-Ja)";
               } else if (ev.device === "NPU") {
                 if (engVal) engVal.textContent = "⚡ NPU (ReazonSpeech)";
                 if (engChip) {
@@ -2236,6 +2239,8 @@
               engChip.style.color = "#10B981";
               engChip.style.borderColor = "rgba(16, 185, 129, 0.3)";
             }
+          } else if (cfg.lang === "ja-haas") {
+            if (engVal) engVal.textContent = "CPU (Haas-Ja)";
           } else if (cfg.device_name === "NPU") {
             if (engVal) engVal.textContent = "⚡ NPU (ReazonSpeech)";
             if (engChip) {
@@ -2259,6 +2264,7 @@
             }
           }
         }
+        syncJapaneseOptions(cfg);
         if (cfg.lang) document.getElementById("cfg-lang").value = cfg.lang;
         if (cfg.translate && cfg.translate.length > 0) {
           document.getElementById("cfg-trans-enable").checked = true;
@@ -2635,6 +2641,14 @@
         });
       }
     }
+  }
+
+  // Haas-Ja exists only in CPU mode, and the Japanese model depends on the mode.
+  function syncJapaneseOptions(cfg) {
+    const select = document.getElementById("cfg-lang");
+    if (!cfg.haas_available) select.querySelector('option[value="ja-haas"]')?.remove();
+    const isWhisper = (cfg.engine || "").startsWith("whisper");
+    select.querySelector('option[value="ja"]').textContent = isWhisper ? "日本語（Whisper）" : "日本語（ReazonSpeech）";
   }
 
   async function saveAllSettings() {
