@@ -252,6 +252,7 @@ def save_asr_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
         "min_switch_s",
         "vad",
         "active_speaker_id",
+        "ja_haas_switched",
     )
     for k in save_keys:
         if k in cfg:

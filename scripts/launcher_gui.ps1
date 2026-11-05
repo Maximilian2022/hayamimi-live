@@ -2377,7 +2377,28 @@ function Start-PythonVenvApp {
     } else {
         $devEnv = "cpu"
         $deviceOptArg = "--device cpu"
-        Write-AppLog "推論デバイス: CPU 起動 (ReazonSpeech / ゲーム・配信優先)" "INFO"
+        Write-AppLog "推論デバイス: CPU 起動 (Haas-Ja / ゲーム・配信優先)" "INFO"
+
+        # CPU モード時: Haas-Ja モデルの存在確認 & 自動ダウンロード (約900MB)。失敗時は ReazonSpeech で動作する
+        $haasData = Join-Path $ProjectRoot "models\haas-ja-onnx-int8dyn_mm\encoder.onnx.data"
+        if (-not (Test-Path $haasData) -or (Get-Item $haasData -ErrorAction SilentlyContinue).Length -lt 800000000) {
+            Write-AppLog "Haas-Ja モデルを準備しています (約900MB)..." "INFO"
+            $dlScript = Join-Path $ProjectRoot "scripts\download_models.py"
+            if (Test-Path $dlScript) {
+                $pinfoDl = [System.Diagnostics.ProcessStartInfo]::new()
+                $pinfoDl.FileName = $venvPython
+                $pinfoDl.Arguments = "-B `"$dlScript`" --minimal --haas-ja"
+                $pinfoDl.WorkingDirectory = $ProjectRoot
+                $pinfoDl.RedirectStandardOutput = $true
+                $pinfoDl.RedirectStandardError = $true
+                $pinfoDl.UseShellExecute = $false
+                $pinfoDl.CreateNoWindow = $true
+                $pinfoDl.Environment["PYTHONDONTWRITEBYTECODE"] = "1"
+                $procDl = [System.Diagnostics.Process]::Start($pinfoDl)
+                Wait-ProcessWithUiPump -Proc $procDl -LogPrefix "[Haas-Ja取得]"
+                Protect-ModelFiles
+            }
+        }
     }
 
     $cmdArgs = "/s /c `"chcp 65001 >nul && `"$venvPython`" -B `"$transScript`" --input ws --serve 8833 --ws-host 0.0.0.0 --ws-port 8766 --punct-model 4class $engineArg $deviceOptArg >> `"$script:PythonLogFile`" 2>&1`""

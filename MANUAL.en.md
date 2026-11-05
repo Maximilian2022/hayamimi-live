@@ -57,7 +57,7 @@ The default CPU mode runs efficiently on standard personal computer CPUs without
 Select these options in the launcher:
 - **Runtime: Python venv (recommended)**: Runs directly in the local virtual environment (`.venv`).
 - **Runtime: WSL Containers**: Runs inside an isolated Microsoft WSL 3.0 container.
-- **Inference: CPU**: The default mode, running ReazonSpeech on the CPU.
+- **Inference: CPU**: The default mode. Japanese runs Haas-Ja on the CPU. You can switch to ReazonSpeech under the recognition language setting on the Web Mic page (`/mic`). The first start downloads the Haas-Ja model (about 900 MB), and recognition uses ReazonSpeech if it is unavailable. On the first CPU start, an existing setting moves to Haas-Ja once (unless it is fixed to another language such as English), and later choices are kept.
 - **Inference: NPU (experimental)**: Available on PCs with an Intel NPU. Japanese recognition runs on the NPU, which lowers CPU load but delays subtitles slightly. Other languages run on the CPU. The first launch takes a few minutes to prepare (using about 1.1 GB) and runs on the CPU meanwhile.
 - **Inference: GPU (experimental / LoRA)**: Runs Whisper on an NVIDIA GPU. The first launch creates a dedicated environment (`.venv_gpu`) and downloads about 3 GB, including PyTorch.
 

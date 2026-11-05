@@ -20,7 +20,7 @@ In the default CPU mode, all models run locally using quantized INT8 weights, so
 - **Selectable Inference Modes**:
   Switch between CPU (default), experimental Intel NPU, and experimental NVIDIA GPU modes in the launcher. GPU mode uses Whisper and can train a per-speaker LoRA.
 - **Low-Latency CPU Inference**:
-  Leverages quantized INT8 ONNX models (ReazonSpeech for Japanese, specialist models for other target languages via sherpa-onnx) to finalize utterances roughly 100ms after speech cessation.
+  Leverages quantized INT8 ONNX models (for Japanese, Haas-Ja in CPU mode and ReazonSpeech in NPU mode; specialist models for other target languages via sherpa-onnx) to finalize utterances roughly 100-200ms after speech cessation.
 - **Concurrent Multilingual Translation**:
   Simultaneously translates finalized speech into multiple target languages (English via FuguMT CTranslate2, and Chinese, Korean, Spanish, French, German via Meta M2M-100).
 - **Customizable Overlay**:

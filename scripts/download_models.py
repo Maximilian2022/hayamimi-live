@@ -259,6 +259,38 @@ def ensure_campplus_model(log_callback=None) -> str:
     return cam_dest
 
 
+HAAS_JA_REPO = "https://huggingface.co/Sanami/haas-ja-onnx/resolve/354baedfd9612b00e74cc1ae87dff7f2c558db6f"
+HAAS_JA_FILES = {
+    "int8dyn_mm/encoder.onnx": "c7b06fc8c46a6f81c19042c951c044f328b146e98bff7ec8b597ce5054ab4d21",
+    "int8dyn_mm/encoder.onnx.data": "7f685192e80f31896df46a6230a0d7a2fd3e77eeaa452f5b84c4956383f32301",
+    "int8dyn_mm/decoder_joint.onnx": "f98b6a11912296d7939825cd72ce599fbdcbdbb8f9bf01085aa2c60c37bd0d76",
+    "int8dyn_mm/decoder_joint.onnx.data": "fd6e3e4431a3d4aa6264a20376f9e1da7f8667b7817b7ea6edc0ec8de2b7928c",
+}
+
+
+def download_haas_ja() -> None:
+    """Haas-ja-v1.0 quantized ONNX (unofficial export, Apache-2.0), pinned and hash-checked."""
+    import hashlib
+
+    dest = os.path.join(MODELS_DIR, "haas-ja-onnx-int8dyn_mm")
+    os.makedirs(dest, exist_ok=True)
+    for remote, expected in HAAS_JA_FILES.items():
+        path = os.path.join(dest, os.path.basename(remote))
+        if not os.path.exists(path):
+            download_file(f"{HAAS_JA_REPO}/{remote}", path, f"Haas-ja {os.path.basename(remote)}")
+        digest = hashlib.sha256()
+        with open(path, "rb") as f:
+            for block in iter(lambda: f.read(1 << 20), b""):
+                digest.update(block)
+        if digest.hexdigest() != expected:
+            os.remove(path)
+            raise RuntimeError(f"Haas-ja hash mismatch: {remote}")
+    for name in ("tokenizer.model", "NOTICE", "LICENSE"):
+        path = os.path.join(dest, name)
+        if not os.path.exists(path):
+            download_file(f"{HAAS_JA_REPO}/{name}", path, f"Haas-ja {name}")
+
+
 def download_opt_ins(args) -> None:
     """Opt-in downloads (--en-parakeet-v2, --punct-4class, --eval-baselines,
     --lid-candidates, --translate-candidates).
@@ -274,6 +306,9 @@ def download_opt_ins(args) -> None:
             f"{GITHUB_RELEASES}/{ASR_TAG}/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2",
             "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8",
             "Parakeet TDT 0.6B v2 (en-only, opt-in --en-tier v2)")
+
+    if getattr(args, "haas_ja", False):
+        download_haas_ja()
 
     if getattr(args, "whisper_dml", False):
         try:
@@ -405,6 +440,9 @@ def main():
                           "see docs/eval/en_candidates.md and --en-tier v2). Not part of "
                           "--minimal or the default set -- en stays on v3 unless you "
                           "both download this and pass --en-tier v2.")
+    ap.add_argument("--haas-ja", action="store_true",
+                    help="also download the Haas-ja-v1.0 tier (~900MB), the Japanese default in CPU "
+                         "mode. The launcher fetches it when starting in CPU mode.")
     ap.add_argument("--punct-4class", action="store_true",
                      help="also download the opt-in 4-class ja punctuation model "
                           "(~40MB, see docs/eval/punct_retrain.md and --punct-model "
