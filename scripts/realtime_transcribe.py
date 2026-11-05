@@ -51,6 +51,7 @@ from typing import Callable, NamedTuple
 import numpy as np
 import sherpa_onnx
 
+import audio_timing
 from asr_engine import ModelUnavailable, RoutedASR
 from audio_utils import resample_linear
 # subtitle_server.py only imports stdlib modules, so this is safe to import
@@ -2176,15 +2177,21 @@ def run_stream(chunks, vad, sample_rate: int, asr: RoutedASR, stats: SessionStat
                 refiner.maybe_refine(int(audio_pos * sample_rate), force=True)
             continue
 
+        audio_timing.mark("音声処理を開始")
+        step_started = time.perf_counter()
         if dsp is not None:
             chunk = dsp.process(chunk)
+        audio_timing.report_slow("音声の前処理", step_started)
 
+        step_started = time.perf_counter()
         vad.accept_waveform(chunk)
+        audio_timing.report_slow("発話検出", step_started)
         history.push(chunk)
         audio_pos += len(chunk) / sample_rate
         stats.total_audio_s += len(chunk) / sample_rate
 
         if vad.is_speech_detected() and audio_pos - last_partial >= PARTIAL_EVERY_S:
+            audio_timing.mark("発話を検出")
             last_partial = audio_pos
             cur = np.asarray(vad.current_segment.samples, dtype=np.float32)
             if len(cur) > int(PARTIAL_WINDOW_S * sample_rate):
@@ -2196,13 +2203,19 @@ def run_stream(chunks, vad, sample_rate: int, asr: RoutedASR, stats: SessionStat
             if asr.forced_lang is None and early_lang is None and len(cur) >= int(2.0 * sample_rate):
                 early_lang = asr.identify(cur, sample_rate)
             if printer.enabled and len(cur) >= sample_rate // 2:
+                step_started = time.perf_counter()
                 printer.show(asr.partial(cur, sample_rate, lang_hint=early_lang))
+                audio_timing.report_slow("部分字幕の認識", step_started)
+                audio_timing.mark("部分字幕を出力")
 
+        step_started = time.perf_counter()
         if drain_segments(vad, sample_rate, asr, stats, printer, history, early_lang,
                           refiner=refiner,
                           translator_worker=translator_worker,
                           speaker_labeler=speaker_labeler):
             early_lang = None
+            audio_timing.mark("確定字幕を出力")
+        audio_timing.report_slow("確定字幕の認識", step_started)
         if refiner is not None and not vad.is_speech_detected():
             refiner.maybe_refine(int(audio_pos * sample_rate))
 

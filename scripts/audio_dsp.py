@@ -28,6 +28,12 @@ elif __name__ == "audio_dsp":
 
 import numpy as np
 
+try:
+    # Loaded here, at startup. Loading it on the first audio stops subtitles while a cold disk reads it.
+    from scipy.signal import lfilter
+except ImportError:
+    lfilter = None
+
 logger = logging.getLogger("hayamimi.audio_dsp")
 
 
@@ -85,27 +91,25 @@ class BiquadFilter:
         """Filter a 1D float32 numpy array while preserving filter state across chunks."""
         if len(x) == 0:
             return x
-        try:
-            from scipy.signal import lfilter
+        if lfilter is not None:
             b = np.array([self.b0, self.b1, self.b2], dtype=np.float64)
             a = np.array([1.0, self.a1, self.a2], dtype=np.float64)
             zi = np.array([self.z1, self.z2], dtype=np.float64)
             y, zf = lfilter(b, a, x.astype(np.float64), zi=zi)
             self.z1, self.z2 = float(zf[0]), float(zf[1])
             return y.astype(np.float32)
-        except ImportError:
-            # Pure numpy fallback if scipy is absent
-            y = np.empty_like(x, dtype=np.float32)
-            b0, b1, b2, a1, a2 = self.b0, self.b1, self.b2, self.a1, self.a2
-            z1, z2 = self.z1, self.z2
-            for i in range(len(x)):
-                xi = float(x[i])
-                yi = b0 * xi + z1
-                z1 = b1 * xi - a1 * yi + z2
-                z2 = b2 * xi - a2 * yi
-                y[i] = yi
-            self.z1, self.z2 = z1, z2
-            return y
+        # Pure numpy fallback if scipy is absent
+        y = np.empty_like(x, dtype=np.float32)
+        b0, b1, b2, a1, a2 = self.b0, self.b1, self.b2, self.a1, self.a2
+        z1, z2 = self.z1, self.z2
+        for i in range(len(x)):
+            xi = float(x[i])
+            yi = b0 * xi + z1
+            z1 = b1 * xi - a1 * yi + z2
+            z2 = b2 * xi - a2 * yi
+            y[i] = yi
+        self.z1, self.z2 = z1, z2
+        return y
 
 
 class BroadcastAudioDSP:
