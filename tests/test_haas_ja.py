@@ -60,6 +60,7 @@ def _engine(device="cpu"):
     engine._closed = False
     engine.forced_lang = None
     engine.device = device
+    engine._loading = set()
     engine._ja_model = "rz"
     engine._models = {}
     engine._spawn_bg = MagicMock()
@@ -73,9 +74,13 @@ def test_selecting_haas_keeps_japanese_and_preloads():
     assert engine.forced_lang == "ja"
     assert engine.selected_lang == ae.LANG_JA_HAAS
     engine._spawn_bg.assert_called_once()
-    with patch.object(ae.RoutedASR, "_get_with_fallback", return_value=("rec", "haas")) as get:
-        assert engine._route("ja") == ("rec", "haas")
-    get.assert_called_once_with("haas")
+    with patch.object(ae.RoutedASR, "_get_with_fallback", return_value=("rec", "tier")) as get:
+        engine._route("ja")
+        get.assert_called_once_with("rz")  # still loading: ReazonSpeech keeps subtitles running
+        get.reset_mock()
+        engine._loading.clear()
+        engine._route("ja")
+        get.assert_called_once_with("haas")
 
 
 @pytest.mark.parametrize("lang, forced", [("ja", "ja"), (None, None), ("en", "en")])
@@ -101,7 +106,9 @@ def test_mic_page_offers_both_japanese_models():
 
 def test_mic_page_shows_haas_as_the_active_engine():
     html = pathlib.Path("scripts/mic_page.html").read_text(encoding="utf-8")
-    assert html.count('"CPU (Haas-Ja)"') == 2
+    assert 'text = "CPU (Haas-Ja)"' in html
+    assert 'text = "⚡ NPU (Haas-Ja)"' in html
+    assert "使用不可" in html and "準備中" in html
 
 
 def test_haas_is_not_available_in_gpu_mode():
@@ -118,7 +125,7 @@ def test_npu_mode_uses_its_own_haas_tier():
     assert engine.forced_lang == "ja"
     assert engine.selected_lang == ae.LANG_JA_HAAS
     assert engine._ja_model == "haas_npu"
-    engine._spawn_bg.assert_called_once_with(ae.RoutedASR._get_with_fallback.__get__(engine), "haas_npu")
+    engine._spawn_bg.assert_called_once_with(engine._load_ja_model, "haas_npu")
     engine.set_forced_lang("ja")
     assert engine._ja_model == "rz"
     assert engine.selected_lang == "ja"

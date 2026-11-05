@@ -1298,6 +1298,8 @@ class RuntimeControls:
             cfg["device_name"] = getattr(self.asr, "device_name", "")
             cfg["lang"] = getattr(self.asr, "selected_lang", self.asr.forced_lang)
             cfg["haas_available"] = bool(getattr(self.asr, "haas_available", False))
+            cfg["asr_ready"] = bool(getattr(self.asr, "selected_model_ready", True))
+            cfg["ja_tier"] = getattr(self.asr, "active_ja_tier", None)
             cfg["dual_confirm"] = self.asr.dual_confirm
             cfg["punctuate"] = self.asr._punctuate
             cfg["lid_switch_confirm"] = self.asr.lid_switch_confirm

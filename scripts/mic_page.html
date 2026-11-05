@@ -2040,15 +2040,8 @@
                   engChip.style.color = "#10B981";
                   engChip.style.borderColor = "rgba(16, 185, 129, 0.3)";
                 }
-              } else if (ev.tier === "haas_npu") {
-                if (engVal) engVal.textContent = "⚡ NPU (Haas-Ja)";
-                if (engChip) {
-                  engChip.style.background = "rgba(16, 185, 129, 0.15)";
-                  engChip.style.color = "#10B981";
-                  engChip.style.borderColor = "rgba(16, 185, 129, 0.3)";
-                }
-              } else if (ev.tier === "haas") {
-                if (engVal) engVal.textContent = "CPU (Haas-Ja)";
+              } else if (document.getElementById("cfg-lang").value === "ja-haas") {
+                // showHaasStatus() owns the chip while Haas-Ja is selected.
               } else if (ev.device === "NPU") {
                 if (engVal) engVal.textContent = "⚡ NPU (ReazonSpeech)";
                 if (engChip) {
@@ -2246,15 +2239,8 @@
               engChip.style.color = "#10B981";
               engChip.style.borderColor = "rgba(16, 185, 129, 0.3)";
             }
-          } else if (cfg.lang === "ja-haas" && cfg.device_name === "NPU") {
-            if (engVal) engVal.textContent = "⚡ NPU (Haas-Ja)";
-            if (engChip) {
-              engChip.style.background = "rgba(16, 185, 129, 0.15)";
-              engChip.style.color = "#10B981";
-              engChip.style.borderColor = "rgba(16, 185, 129, 0.3)";
-            }
           } else if (cfg.lang === "ja-haas") {
-            if (engVal) engVal.textContent = "CPU (Haas-Ja)";
+            showHaasStatus(cfg);
           } else if (cfg.device_name === "NPU") {
             if (engVal) engVal.textContent = "⚡ NPU (ReazonSpeech)";
             if (engChip) {
@@ -2664,6 +2650,30 @@
     const isWhisper = (cfg.engine || "").startsWith("whisper");
     select.querySelector('option[value="ja"]').textContent = isWhisper ? "日本語（Whisper）" : "日本語（ReazonSpeech）";
   }
+
+  // Says which model really runs while Haas-Ja is selected, including while it loads and after it fails.
+  function showHaasStatus(cfg) {
+    const engVal = document.getElementById("engine-val");
+    const engChip = document.getElementById("engine-chip");
+    const onNpu = cfg.ja_tier === "haas_npu" || (cfg.ja_tier !== "haas" && cfg.device_name === "NPU");
+    let text;
+    if (cfg.ja_tier === "haas_npu") text = "⚡ NPU (Haas-Ja)";
+    else if (cfg.ja_tier === "haas") text = "CPU (Haas-Ja)";
+    else text = `${onNpu ? "⚡ NPU" : "⚙ CPU"} (ReazonSpeech・Haas-Ja ${cfg.asr_ready ? "使用不可" : "準備中"})`;
+    if (engVal) engVal.textContent = text;
+    if (engChip && onNpu) {
+      engChip.style.background = "rgba(16, 185, 129, 0.15)";
+      engChip.style.color = "#10B981";
+      engChip.style.borderColor = "rgba(16, 185, 129, 0.3)";
+    }
+  }
+
+  setInterval(async () => {
+    try {
+      const cfg = await (await fetch("/config")).json();
+      if (cfg.lang === "ja-haas" && cfg.ja_tier) showHaasStatus(cfg);
+    } catch (e) { /* the server is restarting */ }
+  }, 3000);
 
   async function saveAllSettings() {
     const saveMsg = document.getElementById("save-msg");
