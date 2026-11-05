@@ -2439,6 +2439,7 @@ function Start-PythonVenvApp {
 
     $script:ProcPython = [System.Diagnostics.Process]::Start($pinfo)
     $script:HealthCheckAttempts = 0
+    $script:AsrWaitStartAttempt = 0
     $script:ReadyConsecutiveCount = 0
     $healthTimer.Start()
 }
@@ -2898,6 +2899,7 @@ function Start-HayamimiContainer {
 
         Update-ContainerLogFile -EchoToGui $true
         $script:HealthCheckAttempts = 0
+        $script:AsrWaitStartAttempt = 0
         $script:ContainerDeadCount = 0
         $script:ReadyConsecutiveCount = 0
         $healthTimer.Start()
@@ -3407,6 +3409,7 @@ $buildTimer.Add_Tick({
 
 # ヘルスチェックタイマー (最大10分待機・初期化猶予付き異常終了検知)
 $script:HealthCheckAttempts = 0
+$script:AsrWaitStartAttempt = 0
 $script:ContainerDeadCount = 0
 $script:ReadyConsecutiveCount = 0
 $healthTimer = [System.Windows.Threading.DispatcherTimer]::new()
@@ -3534,6 +3537,7 @@ $healthTimer.Add_Tick({
     #    この検証により「モデルロード中・サーバー未準備のフライング起動」を完全防止する。
     $isHttpReady = $false
     $isWsReady = $false
+    $isAsrReady = $true
 
     try {
         $req = [System.Net.HttpWebRequest]::Create("http://127.0.0.1:8833/config")
@@ -3544,6 +3548,11 @@ $healthTimer.Add_Tick({
             $httpResp = [System.Net.HttpWebResponse]$resp
             if ($httpResp.StatusCode -eq [System.Net.HttpStatusCode]::OK) {
                 $isHttpReady = $true
+                # 選択中の日本語モデル (Haas-Ja / ReazonSpeech) の準備が終わるまでマイク画面を開かない
+                $cfgReader = [System.IO.StreamReader]::new($httpResp.GetResponseStream(), [System.Text.Encoding]::UTF8)
+                $cfgJson = $cfgReader.ReadToEnd() | ConvertFrom-Json
+                $cfgReader.Close()
+                if ($cfgJson.asr_ready -eq $false) { $isAsrReady = $false }
             }
             $httpResp.Close()
         }
@@ -3565,7 +3574,19 @@ $healthTimer.Add_Tick({
         } catch {}
     }
 
-    if ($isHttpReady -and $isWsReady) {
+    if ($isHttpReady -and $isWsReady -and -not $isAsrReady) {
+        if (-not $script:AsrWaitStartAttempt) {
+            $script:AsrWaitStartAttempt = $script:HealthCheckAttempts
+            Write-AppLog "音声認識モデルを準備しています。完了後にマイク画面を開きます..." "INFO"
+        }
+        # 準備が長引いても起動全体のタイムアウトにはしない (字幕は ReazonSpeech で動いている)
+        if (($script:HealthCheckAttempts - $script:AsrWaitStartAttempt) -ge 600 -or $script:HealthCheckAttempts -ge 1100) {
+            Write-AppLog "音声認識モデルの準備が続いていますが、マイク画面を開きます。" "WARN"
+            $isAsrReady = $true
+        }
+    }
+
+    if ($isHttpReady -and $isWsReady -and $isAsrReady) {
         $script:ReadyConsecutiveCount++
     } else {
         $script:ReadyConsecutiveCount = 0

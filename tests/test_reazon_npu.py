@@ -71,6 +71,7 @@ def _engine(device):
     engine._on_event = None
     engine._model_locks = {"rz": MagicMock()}
     engine._spawn_bg = MagicMock()
+    engine._preparing = set()
     return ae, engine
 
 

@@ -947,6 +947,8 @@ class RoutedASR:
         self._model_locks = {name: threading.Lock() for name in _BUILDERS}
         self.last_lang = None  # sticky language from the most recent final
         self._unavailable: set[str] = set()  # models missing on disk (--minimal installs)
+        self._preparing: set[str] = set()  # tiers being prepared for the NPU in the background
+        self._loading: set[str] = set()  # selected ja tiers still loading in the background
         self._fallback_warned: set[str] = set()  # requested names already model_fallback-reported
         self._pending_lang = None   # candidate new language awaiting confirmation
         self._pending_count = 0
@@ -1228,9 +1230,10 @@ class RoutedASR:
                     except Exception as exc:
                         # a --minimal install ships only some models: degrade
                         self._unavailable.add(name)
-                        print(f"[hayamimi] model '{name}' unavailable "
-                              f"(minimal install?): routing falls back",
-                              file=sys.stderr)
+                        if name not in self._preparing:
+                            print(f"[hayamimi] model '{name}' unavailable "
+                                  f"(minimal install?): routing falls back",
+                                  file=sys.stderr)
                         raise ModelUnavailable(name) from exc
                     self._emit({"type": "model_load", "model": name, "phase": "done",
                                "ms": (time.perf_counter() - t0) * 1000})
@@ -1263,8 +1266,15 @@ class RoutedASR:
             return rec
         # The first preparation takes minutes. Subtitles keep running on the CPU meanwhile.
         print("[hayamimi] NPU の準備を開始します。完了するまで CPU で認識します。", file=sys.stderr)
-        self._spawn_bg(self._prepare_npu_and_switch, npu, out_dir)
+        self._preparing.add("rz")
+        self._spawn_bg(self._finish_preparing, "rz", self._prepare_npu_and_switch, npu, out_dir)
         return None
+
+    def _finish_preparing(self, tier: str, prepare, npu, out_dir: str) -> None:
+        try:
+            prepare(npu, out_dir)
+        finally:
+            self._preparing.discard(tier)
 
     def _prepare_npu_and_switch(self, npu, out_dir: str) -> None:
         if not npu.prepare_in_subprocess(RZ_MODEL_DIR, out_dir):
@@ -1295,7 +1305,8 @@ class RoutedASR:
             return rec
         # Subtitles keep running on ReazonSpeech meanwhile.
         print("[hayamimi] Haas-Ja の NPU 準備を開始します。完了するまで ReazonSpeech で認識します。", file=sys.stderr)
-        self._spawn_bg(self._prepare_haas_npu_and_switch, npu, out_dir)
+        self._preparing.add("haas_npu")
+        self._spawn_bg(self._finish_preparing, "haas_npu", self._prepare_haas_npu_and_switch, npu, out_dir)
         raise RuntimeError("preparing")
 
     def _prepare_haas_npu_and_switch(self, npu, out_dir: str) -> None:
@@ -1634,7 +1645,9 @@ class RoutedASR:
 
     def _route(self, lang: str) -> tuple[object, str]:
         if lang in RZ_LANGS:
-            return self._get_with_fallback(getattr(self, "_ja_model", "rz"))
+            tier = getattr(self, "_ja_model", "rz")
+            # Waiting for the load here would stop subtitles, so ReazonSpeech covers it.
+            return self._get_with_fallback("rz" if tier in self._loading else tier)
         if lang in PARA_LANGS:
             return self._get_with_fallback("pz")
         if lang in SV_LANGS:
@@ -1858,8 +1871,14 @@ class RoutedASR:
         self.forced_lang = "ja" if lang == LANG_JA_HAAS else lang
         self.reset_session()
         if self._ja_model != "rz" and self._ja_model not in self._models:
-            # Load before the next utterance so the first subtitle is not delayed.
-            self._spawn_bg(self._get_with_fallback, self._ja_model)
+            self._loading.add(self._ja_model)
+            self._spawn_bg(self._load_ja_model, self._ja_model)
+
+    def _load_ja_model(self, tier: str) -> None:
+        try:
+            self._get_with_fallback(tier)
+        finally:
+            self._loading.discard(tier)
 
     @property
     def haas_available(self) -> bool:
@@ -1869,6 +1888,18 @@ class RoutedASR:
     @property
     def _haas_tier(self) -> str:
         return "haas_npu" if self.device == "npu" else "haas"
+
+    @property
+    def selected_model_ready(self) -> bool:
+        """False until the selected Japanese model is up, or known to be unusable."""
+        tier = self._ja_model
+        busy = tier in self._preparing or tier in self._loading
+        return not busy and (tier in self._models or tier in self._unavailable)
+
+    @property
+    def active_ja_tier(self) -> str:
+        """The tier that recognizes Japanese right now."""
+        return self._ja_model if self._ja_model in self._models else "rz"
 
     @property
     def selected_lang(self) -> str | None:

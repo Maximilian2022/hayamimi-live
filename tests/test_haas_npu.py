@@ -60,6 +60,7 @@ def _engine():
     engine.device_name = "CPU"
     engine._models = {}
     engine._unavailable = {"haas_npu"}
+    engine._preparing = set()
     engine._fallback_warned = {"haas_npu"}
     engine._model_locks = {"haas_npu": threading.Lock()}
     engine._spawn_bg = MagicMock()
@@ -108,3 +109,93 @@ def test_failed_preparation_stays_on_reazonspeech_and_warns(break_it):
 
 def test_npu_haas_falls_back_to_reazonspeech():
     assert ae._TIER_FALLBACK["haas_npu"] == ("rz",)
+
+
+def _ready_engine(tier):
+    engine = _engine()
+    engine._ja_model = tier
+    engine._unavailable = set()
+    engine._preparing = set()
+    engine._loading = set()
+    return engine
+
+
+def test_selected_model_is_not_ready_while_it_loads():
+    assert _ready_engine("haas").selected_model_ready is False
+
+
+def test_selected_model_is_ready_once_loaded():
+    engine = _ready_engine("haas")
+    engine._models["haas"] = object()
+    assert engine.selected_model_ready is True
+
+
+def test_selected_model_is_ready_when_it_cannot_be_used():
+    # ReazonSpeech is running, so the Mic page must not wait forever.
+    engine = _ready_engine("haas")
+    engine._unavailable.add("haas")
+    assert engine.selected_model_ready is True
+
+
+@pytest.mark.parametrize("tier", ["haas_npu", "rz"])
+def test_selected_model_is_not_ready_while_preparing(tier):
+    engine = _ready_engine(tier)
+    engine._models["rz"] = object()
+    engine._unavailable.add("haas_npu")
+    engine._preparing.add(tier)
+    assert engine.selected_model_ready is False
+
+
+def test_haas_prepared_while_reazonspeech_still_prepares_is_ready():
+    engine = _ready_engine("haas_npu")
+    engine._models["haas_npu"] = object()
+    engine._preparing.add("rz")
+    assert engine.selected_model_ready is True
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_preparing_ends_even_when_preparation_raises(fail):
+    engine = _ready_engine("haas_npu")
+    engine._preparing.add("haas_npu")
+    prepare = MagicMock(side_effect=RuntimeError("boom") if fail else None)
+    if fail:
+        with pytest.raises(RuntimeError):
+            engine._finish_preparing("haas_npu", prepare, "npu", "out")
+    else:
+        engine._finish_preparing("haas_npu", prepare, "npu", "out")
+    assert engine._preparing == set()
+
+
+def test_launcher_waits_for_the_selected_model():
+    text = open("scripts/launcher_gui.ps1", encoding="utf-8-sig").read()
+    assert "$cfgJson.asr_ready -eq $false" in text
+    assert "$isHttpReady -and $isWsReady -and $isAsrReady" in text
+
+
+def test_selected_model_is_not_ready_while_it_loads_in_the_background():
+    engine = _ready_engine("haas")
+    engine._models["haas"] = object()
+    engine._loading.add("haas")
+    assert engine.selected_model_ready is False
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_loading_ends_even_when_the_load_fails(fail):
+    engine = _ready_engine("haas")
+    engine._loading.add("haas")
+    effect = ae.ModelUnavailable("haas") if fail else None
+    with patch.object(ae.RoutedASR, "_get_with_fallback", side_effect=effect):
+        if fail:
+            with pytest.raises(ae.ModelUnavailable):
+                engine._load_ja_model("haas")
+        else:
+            engine._load_ja_model("haas")
+    assert engine._loading == set()
+
+
+@pytest.mark.parametrize("loaded, active", [(True, "haas_npu"), (False, "rz")])
+def test_active_tier_reports_what_really_runs(loaded, active):
+    engine = _ready_engine("haas_npu")
+    if loaded:
+        engine._models["haas_npu"] = object()
+    assert engine.active_ja_tier == active
