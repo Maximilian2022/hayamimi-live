@@ -63,7 +63,11 @@ FLUSH = object()
 
 AUDIO_QUEUE_MAXSIZE = 200
 
-
+
+try:
+    import audio_timing
+except ImportError:
+    from scripts import audio_timing
 import ipaddress
 
 def _is_safe_origin(origin: str | None, host: str | None = None) -> bool:
@@ -261,6 +265,7 @@ class IngestServer:
                                                                        f"{fmt!r}, only pcm_s16le"})
                             return
                         got_handshake = True
+                        audio_timing.start_session()
                         await self._send_json(writer, {"type": "ready", "sr": self.sample_rate})
                     elif opcode == OP_BINARY:
                         if not got_handshake:
@@ -268,6 +273,7 @@ class IngestServer:
                         samples = decode_pcm16(payload, channels)
                         if len(samples) == 0:
                             continue
+                        audio_timing.mark("最初の音声を受信")
                         if src_rate != self.sample_rate:
                             samples = resample_linear(samples, src_rate, self.sample_rate)
                         self._push_audio(samples)

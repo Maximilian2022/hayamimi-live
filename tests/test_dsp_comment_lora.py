@@ -19,6 +19,8 @@ if _ROOT not in sys.path:
 if os.path.join(_ROOT, "scripts") not in sys.path:
     sys.path.insert(0, os.path.join(_ROOT, "scripts"))
 
+import subprocess
+from unittest.mock import patch
 from scripts.audio_dsp import BiquadFilter, BroadcastAudioDSP, get_global_dsp
 from scripts.comment_sync import CommentSynchronizer, CommentTermExtractor, get_global_comment_sync
 from tools.profile_builder.profile_model import SpeakerProfile
@@ -196,3 +198,18 @@ def test_subtitle_server_dsp_and_comment_apis_and_singleton_sync_h2(monkeypatch,
     finally:
         if srv._httpd:
             srv._httpd.shutdown()
+
+
+def test_filter_import_happens_at_startup_not_on_the_audio_thread():
+    code = "import sys, scripts.audio_dsp; print('scipy.signal' in sys.modules)"
+    root = os.path.join(os.path.dirname(__file__), "..")
+    done = subprocess.run([sys.executable, "-B", "-c", code], cwd=root, capture_output=True, text=True, check=True)
+    assert done.stdout.strip() == "True"
+
+
+def test_highpass_without_scipy_matches_scipy():
+    audio = np.sin(np.arange(1600) * 0.01).astype(np.float32)
+    with_scipy = BiquadFilter.highpass(sample_rate=16000, cutoff_hz=80.0).process(audio)
+    with patch("scripts.audio_dsp.lfilter", None):
+        without = BiquadFilter.highpass(sample_rate=16000, cutoff_hz=80.0).process(audio)
+    assert np.allclose(with_scipy, without, atol=1e-4)
