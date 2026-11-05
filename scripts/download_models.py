@@ -268,13 +268,22 @@ HAAS_JA_FILES = {
 }
 
 
-def download_haas_ja() -> None:
+# The NPU returns wrong results for the dynamically quantized encoder, so it uses the weight-only one.
+HAAS_JA_NPU_FILES = {
+    "int8wo/encoder.onnx": "07bb5f0044acdc675e9d6cab3cdd9e8dee665d354d7631b1121427af8298e215",
+    "int8wo/encoder.onnx.data": "93776d939f8b87a6a50b38f9bb43ea83548144b12064b42a41ab4c8775514c75",
+    "int8dyn_mm/decoder_joint.onnx": HAAS_JA_FILES["int8dyn_mm/decoder_joint.onnx"],
+    "int8dyn_mm/decoder_joint.onnx.data": HAAS_JA_FILES["int8dyn_mm/decoder_joint.onnx.data"],
+}
+
+
+def download_haas_ja(folder: str = "haas-ja-onnx-int8dyn_mm", files: dict = HAAS_JA_FILES) -> None:
     """Haas-ja-v1.0 quantized ONNX (unofficial export, Apache-2.0), pinned and hash-checked."""
     import hashlib
 
-    dest = os.path.join(MODELS_DIR, "haas-ja-onnx-int8dyn_mm")
+    dest = os.path.join(MODELS_DIR, folder)
     os.makedirs(dest, exist_ok=True)
-    for remote, expected in HAAS_JA_FILES.items():
+    for remote, expected in files.items():
         path = os.path.join(dest, os.path.basename(remote))
         if not os.path.exists(path):
             download_file(f"{HAAS_JA_REPO}/{remote}", path, f"Haas-ja {os.path.basename(remote)}")
@@ -309,6 +318,8 @@ def download_opt_ins(args) -> None:
 
     if getattr(args, "haas_ja", False):
         download_haas_ja()
+    if getattr(args, "haas_ja_npu", False):
+        download_haas_ja("haas-ja-onnx-npu", HAAS_JA_NPU_FILES)
 
     if getattr(args, "whisper_dml", False):
         try:
@@ -443,6 +454,9 @@ def main():
     ap.add_argument("--haas-ja", action="store_true",
                     help="also download the Haas-ja-v1.0 tier (~900MB), the Japanese default in CPU "
                          "mode. The launcher fetches it when starting in CPU mode.")
+    ap.add_argument("--haas-ja-npu", action="store_true",
+                    help="also download the Haas-ja-v1.0 tier for the Intel NPU (~630MB), the Japanese "
+                         "default in NPU mode. The launcher fetches it when starting in NPU mode.")
     ap.add_argument("--punct-4class", action="store_true",
                      help="also download the opt-in 4-class ja punctuation model "
                           "(~40MB, see docs/eval/punct_retrain.md and --punct-model "

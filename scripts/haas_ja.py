@@ -146,11 +146,15 @@ class HaasJaRecognizer:
         })
         return out[0][0, 0, 0], out[2], out[3]
 
+    def _encode(self, mel: np.ndarray, valid: int) -> tuple[np.ndarray, int]:
+        encoded, lengths = self._encoder.run(None, {"audio_signal": mel, "length": np.array([valid], np.int64)})
+        return encoded, int(lengths[0])
+
     def _transcribe(self, samples: np.ndarray) -> str:
         mel, valid = log_mel(samples)
         with self._lock:
-            encoded, lengths = self._encoder.run(None, {"audio_signal": mel, "length": np.array([valid], np.int64)})
-            ids = greedy_tdt(self._step, encoded.astype(np.float32), int(lengths[0]))
+            encoded, frames = self._encode(mel, valid)
+            ids = greedy_tdt(self._step, encoded.astype(np.float32), frames)
         return self._tokenizer.decode(ids)
 
     def create_stream(self):
