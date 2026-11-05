@@ -390,6 +390,10 @@ def _haas_npu_output_dir() -> str:
     return os.path.join(os.path.dirname(_npu_model_dir()), "npu_haas")
 
 
+def _build_haas_npu(threads: int):
+    return _haas_npu_module().HaasNpuRecognizer(HAAS_NPU_DIR, _haas_npu_output_dir())
+
+
 def _npu_model_dir() -> str:
     try:
         from config_store import get_storage_dir
@@ -838,6 +842,7 @@ def _build_lid_guarded(threads: int):
 _BUILDERS = {
     "rz": _build_reazon,
     "haas": _build_haas_ja,
+    "haas_npu": _build_haas_npu,
     "pz": _build_paraformer_zh,
     "sv": _build_sense_voice,
     "v3": _build_v3_recognizer,
@@ -939,7 +944,7 @@ class RoutedASR:
         self._seg_vad = None          # lazily built VAD for offline splitting
         self._seg_vad_capacity = 0.0  # its buffer_size_in_seconds
         self._seg_vad_ok = True       # False once silero_vad.onnx proves missing
-        self._model_locks = {name: threading.Lock() for name in (*_BUILDERS, "haas_npu")}
+        self._model_locks = {name: threading.Lock() for name in _BUILDERS}
         self.last_lang = None  # sticky language from the most recent final
         self._unavailable: set[str] = set()  # models missing on disk (--minimal installs)
         self._fallback_warned: set[str] = set()  # requested names already model_fallback-reported
