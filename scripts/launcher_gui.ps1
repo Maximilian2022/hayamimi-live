@@ -12,9 +12,13 @@ $script:VersionCheckUrl = "https://raw.githubusercontent.com/Maximilian2022/haya
 
 # --- 既存ユーザーの Git Remote URL 自動更新 (hayamimi -> hayamimi-live) ---
 try {
-    $currentOrigin = (git remote get-url origin 2>$null)
-    if ($currentOrigin -and $currentOrigin -match "Maximilian2022/hayamimi(\.git)?$") {
-        git remote set-url origin "https://github.com/Maximilian2022/hayamimi-live.git" 2>$null
+    # カレントディレクトリに依存しないよう、リポジトリルートを明示する (-C)
+    if (Test-Path (Join-Path $repoRoot ".git")) {
+        $currentOrigin = (git -C "$repoRoot" remote get-url origin 2>$null)
+        if ($currentOrigin -and $currentOrigin -match "Maximilian2022/hayamimi(\.git)?$") {
+            git -C "$repoRoot" remote set-url origin "https://github.com/Maximilian2022/hayamimi-live.git" 2>$null
+            $script:OriginMigrated = "$currentOrigin -> hayamimi-live"
+        }
     }
 } catch {}
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -68,6 +72,12 @@ if (-not (Test-Path $LogsDir)) {
     New-Item -ItemType Directory -Path $LogsDir -Force | Out-Null
 }
 $LogFile = Join-Path $LogsDir "launcher.log"
+# launcher.log が 5MB を超えたら 1 世代だけ退避して肥大化を防ぐ (トラブル時に直近のログを確実に残す)
+try {
+    if ((Test-Path $LogFile) -and ((Get-Item $LogFile).Length -gt 5MB)) {
+        Move-Item -Path $LogFile -Destination "$LogFile.1" -Force
+    }
+} catch {}
 $ContainerLogFile = Join-Path $LogsDir "container.log"
 
 # 過去のバグで発生した二重ネストフォルダ (scripts/scripts, docs/docs 等) の自動修復
@@ -164,6 +174,118 @@ function Write-AppLogBatch {
     }
 }
 
+# --- トラブルシュート用ヘルパー ---
+$script:UpdateStateFile = Join-Path (Join-Path $ProjectRoot "config") "update_state.txt"
+
+# git を実行し、標準出力・標準エラー・終了コードを返す
+function Invoke-GitCapture {
+    param([string[]]$GitArgs)
+    $r = [pscustomobject]@{ Out = ""; Err = ""; Code = -1; Error = $null }
+    try {
+        $p = [System.Diagnostics.ProcessStartInfo]::new()
+        $p.FileName = "git.exe"
+        $p.Arguments = (@("-C", "`"$ProjectRoot`"") + $GitArgs) -join " "
+        $p.RedirectStandardOutput = $true
+        $p.RedirectStandardError = $true
+        $p.UseShellExecute = $false
+        $p.CreateNoWindow = $true
+        $proc = [System.Diagnostics.Process]::Start($p)
+        $r.Out = $proc.StandardOutput.ReadToEnd().Trim()
+        $r.Err = $proc.StandardError.ReadToEnd().Trim()
+        $proc.WaitForExit()
+        $r.Code = $proc.ExitCode
+    } catch {
+        $r.Error = $_.Exception.Message
+    }
+    return $r
+}
+
+# ローカル version.txt を読み直す (メモリ上の AppVersion ではなくディスクの実値)
+function Get-LocalVersionFromDisk {
+    $f = Join-Path $ProjectRoot "version.txt"
+    if (-not (Test-Path $f)) { return $null }
+    try {
+        $raw = (Get-Content -Path $f -Raw -Encoding UTF8).Trim()
+        return $raw
+    } catch {
+        Write-AppLog "[更新診断] version.txt の読み取りに失敗: $($_.Exception.Message)" "WARN"
+        return $null
+    }
+}
+
+# 更新に失敗したバージョンの記録 (起動時の自動ダイアログ繰り返し防止)
+function Get-UpdateFailedVersion {
+    try {
+        if (Test-Path $script:UpdateStateFile) {
+            return (Get-Content -Path $script:UpdateStateFile -Raw -Encoding UTF8).Trim()
+        }
+    } catch {}
+    return $null
+}
+function Set-UpdateFailedVersion {
+    param([string]$Version)
+    try {
+        $dir = Split-Path -Parent $script:UpdateStateFile
+        if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+        if ($Version) {
+            [System.IO.File]::WriteAllText($script:UpdateStateFile, $Version, [System.Text.Encoding]::UTF8)
+        } elseif (Test-Path $script:UpdateStateFile) {
+            Remove-Item -Path $script:UpdateStateFile -Force -ErrorAction SilentlyContinue
+        }
+    } catch {
+        Write-AppLog "[更新診断] 更新状態ファイルの書き込みに失敗: $($_.Exception.Message)" "WARN"
+    }
+}
+
+# 起動時の環境診断 (ログに残してサポート時に原因を追えるようにする)
+function Write-EnvDiagnostics {
+    try {
+        Write-AppLog "========== 環境診断 =========="
+        Write-AppLog "[診断] launcher v$script:AppVersion / PowerShell $($PSVersionTable.PSVersion) ($($PSVersionTable.PSEdition)) / OS $([System.Environment]::OSVersion.Version)"
+        Write-AppLog "[診断] ProjectRoot=$ProjectRoot / ScriptDir=$ScriptDir / CWD=$((Get-Location).Path)"
+        Write-AppLog "[診断] LanguageMode=$($ExecutionContext.SessionState.LanguageMode) (ConstrainedLanguage の場合は SAC/AppLocker の制限下)"
+        try {
+            $sac = (Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy" -Name VerifiedAndReputablePolicyState -ErrorAction Stop).VerifiedAndReputablePolicyState
+            $sacText = switch ($sac) { 0 { "オフ" } 1 { "オン (強制)" } 2 { "評価モード" } default { "不明($sac)" } }
+            Write-AppLog "[診断] スマートアプリコントロール: $sacText"
+        } catch {
+            Write-AppLog "[診断] スマートアプリコントロール状態は取得できませんでした"
+        }
+        $verFile = Get-LocalVersionFromDisk
+        Write-AppLog "[診断] version.txt(ディスク)='$verFile' / 起動時に読んだ版='$script:AppVersion'"
+        $failedVer = Get-UpdateFailedVersion
+        if ($failedVer) { Write-AppLog "[診断] 前回更新に失敗した版: v$failedVer (起動時の自動ダイアログは抑止)" "WARN" }
+        if ($script:OriginMigrated) { Write-AppLog "[診断] git origin を付け替えました: $script:OriginMigrated" }
+
+        $gitPath = (Get-Command git.exe -ErrorAction SilentlyContinue).Source
+        if ($gitPath) {
+            Write-AppLog "[診断] git: $gitPath"
+            if (Test-Path (Join-Path $ProjectRoot ".git")) {
+                $o = Invoke-GitCapture @("remote", "get-url", "origin")
+                $h = Invoke-GitCapture @("rev-parse", "--short", "HEAD")
+                $s = Invoke-GitCapture @("status", "--porcelain")
+                $dirtyCount = if ($s.Out) { @($s.Out -split "`r?`n").Count } else { 0 }
+                Write-AppLog "[診断] git origin=$($o.Out) / HEAD=$($h.Out) / 未コミット変更=${dirtyCount}件"
+            } else {
+                Write-AppLog "[診断] .git なし (ZIP 配布の環境。更新は ZIP 取得で行われます)"
+            }
+        } else {
+            Write-AppLog "[診断] git が見つかりません (更新は ZIP 取得で行われます)" "WARN"
+        }
+        foreach ($rel in @("scripts\realtime_transcribe.py", ".venv\Scripts\python.exe", ".venv_gpu\Scripts\python.exe")) {
+            $fp = Join-Path $ProjectRoot $rel
+            if (Test-Path $fp) {
+                $zone = Get-Content -LiteralPath $fp -Stream Zone.Identifier -ErrorAction SilentlyContinue
+                $mark = if ($zone) { "MOTWあり(ブロックされる可能性)" } else { "MOTWなし" }
+                Write-AppLog "[診断] $rel : $mark"
+            }
+        }
+        Write-AppLog "[診断] ログファイル: $LogFile"
+    } catch {
+        Write-AppLog "[診断] 環境診断中に例外: $($_.Exception.Message)" "WARN"
+    }
+}
+
 # --- スマートアプリコントロール (SAC) & Mark of the Web (Zone.Identifier) 自動解除ヘルパー ---
 function Unblock-ProjectFiles {
     param([string]$RootDir = $ProjectRoot)
@@ -173,7 +295,7 @@ function Unblock-ProjectFiles {
         # ルート直下ファイルのみ (Recurse なしで .venv の約9,000ファイルを完全スキップ: P-1)
         Get-ChildItem -LiteralPath $RootDir -File -ErrorAction SilentlyContinue |
             Where-Object { $_.Extension -in @(".ps1", ".bat", ".vbs", ".py", ".cmd") } |
-            ForEach-Object { try { Unblock-File -LiteralPath $_.FullName -ErrorAction SilentlyContinue } catch {} }
+            ForEach-Object { $uf = $_.FullName; try { Unblock-File -LiteralPath $uf -ErrorAction Stop } catch { Write-AppLog "[Unblock] 失敗: $uf : $($_.Exception.Message)" "WARN" } }
 
         $subDirs = @(
             (Join-Path $RootDir "scripts"),
@@ -186,7 +308,8 @@ function Unblock-ProjectFiles {
                 Get-ChildItem -LiteralPath $d -Recurse -File -ErrorAction SilentlyContinue |
                     Where-Object { $_.Extension -in @(".ps1", ".bat", ".vbs", ".py", ".exe", ".dll", ".pyd") } |
                     ForEach-Object {
-                        try { Unblock-File -LiteralPath $_.FullName -ErrorAction SilentlyContinue } catch {}
+                        $uf = $_.FullName
+                        try { Unblock-File -LiteralPath $uf -ErrorAction Stop } catch { Write-AppLog "[Unblock] 失敗: $uf : $($_.Exception.Message)" "WARN" }
                     }
             }
         }
@@ -912,7 +1035,7 @@ $window.Dispatcher.Add_UnhandledExceptionFilter({
 $window.Dispatcher.Add_UnhandledException({
     param($eventSender, $e)
     try {
-        Write-AppLog "UIエラーが発生しましたが回復しました: $($e.Exception.Message)" "ERROR"
+        Write-AppLog "UIエラーが発生しましたが回復しました: $($e.Exception.GetType().Name): $($e.Exception.Message)`r`n$($e.Exception.StackTrace)" "ERROR"
         $e.Handled = $true
     } catch {}
 })
@@ -3005,9 +3128,11 @@ function Get-ParsedVersion {
 function Test-AppUpdate {
     param(
         [switch]$PromptUser,
-        [switch]$SilentOnLatest
+        [switch]$SilentOnLatest,
+        [switch]$AutoCheck
     )
 
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
     try {
         [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
 
@@ -3025,6 +3150,7 @@ function Test-AppUpdate {
         $req.Headers.Add("Cache-Control", "no-cache")
 
         $resp = $req.GetResponse()
+        Write-AppLog "[更新確認] HTTP $([int]$resp.StatusCode) / 取得 $($sw.ElapsedMilliseconds)ms / URL=$url" "INFO"
         $stream = $resp.GetResponseStream()
         $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8)
         $remoteVerRaw = $reader.ReadToEnd().Trim()
@@ -3033,7 +3159,11 @@ function Test-AppUpdate {
         $resp.Close()
 
         $remoteVer = Get-ParsedVersion $remoteVerRaw
-        $localVer = Get-ParsedVersion $script:AppVersion
+        # 起動時に読んだ版ではなく、ディスク上の version.txt を優先する (更新後の再確認で古い値を使わないため)
+        $diskVerRaw = Get-LocalVersionFromDisk
+        $localVer = Get-ParsedVersion $(if ($diskVerRaw) { $diskVerRaw } else { $script:AppVersion })
+        $script:LastRemoteVer = $remoteVer
+        Write-AppLog "[更新確認] remote='$remoteVerRaw' (解析: $remoteVer) / local(disk)='$diskVerRaw' / local(起動時)='$script:AppVersion' (解析: $localVer)" "INFO"
 
         if ($remoteVer -and $localVer) {
             if ($remoteVer -gt $localVer) {
@@ -3057,6 +3187,12 @@ function Test-AppUpdate {
                     $updateDescText.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#34D399")
                 }
 
+                $failedVer = Get-UpdateFailedVersion
+                if ($AutoCheck -and $failedVer -and ($failedVer -eq "$remoteVer")) {
+                    Write-AppLog "[更新確認] v$remoteVer への更新は前回失敗しているため、起動時の自動ダイアログを省略します。更新ボタンから再試行できます。(原因は上の [更新] ログを参照)" "WARN"
+                    return $true
+                }
+
                 if ($PromptUser) {
                     $ask = Show-AppConfirm -Message "新しいバージョン (v$remoteVer) が公開されています。`r`n`r`n現在のバージョン: v$localVer`r`n最新のバージョン: v$remoteVer`r`n`r`n今すぐ最新版にアップデートしますか？`r`n（アップデート後、ランチャーは自動で再起動します）" -Title "アップデートの確認 - hayamimi"
                     if ($ask -eq [System.Windows.MessageBoxResult]::Yes) {
@@ -3065,6 +3201,7 @@ function Test-AppUpdate {
                 }
                 return $true
             } else {
+                if (Get-UpdateFailedVersion) { Set-UpdateFailedVersion $null }
                 if (-not $SilentOnLatest) {
                     Write-AppLog "✔ hayamimi は最新バージョン (v$localVer) です。" "INFO"
                 }
@@ -3075,7 +3212,7 @@ function Test-AppUpdate {
             return $false
         }
     } catch {
-        Write-AppLog "バージョン確認をスキップしました (オフラインまたは接続タイムアウト): $($_.Exception.Message)" "WARN"
+        Write-AppLog "バージョン確認をスキップしました (オフラインまたは接続タイムアウト): $($_.Exception.GetType().Name): $($_.Exception.Message) / 経過 $($sw.ElapsedMilliseconds)ms / URL=$($script:VersionCheckUrl)" "WARN"
         return $false
     }
 }
@@ -3110,115 +3247,182 @@ function Invoke-UpdateAppCode {
             Write-AppLog "設定バックアップ作成中に警告: $_" "WARN"
         }
         $hasGit = $false
+        $updateSw = [System.Diagnostics.Stopwatch]::StartNew()
+        $verBefore = Get-LocalVersionFromDisk
+        $expectedVer = $script:LastRemoteVer
+        Write-AppLog "[更新] 開始: ProjectRoot=$ProjectRoot / 更新前 version.txt='$verBefore' / 目標 v$expectedVer" "INFO"
+
+        # 更新が実際に反映されたか (ディスク上の version.txt が目標版以上か) を確認する
+        $verifyApplied = {
+            $diskRaw = Get-LocalVersionFromDisk
+            $diskVer = Get-ParsedVersion $diskRaw
+            if (-not $expectedVer) { return $true }   # 目標が不明なら検証できない
+            $ok = ($diskVer -and ($diskVer -ge $expectedVer))
+            $lvl = if ($ok) { "INFO" } else { "WARN" }
+            $st = if ($ok) { "反映済み" } else { "未反映" }
+            Write-AppLog "[更新] 反映確認: version.txt(ディスク)='$diskRaw' / 目標 v$expectedVer → $st" $lvl
+            return $ok
+        }
 
         # 1. git の存在確認
         try {
             $gitCmd = where.exe git 2>$null
-            if ($gitCmd -and (Test-Path (Join-Path $ProjectRoot ".git"))) {
+            $hasDotGit = Test-Path (Join-Path $ProjectRoot ".git")
+            Write-AppLog "[更新] where.exe git = '$gitCmd' / .git 有無 = $hasDotGit" "INFO"
+            if ($gitCmd -and $hasDotGit) {
                 $hasGit = $true
             }
-        } catch {}
+        } catch {
+            Write-AppLog "[更新] git の存在確認で例外: $($_.Exception.Message)" "WARN"
+        }
 
         if ($hasGit) {
-            Write-AppLog "Git リポジトリを検出しました。git pull を実行中..." "INFO"
-            $pinfoGit = [System.Diagnostics.ProcessStartInfo]::new()
-            $pinfoGit.FileName = "git.exe"
-            $pinfoGit.Arguments = "pull origin main"
-            $pinfoGit.WorkingDirectory = $ProjectRoot
-            $pinfoGit.RedirectStandardOutput = $true
-            $pinfoGit.RedirectStandardError = $true
-            $pinfoGit.UseShellExecute = $false
-            $pinfoGit.CreateNoWindow = $true
-
-            $procGit = [System.Diagnostics.Process]::Start($pinfoGit)
-            $gitStdout = $procGit.StandardOutput.ReadToEnd()
-            $gitStderr = $procGit.StandardError.ReadToEnd()
-            $procGit.WaitForExit()
-
-            if ($gitStdout) {
-                $gLines = ($gitStdout -split "`r?`n") | Where-Object { $_.Trim() }
-                if ($gLines) {
-                    Write-AppLogBatch -Messages ($gLines | ForEach-Object { "[Git] $_" }) -Level "INFO"
+            try {
+                $gitOrigin = Invoke-GitCapture @("remote", "get-url", "origin")
+                $headBefore = Invoke-GitCapture @("rev-parse", "--short", "HEAD")
+                $dirty = Invoke-GitCapture @("status", "--porcelain")
+                $dirtyLines = if ($dirty.Out) { @($dirty.Out -split "`r?`n") } else { @() }
+                Write-AppLog "[更新] git origin=$($gitOrigin.Out) / HEAD(更新前)=$($headBefore.Out) / 未コミット変更=$($dirtyLines.Count)件" "INFO"
+                if ($dirtyLines.Count -gt 0) {
+                    Write-AppLogBatch -Messages ($dirtyLines | Select-Object -First 10 | ForEach-Object { "[更新] 変更あり: $_" }) -Level "WARN"
                 }
+                if ($gitOrigin.Out -and $gitOrigin.Out -notmatch "hayamimi-live") {
+                    Write-AppLog "[更新] origin が hayamimi-live ではありません。版確認先と取得先が食い違っている可能性があります。" "WARN"
+                }
+            } catch {
+                Write-AppLog "[更新] git 事前情報の取得に失敗: $($_.Exception.Message)" "WARN"
             }
-            if ($procGit.ExitCode -eq 0) {
-                Write-AppLog "✔ Git による最新コードの取得が正常に完了しました！" "INFO"
-                $updateSuccess = $true
-            } else {
-                if ($gitStderr) {
-                    $eLines = ($gitStderr -split "`r?`n") | Where-Object { $_.Trim() }
-                    if ($eLines) {
-                        Write-AppLogBatch -Messages ($eLines | ForEach-Object { "[Git エラー] $_" }) -Level "WARN"
-                    }
+
+            Write-AppLog "Git リポジトリを検出しました。git pull を実行中..." "INFO"
+            $pull = Invoke-GitCapture @("pull", "origin", "main")
+            if ($pull.Error) {
+                Write-AppLog "[更新] git の起動自体に失敗 (SAC/セキュリティ製品によるブロックの可能性): $($pull.Error)" "ERROR"
+            }
+            if ($pull.Out) {
+                Write-AppLogBatch -Messages (($pull.Out -split "`r?`n") | Where-Object { $_.Trim() } | ForEach-Object { "[Git] $_" }) -Level "INFO"
+            }
+            if ($pull.Err) {
+                $errLevel = if ($pull.Code -eq 0) { "INFO" } else { "WARN" }
+                Write-AppLogBatch -Messages (($pull.Err -split "`r?`n") | Where-Object { $_.Trim() } | ForEach-Object { "[Git stderr] $_" }) -Level $errLevel
+            }
+            Write-AppLog "[更新] git pull 終了コード=$($pull.Code) / 経過 $($updateSw.ElapsedMilliseconds)ms" "INFO"
+            $headAfter = Invoke-GitCapture @("rev-parse", "--short", "HEAD")
+            Write-AppLog "[更新] HEAD(更新後)=$($headAfter.Out)" "INFO"
+
+            if ($pull.Code -eq 0) {
+                if (& $verifyApplied) {
+                    Write-AppLog "✔ Git による最新コードの取得が正常に完了しました！" "INFO"
+                    $updateSuccess = $true
+                } else {
+                    Write-AppLog "[更新] git pull は成功しましたが version.txt が上がっていません (origin が古いリポジトリ等)。ZIP 取得に切り替えます..." "WARN"
                 }
+            } else {
                 Write-AppLog "Git pull に失敗したため、GitHub からの直接ダウンロードに切り替えます..." "WARN"
             }
         }
 
-        # 2. Git がない、または git pull 失敗時は GitHub ZIP 直接取得
+        # 2. Git がない、git pull 失敗、または pull しても版が上がらない場合は GitHub ZIP 直接取得
         if (-not $updateSuccess) {
-            Write-AppLog "GitHub から最新ソースコードアーカイブを取得中..." "INFO"
-            [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
-            $zipUrl = "https://github.com/Maximilian2022/hayamimi-live/archive/refs/heads/main.zip"
             $tempZip = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "hayamimi-latest.zip")
             $tempExtract = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "hayamimi-extract-" + [System.Guid]::NewGuid().ToString("N"))
-
+            $copyErrors = [System.Collections.Generic.List[string]]::new()
             try {
-                Invoke-WebRequest -Uri $zipUrl -OutFile $tempZip -UseBasicParsing -TimeoutSec 30
-            } catch {
-                $fallbackZipUrl = "https://github.com/Maximilian2022/hayamimi/archive/refs/heads/main.zip"
-                Invoke-WebRequest -Uri $fallbackZipUrl -OutFile $tempZip -UseBasicParsing -TimeoutSec 30
-            }
-            # 展開前に ZIP ファイル自体の Mark of the Web (Zone.Identifier) を除去し、スマートアプリコントロールの誤検知を防止
-            try { Unblock-File -LiteralPath $tempZip -ErrorAction SilentlyContinue } catch {}
-            Expand-Archive -Path $tempZip -DestinationPath $tempExtract -Force
+                Write-AppLog "GitHub から最新ソースコードアーカイブを取得中..." "INFO"
+                [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+                $zipUrl = "https://github.com/Maximilian2022/hayamimi-live/archive/refs/heads/main.zip"
 
-            # 展開フォルダ内のファイルをプロジェクトルートに安全上書き (.venv / models / logs / config / scratch / .git は保持)
-            $innerDir = Get-ChildItem -Path $tempExtract -Directory | Select-Object -First 1
-            if ($innerDir) {
-                $srcItems = Get-ChildItem -Path $innerDir.FullName
-                foreach ($item in $srcItems) {
-                    if ($item.Name -in @(".git", ".venv", "models", "logs", "config", "profiles", "scratch", "config_backups")) { continue }
-                    $destPath = Join-Path $ProjectRoot $item.Name
-                    if ($item.PSIsContainer) {
-                        if (-not (Test-Path $destPath)) {
-                            New-Item -ItemType Directory -Path $destPath -Force | Out-Null
-                        }
-                        Copy-Item -Path (Join-Path $item.FullName "*") -Destination $destPath -Recurse -Force
-                    } else {
-                        Copy-Item -Path $item.FullName -Destination $destPath -Force
-                    }
+                try {
+                    Invoke-WebRequest -Uri $zipUrl -OutFile $tempZip -UseBasicParsing -TimeoutSec 30
+                } catch {
+                    Write-AppLog "[更新] ZIP 取得失敗 ($zipUrl): $($_.Exception.Message) → 旧 URL を試します" "WARN"
+                    $fallbackZipUrl = "https://github.com/Maximilian2022/hayamimi/archive/refs/heads/main.zip"
+                    Invoke-WebRequest -Uri $fallbackZipUrl -OutFile $tempZip -UseBasicParsing -TimeoutSec 30
                 }
+                Write-AppLog "[更新] ZIP 取得完了: $((Get-Item $tempZip).Length) bytes" "INFO"
+                # 展開前に ZIP ファイル自体の Mark of the Web (Zone.Identifier) を除去し、スマートアプリコントロールの誤検知を防止
+                try { Unblock-File -LiteralPath $tempZip -ErrorAction Stop } catch { Write-AppLog "[更新] ZIP の Unblock に失敗: $($_.Exception.Message)" "WARN" }
+                Expand-Archive -Path $tempZip -DestinationPath $tempExtract -Force
+                Write-AppLog "[更新] ZIP 展開完了: $tempExtract" "INFO"
 
-                # 過去の二重ネストフォルダの自己修復
-                $cleanCandidateDirs = @("scripts", "docs", "tests", "demo", "mobile", "nginx", ".github")
-                foreach ($cand in $cleanCandidateDirs) {
-                    $pDir = Join-Path $ProjectRoot $cand
-                    $nDir = Join-Path $pDir $cand
-                    if ((Test-Path $pDir) -and (Test-Path $nDir) -and (Get-Item $nDir).PSIsContainer) {
-                        $cItems = Get-ChildItem -Path $nDir
-                        foreach ($ci in $cItems) {
-                            $targetCi = Join-Path $pDir $ci.Name
-                            if (-not (Test-Path $targetCi)) {
-                                Move-Item -Path $ci.FullName -Destination $targetCi -Force
+                # 展開フォルダ内のファイルをプロジェクトルートに安全上書き (.venv / models / logs / config / scratch / .git は保持)
+                $innerDir = Get-ChildItem -Path $tempExtract -Directory | Select-Object -First 1
+                if (-not $innerDir) {
+                    Write-AppLog "[更新] ZIP の中身が空です" "ERROR"
+                } else {
+                    $copied = 0
+                    $srcFiles = Get-ChildItem -Path $innerDir.FullName -Recurse -File
+                    $skipTop = @(".git", ".venv", "models", "logs", "config", "profiles", "scratch", "config_backups")
+                    foreach ($f in $srcFiles) {
+                        $rel = $f.FullName.Substring($innerDir.FullName.Length).TrimStart('\', '/')
+                        $top = ($rel -split '[\\/]')[0]
+                        if ($top -in $skipTop) { continue }
+                        $dest = Join-Path $ProjectRoot $rel
+                        try {
+                            $destDir = Split-Path -Parent $dest
+                            if (-not (Test-Path $destDir)) { New-Item -ItemType Directory -Path $destDir -Force | Out-Null }
+                            Copy-Item -LiteralPath $f.FullName -Destination $dest -Force -ErrorAction Stop
+                            $copied++
+                        } catch {
+                            $copyErrors.Add("$rel : $($_.Exception.Message)")
+                        }
+                    }
+                    $copyLevel = if ($copyErrors.Count -eq 0) { "INFO" } else { "WARN" }
+                    Write-AppLog "[更新] ファイル反映: 成功 ${copied} 件 / 失敗 $($copyErrors.Count) 件" $copyLevel
+                    if ($copyErrors.Count -gt 0) {
+                        Write-AppLogBatch -Messages ($copyErrors | Select-Object -First 20 | ForEach-Object { "[更新] コピー失敗: $_" }) -Level "WARN"
+                    }
+
+                    # 過去の二重ネストフォルダの自己修復
+                    $cleanCandidateDirs = @("scripts", "docs", "tests", "demo", "mobile", "nginx", ".github")
+                    foreach ($cand in $cleanCandidateDirs) {
+                        $pDir = Join-Path $ProjectRoot $cand
+                        $nDir = Join-Path $pDir $cand
+                        if ((Test-Path $pDir) -and (Test-Path $nDir) -and (Get-Item $nDir).PSIsContainer) {
+                            Write-AppLog "[更新] 二重ネストフォルダを修復: $nDir" "INFO"
+                            $cItems = Get-ChildItem -Path $nDir
+                            foreach ($ci in $cItems) {
+                                $targetCi = Join-Path $pDir $ci.Name
+                                if (-not (Test-Path $targetCi)) {
+                                    Move-Item -Path $ci.FullName -Destination $targetCi -Force
+                                }
                             }
+                            Remove-Item -Path $nDir -Recurse -Force -ErrorAction SilentlyContinue
                         }
-                        Remove-Item -Path $nDir -Recurse -Force -ErrorAction SilentlyContinue
+                    }
+
+                    if (& $verifyApplied) {
+                        Write-AppLog "✔ GitHub アーカイブからの最新コード反映が完了しました！" "INFO"
+                        $updateSuccess = $true
                     }
                 }
-
-                Write-AppLog "✔ GitHub アーカイブからの最新コード反映が完了しました！" "INFO"
-                $updateSuccess = $true
+            } catch {
+                Write-AppLog "[更新] ZIP 更新中に例外 $($_.Exception.GetType().Name): $($_.Exception.Message) / 位置: $($_.InvocationInfo.PositionMessage)" "ERROR"
+            } finally {
+                # クリーンアップ
+                Remove-Item -Path $tempZip -Force -ErrorAction SilentlyContinue
+                Remove-Item -Path $tempExtract -Recurse -Force -ErrorAction SilentlyContinue
             }
+        }
 
-            # クリーンアップ
-            Remove-Item -Path $tempZip -Force -ErrorAction SilentlyContinue
-            Remove-Item -Path $tempExtract -Recurse -Force -ErrorAction SilentlyContinue
+        if (-not $updateSuccess) {
+            if ($expectedVer) { Set-UpdateFailedVersion "$expectedVer" }
+            Write-AppLog "[更新] 失敗: 最新版を反映できませんでした (経過 $($updateSw.ElapsedMilliseconds)ms)。launcher.log の [更新] / [Git] 行を確認してください。" "ERROR"
+            Write-AppLog "[更新] 考えられる原因: スマートアプリコントロール/セキュリティ製品のブロック、ファイルのロック、ネットワーク制限、git origin の不一致" "ERROR"
+            Write-AppLog "[更新] ログファイル: $LogFile" "ERROR"
+        } else {
+            Set-UpdateFailedVersion $null
+            Write-AppLog "[更新] 成功 (経過 $($updateSw.ElapsedMilliseconds)ms)" "INFO"
         }
 
         if ($btnUpdateApp) { $btnUpdateApp.IsEnabled = $true }
         if ($btnRebuild) { $btnRebuild.IsEnabled = $true }
         Set-UIState "停止中" $brushGray $true $false
+
+        if (-not $updateSuccess) {
+            try {
+                [void][System.Windows.MessageBox]::Show("アップデートを反映できませんでした。`r`n`r`n原因の例: スマートアプリコントロール/セキュリティ製品によるブロック、ネットワーク制限、ファイルのロック。`r`n`r`n詳細は次のログファイルを確認し、サポートに送ってください:`r`n$LogFile", "本体アップデート失敗 - hayamimi", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Warning)
+            } catch {}
+        }
 
         if ($updateSuccess) {
             # 取得・展開された全ファイルから Zone.Identifier (Mark of the Web) を除去し、UTF-8 BOM を保証
@@ -3297,7 +3501,8 @@ function Invoke-UpdateAppCode {
             }
         }
     } catch {
-        Write-AppLog "本体アップデート処理中にエラーが発生しました: $_" "ERROR"
+        Write-AppLog "本体アップデート処理中にエラーが発生しました: $($_.Exception.GetType().Name): $($_.Exception.Message) / 位置: $($_.InvocationInfo.PositionMessage)" "ERROR"
+        if ($script:LastRemoteVer) { Set-UpdateFailedVersion "$($script:LastRemoteVer)" }
         Set-UIState "エラー" $brushRed $true $false
         if ($btnUpdateApp) { $btnUpdateApp.IsEnabled = $true }
         if ($btnRebuild) { $btnRebuild.IsEnabled = $true }
@@ -4536,7 +4741,8 @@ $updateCheckTimer.Interval = [TimeSpan]::FromMilliseconds(1200)
 $updateCheckTimer.Add_Tick({
     $updateCheckTimer.Stop()
     try {
-        Test-AppUpdate -PromptUser
+        Write-EnvDiagnostics
+        Test-AppUpdate -PromptUser -AutoCheck
     } catch {
         Write-AppLog "起動時アップデート確認中に例外が発生しました: $_" "WARN"
     }
