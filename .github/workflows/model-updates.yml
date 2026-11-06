@@ -1,0 +1,43 @@
+name: model-updates
+# Weekly: compare scripts/model_pins.json with upstream Hugging Face repos,
+# run the standard test (scripts/model_update_eval.py) on pinned vs. latest,
+# and open one issue per update. Nothing is changed automatically: adopting
+# an update is a manual edit of model_pins.json shipped in a release.
+on:
+  schedule:
+    - cron: "0 0 * * 1"   # Mondays 09:00 JST
+  workflow_dispatch:
+    inputs:
+      skip_tests:
+        description: "Open issues without running the standard tests"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: model-updates
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Same versions as requirements.txt, limited to what the standard tests load.
+      - run: >
+          pip install numpy==2.4.6 onnxruntime==1.31.1 ctranslate2==4.8.1
+          sentencepiece==0.2.2 fugashi==1.5.2 unidic-lite==1.0.8 tokenizers==0.23.3
+          huggingface_hub==1.28.0 opencc-python-reimplemented==0.1.7 faster-whisper
+      - name: Check pins and open issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HF_HUB_DISABLE_PROGRESS_BARS: "1"
+        run: |
+          python scripts/check_model_updates.py --issues ${{ inputs.skip_tests && '--skip-tests' || '' }}

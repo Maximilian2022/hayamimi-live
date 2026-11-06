@@ -27,6 +27,11 @@ except ImportError:
     from scripts.comment_matcher import CommentCorrector
 
 try:
+    import model_pins
+except ImportError:
+    from scripts import model_pins
+
+try:
     from cuda_utils import setup_cuda_dll_path
     setup_cuda_dll_path()
 except Exception:
@@ -171,8 +176,12 @@ class WhisperCUDAEngine:
                             msg = f"Loading WhisperModel({cand}, device=cuda, compute_type={ct})..."
                             logger.info(msg)
                             print(f"[whisper_cuda] {msg}", file=sys.stderr, flush=True)
+                            model_id, model_rev = model_pins.resolve(cand)
+                            if model_rev:
+                                logger.info(f"Pinned revision for {cand}: {model_id}@{model_rev[:7]}")
                             self.model = WhisperModel(
-                                cand,
+                                model_id,
+                                revision=model_rev,
                                 device="cuda",
                                 device_index=self.device_index,
                                 compute_type=ct,
@@ -202,8 +211,10 @@ class WhisperCUDAEngine:
                         msg = f"Retrying WhisperModel({cand}) on CPU..."
                         logger.info(msg)
                         print(f"[whisper_cuda] {msg}", file=sys.stderr, flush=True)
+                        model_id, model_rev = model_pins.resolve(cand)
                         self.model = WhisperModel(
-                            cand,
+                            model_id,
+                            revision=model_rev,
                             device="cpu",
                             compute_type="int8",
                             cpu_threads=threads,

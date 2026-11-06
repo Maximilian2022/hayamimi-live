@@ -280,6 +280,12 @@ function Write-EnvDiagnostics {
                 Write-AppLog "[診断] $rel : $mark"
             }
         }
+        foreach ($m in (Get-ModelPinStates)) {
+            $pinShort = $m.Pin.Substring(0, [Math]::Min(7, $m.Pin.Length))
+            $instShort = if ($m.Installed) { $m.Installed.Substring(0, [Math]::Min(7, $m.Installed.Length)) } else { "-" }
+            $lvl = if ($m.State -eq "stale") { "WARN" } else { "INFO" }
+            Write-AppLog "[診断] モデル $($m.Key): 固定=$pinShort / 導入=$instShort / 状態=$($m.State)" $lvl
+        }
         Write-AppLog "[診断] ログファイル: $LogFile"
     } catch {
         Write-AppLog "[診断] 環境診断中に例外: $($_.Exception.Message)" "WARN"
@@ -508,7 +514,49 @@ function Protect-ModelFiles {
     }
 }
 
+# scripts/model_pins.json の固定版と、models/<dest>/.hayamimi_revision の記録を比べる
+# State: current (一致) / legacy (固定前の導入だが同一内容) / stale (版が違う → 取り直し) / missing
+function Get-ModelPinStates {
+    $result = @()
+    try {
+        $pinsFile = Join-Path $ProjectRoot "scripts\model_pins.json"
+        if (-not (Test-Path $pinsFile)) { return $result }
+        $pins = (Get-Content -Path $pinsFile -Raw -Encoding UTF8 | ConvertFrom-Json).models
+        foreach ($prop in $pins.PSObject.Properties) {
+            $p = $prop.Value
+            $installed = $null
+            $state = "cache"
+            if ($p.dest) {
+                $dir = Join-Path $ProjectRoot ("models\" + $p.dest)
+                $markerFile = Join-Path $dir ".hayamimi_revision"
+                if (Test-Path $markerFile) {
+                    try { $installed = (Get-Content -Path $markerFile -Raw -Encoding UTF8).Trim() } catch {}
+                }
+                if (-not (Test-Path $dir)) { $state = "missing" }
+                elseif ($installed -eq $p.revision) { $state = "current" }
+                elseif ((-not $installed) -and $p.legacy_ok) { $state = "legacy" }
+                else { $state = "stale" }
+            }
+            $result += [pscustomobject]@{ Key = $prop.Name; Repo = $p.repo; Pin = $p.revision; Installed = $installed; State = $state }
+        }
+    } catch {
+        Write-AppLog "[モデル版] model_pins.json の読み取りに失敗: $($_.Exception.Message)" "WARN"
+    }
+    return $result
+}
+
+# 起動時の自己修復 (--minimal --translators --punct-4class) で取り直せるモデル
+$script:SelfHealPinKeys = @("mojicast-punct-onnx", "punct-ja-4class", "fugumt-ja-en", "m2m100")
+
 function Test-ModelsReady {
+    $stale = @(Get-ModelPinStates | Where-Object { $_.State -eq "stale" -and $_.Key -in $script:SelfHealPinKeys })
+    if ($stale.Count -gt 0) {
+        foreach ($s in $stale) {
+            $inst = if ($s.Installed) { $s.Installed.Substring(0, [Math]::Min(7, $s.Installed.Length)) } else { "不明" }
+            Write-AppLog "[モデル版] $($s.Key) を更新します: $inst → $($s.Pin.Substring(0, 7))" "INFO"
+        }
+        return $false
+    }
     $modelsDir = Join-Path $ProjectRoot "models"
     $coreRzKey = Join-Path $modelsDir "sherpa-onnx-zipformer-ja-en-reazonspeech-2025-01-17\tokens.txt"
     $coreLidKey = Join-Path $modelsDir "sherpa-onnx-whisper-tiny\tiny-tokens.txt"

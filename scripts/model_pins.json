@@ -1,0 +1,68 @@
+{
+  "_doc": "Hugging Face models hayamimi loads, pinned to a commit. Changing a revision here is how a model update ships: the launcher re-fetches any models/<dest>/ whose .hayamimi_revision differs. The weekly model-updates workflow compares each revision with upstream and files an issue with test results. legacy_ok=true means installs made before pinning (no marker file) already hold this exact revision; set it to false whenever you bump the revision. test: which standard test scripts/model_update_eval.py runs (manual = no automatic test). Sherpa-onnx tarballs are pinned by their dated filenames in download_models.py and are not listed here.",
+  "models": {
+    "mojicast-punct-onnx": {
+      "repo": "ishiki-emo/mojicast-punct-onnx",
+      "revision": "6bef44545db904999043648af48ee17cd6177ee4",
+      "dest": "mojicast-punct-onnx",
+      "ignore_patterns": ["*.int8.onnx"],
+      "legacy_ok": true,
+      "test": "punct_bert"
+    },
+    "punct-ja-4class": {
+      "repo": "oboroge0/hayamimi-punct-ja-4class",
+      "revision": "226c5d4a461ed368264881fc3e6637cbeb68055e",
+      "dest": "punct-ja-4class-permissive",
+      "legacy_ok": true,
+      "test": "punct_4class"
+    },
+    "fugumt-ja-en": {
+      "repo": "ishiki-emo/mojicast-fugumt-ja-en-ct2",
+      "revision": "ca461b1c71739ae79ff8e1a3904bbb846e3e9d89",
+      "dest": "mojicast-fugumt-ja-en-ct2",
+      "legacy_ok": true,
+      "test": "translate_en"
+    },
+    "m2m100": {
+      "repo": "ishiki-emo/mojicast-m2m100-ct2",
+      "revision": "0ea75b31e8fe07a27ba6c2b9b1b1a279e7f44b93",
+      "dest": "mojicast-m2m100-ct2",
+      "legacy_ok": true,
+      "test": "translate_m2m"
+    },
+    "kotoba-whisper-v2.2-onnx": {
+      "repo": "onnx-community/kotoba-whisper-v2.2-ONNX",
+      "revision": "6da07195e83145e4fca2a8a1ba6f4c2e837b3798",
+      "dest": "kotoba-whisper-v2.2-onnx",
+      "allow_patterns": ["onnx/*int8.onnx", "*.json"],
+      "legacy_ok": true,
+      "test": "manual"
+    },
+    "kotoba-whisper-v2.0-faster": {
+      "repo": "kotoba-tech/kotoba-whisper-v2.0-faster",
+      "revision": "f44edd35eaeb2274e85ac7b31fb2c6f59ff1c4bc",
+      "dest": null,
+      "test": "faster_whisper"
+    },
+    "faster-whisper-large-v3-turbo": {
+      "repo": "dropbox-dash/faster-whisper-large-v3-turbo",
+      "alias": "large-v3-turbo",
+      "revision": "0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf",
+      "dest": null,
+      "test": "faster_whisper"
+    },
+    "kotoba-whisper-v2.2": {
+      "repo": "kotoba-tech/kotoba-whisper-v2.2",
+      "revision": "9d33482a0eb9b57f1ad80708e8ac5538246d8355",
+      "dest": null,
+      "test": "manual"
+    },
+    "haas-ja-onnx": {
+      "repo": "Sanami/haas-ja-onnx",
+      "revision": "354baedfd9612b00e74cc1ae87dff7f2c558db6f",
+      "dest": null,
+      "test": "manual",
+      "note": "Files are also sha256-pinned in download_models.py (HAAS_JA_FILES); update both together."
+    }
+  }
+}

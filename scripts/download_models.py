@@ -219,29 +219,74 @@ def extract_members_only(url: str, dest_dir: str, wanted_basenames: set, label: 
             f"{target} behind. The URL or the wanted file list is wrong.")
 
 
-def download_hf_repo(repo: str, dest_dir: str, label: str, ignore_patterns=None) -> None:
-    """Snapshot-download a full Hugging Face repo (used for the Mojicast
-    translation/punctuation models, which are distributed as small repos)."""
+def _has_valid_files(target: str) -> bool:
+    return any(
+        os.path.getsize(os.path.join(dp, f)) > 0
+        for dp, dn, fn in os.walk(target)
+        for f in fn if not f.startswith(".")
+    )
+
+
+def download_hf_repo(repo: str, dest_dir: str, label: str, ignore_patterns=None,
+                     allow_patterns=None) -> None:
+    """Snapshot-download a Hugging Face repo into models/<dest_dir>.
+
+    Repos listed in scripts/model_pins.json are fetched at their pinned
+    revision, and the directory records it in model_pins.MARKER_NAME. When
+    the pin moves (a model update shipped in a release), the old directory
+    is replaced; a download that fails leaves the old one in place.
+    Unlisted repos (eval-only candidates) keep the old fetch-once behaviour.
+    """
+    import model_pins
+
+    pin = model_pins.pin_for_repo(repo)
+    revision = pin["revision"] if pin else None
     target = os.path.join(MODELS_DIR, dest_dir)
     if os.path.isdir(target):
-        has_valid_files = any(
-            os.path.getsize(os.path.join(dp, f)) > 0
-            for dp, dn, fn in os.walk(target)
-            for f in fn if not f.startswith(".")
-        )
-        if has_valid_files:
+        if not _has_valid_files(target):
+            print(f"[warn] {label}: {target} exists but contains no valid model files. Re-fetching...")
+            shutil.rmtree(target, ignore_errors=True)
+        elif not pin:
             print(f"[skip] {label} (already present: {target})")
             return
-        print(f"[warn] {label}: {target} exists but contains no valid model files. Re-fetching...")
-        shutil.rmtree(target, ignore_errors=True)
-    print(f"[get ] {label}")
+        else:
+            state = model_pins.install_state(pin, target)
+            if state == "current":
+                print(f"[skip] {label} (revision {revision[:7]})")
+                return
+            if state == "legacy":
+                # Installed before pinning; model_pins.json says that content is this revision.
+                model_pins.write_marker(target, revision)
+                print(f"[skip] {label} (pre-pinning install, recorded as {revision[:7]})")
+                return
+            old = model_pins.read_marker(target) or "unknown"
+            print(f"[upd ] {label}: {old[:7]} -> {revision[:7]}")
+    print(f"[get ] {label}" + (f" @ {revision[:7]}" if revision else ""))
     try:
         from huggingface_hub import snapshot_download
     except ImportError:
         print("  ERROR: huggingface_hub not installed. `pip install huggingface_hub` "
               "or `pip install -r requirements.txt` and re-run.", file=sys.stderr)
         raise
-    snapshot_download(repo_id=repo, local_dir=target, ignore_patterns=ignore_patterns)
+    staging = target + ".download"
+    shutil.rmtree(staging, ignore_errors=True)
+    snapshot_download(repo_id=repo, local_dir=staging, revision=revision,
+                      ignore_patterns=ignore_patterns, allow_patterns=allow_patterns)
+    if revision:
+        model_pins.write_marker(staging, revision)
+    if os.path.isdir(target):
+        shutil.rmtree(target)
+    os.replace(staging, target)
+
+
+def download_pinned(key: str, label: str) -> None:
+    """download_hf_repo for a model_pins.json entry, using its dest and patterns."""
+    import model_pins
+
+    pin = model_pins.load_pins()[key]
+    download_hf_repo(pin["repo"], pin["dest"], label,
+                     ignore_patterns=pin.get("ignore_patterns"),
+                     allow_patterns=pin.get("allow_patterns"))
 
 
 def ensure_campplus_model(log_callback=None) -> str:
@@ -259,7 +304,11 @@ def ensure_campplus_model(log_callback=None) -> str:
     return cam_dest
 
 
-HAAS_JA_REPO = "https://huggingface.co/Sanami/haas-ja-onnx/resolve/354baedfd9612b00e74cc1ae87dff7f2c558db6f"
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import model_pins  # noqa: E402
+
+_HAAS_PIN = model_pins.load_pins()["haas-ja-onnx"]
+HAAS_JA_REPO = f"https://huggingface.co/{_HAAS_PIN['repo']}/resolve/{_HAAS_PIN['revision']}"
 HAAS_JA_FILES = {
     "int8dyn_mm/encoder.onnx": "c7b06fc8c46a6f81c19042c951c044f328b146e98bff7ec8b597ce5054ab4d21",
     "int8dyn_mm/encoder.onnx.data": "7f685192e80f31896df46a6230a0d7a2fd3e77eeaa452f5b84c4956383f32301",
@@ -323,38 +372,20 @@ def download_opt_ins(args) -> None:
 
     if getattr(args, "whisper_dml", False):
         try:
-            from huggingface_hub import snapshot_download
-            dest = os.path.join(MODELS_DIR, "kotoba-whisper-v2.2-onnx")
-            print(f"Downloading Kotoba-Whisper-v2.2 ONNX for DirectML into {dest}...")
-            snapshot_download(
-                repo_id="onnx-community/kotoba-whisper-v2.2-ONNX",
-                local_dir=dest,
-                allow_patterns=["onnx/*int8.onnx", "*.json"],
-            )
-            print("Kotoba-Whisper-v2.2 ONNX download completed.")
+            download_pinned("kotoba-whisper-v2.2-onnx", "Kotoba-Whisper-v2.2 ONNX (DirectML iGPU mode)")
         except Exception as e:
             print(f"Failed to download Kotoba-Whisper-v2.2 ONNX: {e}")
 
     if getattr(args, "translators", False):
-        download_hf_repo(
-            "ishiki-emo/mojicast-m2m100-ct2",
-            "mojicast-m2m100-ct2",
-            "M2M-100 418M CTranslate2 (ja->zh/ko/es/... translation, MIT)")
-
-        download_hf_repo(
-            "ishiki-emo/mojicast-fugumt-ja-en-ct2",
-            "mojicast-fugumt-ja-en-ct2",
-            "FuguMT CTranslate2 (ja->en translation, CC BY-SA 4.0)")
+        download_pinned("m2m100", "M2M-100 418M CTranslate2 (ja->zh/ko/es/... translation, MIT)")
+        download_pinned("fugumt-ja-en", "FuguMT CTranslate2 (ja->en translation, CC BY-SA 4.0)")
 
     if args.punct_4class:
         # Same layout as the local models/punct-ja-4class-permissive/ this
         # was trained into (punct_4class.onnx, quantized_ort/*.int8.onnx,
         # hf/tokenizer.json, README.md, SHA256SUMS) -- train_log.jsonl is
         # not part of the published repo. See docs/eval/punct_retrain.md.
-        download_hf_repo(
-            "oboroge0/hayamimi-punct-ja-4class",
-            "punct-ja-4class-permissive",
-            "4-class ja punctuation model (opt-in --punct-model 4class, MIT)")
+        download_pinned("punct-ja-4class", "4-class ja punctuation model (opt-in --punct-model 4class, MIT)")
 
     if args.eval_baselines:
         download_and_extract_tarbz2(
@@ -503,11 +534,7 @@ def main():
     # on onnxruntime 1.29 CPU EP during development -- see docs/design/punct_ja.md.
     # Skipped here to save ~90MB and avoid confusion; punct_ja.py only ever
     # loads punct_bert.onnx.
-    download_hf_repo(
-        "ishiki-emo/mojicast-punct-onnx",
-        "mojicast-punct-onnx",
-        "Japanese punctuation restoration (Mojicast/tohoku-nlp, fp32 only)",
-        ignore_patterns=["*.int8.onnx"])
+    download_pinned("mojicast-punct-onnx", "Japanese punctuation restoration (Mojicast/tohoku-nlp, fp32 only)")
 
     if args.minimal:
         print("\n--minimal done. zh/ko/yue/EU/omnilingual ASR, speaker labels, and "
@@ -537,6 +564,9 @@ def main():
     # The int8 weights live in their own "-int8-" tarball upstream; the
     # plain "300M-ctc-2025-11-12" tarball is fp32 only (model.onnx, 1.3GB)
     # and has no model.int8.onnx at all.
+    # Stays on v1: the v2 export (2026-02-05) has no tokens for several Thai,
+    # Lao and Tibetan vowel signs and prints "<unk>" in their place, and is not
+    # better on the other languages measured. docs/eval/sv_candidates.md.
     extract_members_only(
         f"{GITHUB_RELEASES}/{ASR_TAG}/sherpa-onnx-omnilingual-asr-1600-languages-300M-ctc-int8-2025-11-12.tar.bz2",
         "omnilingual-300m-ctc-int8",
@@ -560,15 +590,9 @@ def main():
         "sherpa-onnx-pyannote-segmentation-3-0",
         "pyannote segmentation-3.0 (speaker-turn detection for --speakers refine pass)")
 
-    download_hf_repo(
-        "ishiki-emo/mojicast-m2m100-ct2",
-        "mojicast-m2m100-ct2",
-        "M2M-100 418M CTranslate2 (ja->zh/ko translation, MIT)")
-
-    download_hf_repo(
-        "ishiki-emo/mojicast-fugumt-ja-en-ct2",
-        "mojicast-fugumt-ja-en-ct2",
-        "FuguMT CTranslate2 (ja->en translation, CC BY-SA 4.0 -- see THIRD_PARTY_NOTICES.md)")
+    download_pinned("m2m100", "M2M-100 418M CTranslate2 (ja->zh/ko translation, MIT)")
+    download_pinned("fugumt-ja-en",
+                    "FuguMT CTranslate2 (ja->en translation, CC BY-SA 4.0 -- see THIRD_PARTY_NOTICES.md)")
 
     download_opt_ins(args)
 

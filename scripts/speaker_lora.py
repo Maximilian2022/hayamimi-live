@@ -52,8 +52,10 @@ except (ImportError, OSError):  # 壊れた DLL は OSError になる。ここ�
 
 try:
     from scripts.lora_state import write_lora_meta
+    from scripts import model_pins
 except ModuleNotFoundError:  # python scripts/speaker_lora.py で直接実行した場合
     from lora_state import write_lora_meta
+    import model_pins
 
 logger = logging.getLogger("speaker_lora")
 
@@ -171,16 +173,17 @@ class SpeakerLoRATrainer:
     def _ensure_model_loaded(self, base_lora_dir: Optional[str] = None):
         """モデルとプロセッサを遅延ロードする (既存 LoRA があれば継続学習用にロード)"""
         if self.model is None:
-            logger.info(f"Loading base model {self.model_id} on {self.device}...")
-            self.processor = WhisperProcessor.from_pretrained(self.model_id)
+            model_id, model_rev = model_pins.resolve(self.model_id)
+            logger.info(f"Loading base model {model_id}@{(model_rev or 'main')[:7]} on {self.device}...")
+            self.processor = WhisperProcessor.from_pretrained(model_id, revision=model_rev)
             # 推論時と同じ <|ja|><|transcribe|><|notimestamps|> をラベルの先頭に付ける
             self.label_tokenizer = WhisperProcessor.from_pretrained(
-                self.model_id, language="japanese", task="transcribe"
+                model_id, revision=model_rev, language="japanese", task="transcribe"
             ).tokenizer
             self.label_tokenizer.set_prefix_tokens(
                 language="japanese", task="transcribe", predict_timestamps=False
             )
-            self.model = WhisperForConditionalGeneration.from_pretrained(self.model_id)
+            self.model = WhisperForConditionalGeneration.from_pretrained(model_id, revision=model_rev)
             self.model.to(self.device)
 
             if base_lora_dir and os.path.exists(os.path.join(base_lora_dir, "adapter_config.json")):

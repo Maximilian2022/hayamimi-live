@@ -76,10 +76,12 @@ def transcribe_ranges(audio: np.ndarray, sr: int, segments: Sequence[tuple[float
     try:
         from faster_whisper import WhisperModel
         from scripts.cuda_utils import setup_cuda_dll_path
+        from scripts import model_pins
         from scripts.whisper_cuda_engine import DEFAULT_MODEL_SIZE
 
         setup_cuda_dll_path()
-        model = WhisperModel(DEFAULT_MODEL_SIZE, device="cuda", compute_type="float16")
+        model_id, model_rev = model_pins.resolve(DEFAULT_MODEL_SIZE)
+        model = WhisperModel(model_id, revision=model_rev, device="cuda", compute_type="float16")
     except Exception as e:
         logger.warning("Whisper is unavailable for LoRA label hints: %s", e)
         return empty
