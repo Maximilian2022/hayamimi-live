@@ -55,7 +55,17 @@ CONFIGS = {
     "zh": "cmn_hans_cn",
     "ko": "ko_kr",
     "yue": "yue_hant_hk",
+    # Languages no specialist tier covers, so live audio in them goes to the
+    # Omnilingual generalist. Used by scripts/eval_sv_candidates.py
+    # (docs/eval/sv_candidates.md); "all" still means the 5 above.
+    "hi": "hi_in",
+    "th": "th_th",
+    "vi": "vi_vn",
+    "id": "id_id",
+    "ar": "ar_eg",
+    "tr": "tr_tr",
 }
+CORE_LANGS = ["ja", "en", "zh", "ko", "yue"]
 
 PARQUET_URL_TMPL = "https://huggingface.co/api/datasets/google/fleurs/parquet/{config}/test/0.parquet"
 
@@ -169,7 +179,7 @@ def main():
     ap.add_argument("--force", action="store_true", help="rebuild even if already complete")
     args = ap.parse_args()
 
-    langs = list(CONFIGS.keys()) if args.lang == "all" else [args.lang]
+    langs = CORE_LANGS if args.lang == "all" else [args.lang]
     for lang in langs:
         build_lang(lang, force=args.force)
 
