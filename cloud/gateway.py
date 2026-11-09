@@ -703,6 +703,14 @@ async def websocket_mic_endpoint(websocket: WebSocket):
         model_choice=u_sess.settings.get("asr_model", "haas"),
     )
     u_sess.active_vad_session = vad_session
+    u_sess.mic_websockets.add(websocket)
+
+    # サーバー側で既に OBS ミュート状態であれば即時通知
+    if u_sess.is_obs_muted:
+        try:
+            await websocket.send_json({"type": "obs_mute_changed", "is_muted": True, "source": "server"})
+        except Exception:
+            pass
 
     # 音声チャンク処理用キュー & バックグラウンドワーカースレッド
     # メインの非同期イベントループを ASR 推論でブロックさせず、ping/pong を 1ms 未満で即答させる
@@ -716,6 +724,10 @@ async def websocket_mic_endpoint(websocket: WebSocket):
                 if item is None:
                     break
                 chunk, client_ts = item
+                # サーバー側 OBS ミュート中は処理をスキップ
+                if u_sess.is_obs_muted:
+                    audio_queue.task_done()
+                    continue
                 vad_session.process_audio_chunk(chunk, client_ts=client_ts)
                 audio_queue.task_done()
             except queue.Empty:
@@ -737,6 +749,10 @@ async def websocket_mic_endpoint(websocket: WebSocket):
             if message.get("type") == "websocket.disconnect":
                 break
             if "bytes" in message and message["bytes"]:
+                # OBS ミュート中は音声取り込みを無視
+                if u_sess.is_obs_muted:
+                    continue
+
                 raw_bytes = message["bytes"]
                 client_ts = None
                 # パケットヘッダー判定: b"HYM1" (4バイト) + Float64 little-endian (8バイト) = 12バイト
@@ -760,6 +776,12 @@ async def websocket_mic_endpoint(websocket: WebSocket):
                     t_data = json.loads(message["text"])
                     if t_data.get("type") == "ping":
                         await websocket.send_json({"type": "pong", "ts": t_data.get("ts")})
+                    elif t_data.get("type") == "obs_mute_state":
+                        # Chrome 拡張機能等から届いた OBS ミュート通知
+                        is_muted = bool(t_data.get("is_muted", False))
+                        u_sess.is_obs_muted = is_muted
+                        if is_muted and u_sess.active_vad_session:
+                            u_sess.active_vad_session.reset()
                 except Exception:
                     pass
     except (WebSocketDisconnect, RuntimeError):
@@ -767,6 +789,7 @@ async def websocket_mic_endpoint(websocket: WebSocket):
     except Exception as e:
         logger.warning("WebSocket mic error (%s): %s", uid, e)
     finally:
+        u_sess.mic_websockets.discard(websocket)
         worker_running = False
         try:
             audio_queue.put_nowait(None)
@@ -778,6 +801,65 @@ async def websocket_mic_endpoint(websocket: WebSocket):
             vad_session.reset()
         except Exception:
             pass
+
+
+# ---------------------------------------------------------------------------
+# OBS Lua スクリプト連携 & ミュート同期 API
+# ---------------------------------------------------------------------------
+
+@app.post("/api/user/mute")
+async def handle_user_mute(request: Request, token: str = ""):
+    """OBS Lua スクリプト等から送信されたマイクミュート状態を受信し同期する"""
+    u_sess = session_manager.get_user_by_obs_token(token)
+    if not u_sess:
+        raise HTTPException(status_code=401, detail="無効な OBS トークンです")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    is_muted = bool(body.get("muted", False))
+    u_sess.is_obs_muted = is_muted
+    if is_muted and u_sess.active_vad_session:
+        try:
+            u_sess.active_vad_session.reset()
+        except Exception:
+            pass
+
+    # マイク画面にリアルタイム通知
+    dead = set()
+    for ws in list(u_sess.mic_websockets):
+        try:
+            await ws.send_json({"type": "obs_mute_changed", "is_muted": is_muted, "source": "lua"})
+        except Exception:
+            dead.add(ws)
+    u_sess.mic_websockets.difference_update(dead)
+
+    return {"ok": True, "muted": is_muted}
+
+
+@app.get("/api/download/obs-lua")
+async def download_obs_lua(token: str = ""):
+    """ユーザーの OBS トークンを自動埋め込みした OBS Lua スクリプトを提供する"""
+    u_sess = session_manager.get_user_by_obs_token(token)
+    safe_token = u_sess.obs_token if u_sess else token
+
+    lua_template_path = os.path.join(_ROOT_DIR, "scripts", "hayamimi_mute.lua")
+    if os.path.isfile(lua_template_path):
+        with open(lua_template_path, "r", encoding="utf-8") as f:
+            content = f.read()
+    else:
+        content = "-- Hayamimi Live OBS Mute Script\n"
+
+    # トークンとサーバー URL を置換
+    content = content.replace('local server_url = "https://hayamimi.kit-a.net"', f'local server_url = "{BASE_URL}"')
+    content = content.replace('local obs_token = ""', f'local obs_token = "{safe_token}"')
+
+    return Response(
+        content=content,
+        media_type="text/x-lua",
+        headers={"Content-Disposition": 'attachment; filename="hayamimi_mute.lua"'},
+    )
 
 
 # ---------------------------------------------------------------------------

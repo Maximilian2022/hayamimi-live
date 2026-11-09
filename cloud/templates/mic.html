@@ -761,7 +761,7 @@
       <div class="card obs-sync-card">
         <div class="card-title">
           OBS マイクミュート連動
-          <span class="tag" style="background: rgba(91, 127, 212, 0.2); color: var(--blue);">OBS WebSocket v5</span>
+          <span class="tag" style="background: rgba(91, 127, 212, 0.2); color: var(--blue);">OBS WebSocket v5 / Lua</span>
         </div>
 
         <div class="obs-sync-header">
@@ -773,31 +773,53 @@
             <span style="font-size: 0.85rem; font-weight: 600;">OBS 連動（OBSマイクミュート時に文字起こしを自動休止）</span>
           </div>
           <div id="obs-status-badge" class="obs-badge disconnected">
-            <span id="obs-status-text">未接続 (OBS未起動)</span>
+            <span id="obs-status-text">未接続 (拡張機能またはLuaで連動可能)</span>
           </div>
         </div>
 
         <!-- OBS 設定詳細アコーディオン -->
         <details style="margin-top: 0.6rem; font-size: 0.85rem;">
-          <summary style="cursor: pointer; color: var(--paper-dim);">OBS 接続設定・マイク選択</summary>
-          <div style="display: flex; flex-direction: column; gap: 0.6rem; margin-top: 0.6rem;">
-            <div class="form-row">
-              <label style="width: 130px; font-size: 0.8rem;">OBS WebSocket:</label>
-              <input type="text" id="obs-ws-url" value="ws://127.0.0.1:4455" style="font-size: 0.8rem;">
+          <summary style="cursor: pointer; color: var(--paper-dim);">連動方法の選択 (Chrome 拡張機能 / OBS Lua スクリプト)</summary>
+          <div style="display: flex; flex-direction: column; gap: 0.8rem; margin-top: 0.8rem;">
+            
+            <!-- 方法 1: Chrome 拡張機能 -->
+            <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--line); border-radius: 6px; padding: 0.75rem;">
+              <div style="font-weight: 700; color: var(--paper); font-size: 0.85rem; display: flex; align-items: center; gap: 0.4rem;">
+                <span>🧩 方法 1: Chrome 拡張機能で連動</span>
+                <span class="tag" style="background: rgba(74, 222, 128, 0.2); color: #4ade80; font-size: 0.7rem;">推奨</span>
+              </div>
+              <div style="font-size: 0.8rem; color: var(--paper-dim); margin: 0.4rem 0 0.6rem 0; line-height: 1.4;">
+                リポジトリ内の <code style="color: var(--blue);">extension</code> フォルダを Chrome のデベロッパーモードで読み込むだけで、ブラウザから手元の OBS (ws://127.0.0.1:4455) と完全自動連動します。
+              </div>
+              <div class="form-row">
+                <label style="width: 120px; font-size: 0.8rem;">OBS WebSocket:</label>
+                <input type="text" id="obs-ws-url" value="ws://127.0.0.1:4455" style="font-size: 0.8rem;">
+              </div>
+              <div class="form-row" style="margin-top: 0.4rem;">
+                <label style="width: 120px; font-size: 0.8rem;">パスワード:</label>
+                <input type="password" id="obs-ws-password" placeholder="OBS側で認証有効時のみ入力" style="font-size: 0.8rem;">
+              </div>
+              <div style="display: flex; justify-content: flex-end; margin-top: 0.4rem;">
+                <button class="btn-copy" id="btn-obs-reconnect" style="font-size: 0.75rem;">🔄 設定反映・再接続</button>
+              </div>
             </div>
-            <div class="form-row">
-              <label style="width: 130px; font-size: 0.8rem;">パスワード:</label>
-              <input type="password" id="obs-ws-password" placeholder="OBS側で認証有効時は入力" style="font-size: 0.8rem;">
+
+            <!-- 方法 2: OBS Lua スクリプト -->
+            <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--line); border-radius: 6px; padding: 0.75rem;">
+              <div style="font-weight: 700; color: var(--paper); font-size: 0.85rem; display: flex; align-items: center; gap: 0.4rem;">
+                <span>📜 方法 2: OBS 内蔵 Lua スクリプトで連動</span>
+                <span class="tag" style="font-size: 0.7rem;">全ブラウザ・スマホ対応</span>
+              </div>
+              <div style="font-size: 0.8rem; color: var(--paper-dim); margin: 0.4rem 0 0.6rem 0; line-height: 1.4;">
+                OBS Studio の [ツール] → [スクリプト] に読み込ませるだけの軽量スクリプトです。あなた専用のトークンが自動埋め込みされているため、OBS に追加するだけで即座に動きます。
+              </div>
+              <div style="display: flex; justify-content: flex-end;">
+                <a href="/api/download/obs-lua?token={{ obs_token }}" download="hayamimi_mute.lua" class="btn-copy" style="text-decoration: none; display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.75rem; background: #253350; border-color: #3B82F6; color: #60A5FA;">
+                  📥 hayamimi_mute.lua をダウンロード
+                </a>
+              </div>
             </div>
-            <div class="form-row">
-              <label style="width: 130px; font-size: 0.8rem;">監視マイク:</label>
-              <select id="obs-target-source" style="font-size: 0.8rem;">
-                <option value="__auto__">自動検出 (Mic/Aux または最初のマイク)</option>
-              </select>
-            </div>
-            <div style="display: flex; gap: 0.5rem; justify-content: flex-end;">
-              <button class="btn-copy" id="btn-obs-reconnect">🔄 再接続テスト</button>
-            </div>
+
           </div>
         </details>
       </div>
@@ -1792,6 +1814,11 @@
       return;
     }
 
+    if (data.type === "obs_mute_changed") {
+      setObsMuteState(Boolean(data.is_muted), data.source === "lua" ? "OBS Lua" : "サーバー");
+      return;
+    }
+
     if (data.type === "engine_info") {
       document.getElementById("engine-val").textContent = data.name;
     } else if (data.type === "transcript") {
@@ -1903,6 +1930,115 @@
 
   function escapeHtml(s) {
     return (s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  // ================= OBS 連動管理 (Chrome 拡張機能 & Lua スクリプト) =================
+  let hasExtension = false;
+  let obsSyncEnabled = true;
+  window.isObsMuted = false;
+
+  function updateObsStatusBadge(status, text) {
+    const badge = document.getElementById("obs-status-badge");
+    const label = document.getElementById("obs-status-text");
+    if (!badge || !label) return;
+
+    badge.className = "obs-badge " + status;
+    label.textContent = text;
+  }
+
+  function setObsMuteState(isMuted, source = "Extension") {
+    if (window.isObsMuted === isMuted) return;
+    window.isObsMuted = isMuted;
+
+    const statusLabel = document.getElementById("status-label");
+    const levelBar = document.getElementById("level-bar");
+    const liveText = document.getElementById("partial-live-text");
+
+    if (isMuted) {
+      updateObsStatusBadge("muted", `🔇 OBSマイクミュート中 (${source})`);
+      if (statusLabel && isRecording) {
+        statusLabel.textContent = "🔇 OBSマイクミュート中（一時停止）";
+        statusLabel.style.color = "#f87171";
+      }
+      if (levelBar) levelBar.style.opacity = "0.3";
+      if (liveText && !liveText.classList.contains("idle")) {
+        liveText.innerHTML = '<span style="color: #94a3b8;">(OBSマイクミュート中)</span><span class="caret"></span>';
+      }
+    } else {
+      updateObsStatusBadge(hasExtension ? "connected" : "disconnected", 
+        hasExtension ? "🧩 拡張機能連動中 (OBS接続)" : "未接続 (拡張機能またはLuaで連動可能)");
+      if (statusLabel && isRecording) {
+        statusLabel.textContent = "音声認識中";
+        statusLabel.style.color = "";
+      }
+      if (levelBar) levelBar.style.opacity = "1.0";
+    }
+
+    // サーバーの WebSocket にも状態を通知
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "obs_mute_state", is_muted: isMuted }));
+    }
+  }
+
+  // Chrome 拡張機能 (content.js) との postMessage 通信
+  window.addEventListener("message", (event) => {
+    if (!event.data || event.data.source !== "hayamimi-extension") return;
+
+    if (event.data.type === "EXTENSION_READY") {
+      hasExtension = true;
+      updateObsStatusBadge("connecting", "🧩 拡張機能検出 (OBS接続試行中…)");
+      window.postMessage({ source: "hayamimi-page", type: "GET_OBS_STATUS" }, "*");
+    } else if (event.data.type === "OBS_STATUS_UPDATE") {
+      hasExtension = true;
+      if (!obsSyncEnabled) {
+        updateObsStatusBadge("disconnected", "連動オフ");
+        return;
+      }
+      if (event.data.isConnected) {
+        if (event.data.isMuted) {
+          setObsMuteState(true, `Chrome拡張: ${event.data.activeMicName}`);
+        } else {
+          setObsMuteState(false);
+          updateObsStatusBadge("connected", `🧩 拡張機能連動中 (${event.data.activeMicName})`);
+        }
+      } else {
+        setObsMuteState(false);
+        updateObsStatusBadge("disconnected", "🧩 拡張機能起動中 (OBS未起動またはポート4455不通)");
+      }
+    }
+  });
+
+  // UI イベントバインド
+  const obsToggle = document.getElementById("obs-sync-toggle");
+  if (obsToggle) {
+    obsToggle.addEventListener("change", () => {
+      obsSyncEnabled = obsToggle.checked;
+      if (!obsSyncEnabled) {
+        setObsMuteState(false);
+        updateObsStatusBadge("disconnected", "連動オフ");
+      } else {
+        if (hasExtension) {
+          window.postMessage({ source: "hayamimi-page", type: "GET_OBS_STATUS" }, "*");
+        } else {
+          updateObsStatusBadge("disconnected", "未接続 (拡張機能またはLuaで連動可能)");
+        }
+      }
+    });
+  }
+
+  const btnObsReconnect = document.getElementById("btn-obs-reconnect");
+  if (btnObsReconnect) {
+    btnObsReconnect.addEventListener("click", () => {
+      const url = document.getElementById("obs-ws-url").value.trim() || "ws://127.0.0.1:4455";
+      const pwd = document.getElementById("obs-ws-password").value;
+      window.postMessage({
+        source: "hayamimi-page",
+        type: "UPDATE_CONFIG",
+        config: { url, password: pwd }
+      }, "*");
+      updateObsStatusBadge("connecting", "再接続中…");
+      showAlert("OBS 設定を拡張機能に送信しました！");
+    });
   }
 
   // 初期化ロード

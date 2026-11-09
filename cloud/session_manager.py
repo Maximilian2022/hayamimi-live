@@ -177,6 +177,8 @@ class UserSession:
         self.style: Dict[str, Any] = self._load_style()
         self.settings: Dict[str, Any] = self._load_settings()
         self.obs_subscribers: Set[asyncio.Queue] = set()
+        self.mic_websockets: Set[Any] = set()
+        self.is_obs_muted: bool = False
         self.last_transcript: str = ""
         self.active_vad_session: Any = None
 

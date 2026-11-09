@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "早耳 OBS 連動拡張機能 (Hayamimi OBS Sync)",
+  "version": "1.0.0",
+  "description": "早耳 (Hayamimi Live) と OBS Studio のマイクミュート状態をローカル WebSocket で完全自動連動させる Chrome 拡張機能",
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "ws://127.0.0.1:4455/*",
+    "ws://localhost:4455/*",
+    "https://hayamimi.kit-a.net/*",
+    "http://127.0.0.1:*/*",
+    "http://localhost:*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://hayamimi.kit-a.net/*",
+        "http://127.0.0.1:*/*",
+        "http://localhost:*/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_end"
+    }
+  ]
+}

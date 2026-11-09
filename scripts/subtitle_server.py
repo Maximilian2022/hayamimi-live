@@ -1768,6 +1768,22 @@ class SubtitleServer:
                     overrides = server.asr._itn_overrides
                     self._json(200, {"exclude": sorted(overrides.exclude),
                                      "force": overrides.force})
+                elif req_path == "/api/download/obs-lua":
+                    lua_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hayamimi_mute.lua")
+                    if os.path.isfile(lua_path):
+                        with open(lua_path, "r", encoding="utf-8") as f:
+                            content = f.read()
+                    else:
+                        content = "-- Hayamimi Live OBS Mute Script\n"
+                    # Standalone 用のデフォルト設定
+                    content = content.replace('local server_url = "https://hayamimi.kit-a.net"', 'local server_url = "http://127.0.0.1:8833"')
+                    body = content.encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/x-lua; charset=utf-8")
+                    self.send_header("Content-Disposition", 'attachment; filename="hayamimi_mute.lua"')
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
                 elif req_path == "/config":
                     if server.controls is None:
                         self._json(404, {"error": "no runtime controls attached"})
@@ -2057,6 +2073,16 @@ class SubtitleServer:
                         self._json(200, res)
                     except Exception as e:
                         self._json(500, {"ok": False, "status": "error", "message": f"OBS診断実行エラー: {e}"})
+                    return
+                if req_path in ("/api/mute", "/api/user/mute"):
+                    code, payload = self._read_json_body()
+                    if code == 200 and isinstance(payload, dict):
+                        is_muted = bool(payload.get("muted", False))
+                        server._is_obs_muted = is_muted
+                        sys.stderr.write(f"[Hayamimi-OBS] Microphone mute state updated via Lua/API: {is_muted}\n")
+                        self._json(200, {"ok": True, "muted": is_muted})
+                    else:
+                        self._json(400, {"error": "Invalid body"})
                     return
                 if req_path == "/api/obs-log":
                     code, payload = self._read_json_body()
