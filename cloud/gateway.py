@@ -77,9 +77,8 @@ async def lifespan(app: FastAPI):
                 shared_asr_engine.get_reazon_recognizer()
                 if shared_punctuator:
                     shared_punctuator.restore("テスト")
-                from cloud.translator import get_translator_pool
-                pool = get_translator_pool()
-                pool.translate("テスト", "en")
+                from cloud.translator import local_translator_pool
+                local_translator_pool.translate("テスト", "en")
                 logger.info("✔ All core models warmed up successfully.")
             except Exception as _we:
                 logger.warning("Model warmup warning: %s", _we)
