@@ -5,11 +5,13 @@ FastAPI + WebSocket + SSE によるリアルタイム音声認識 & OBS 字幕�
 """
 
 import asyncio
+import json
 import logging
 import os
 import struct
 import sys
 import threading
+import time
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -66,6 +68,23 @@ async def lifespan(app: FastAPI):
     try:
         shared_asr_engine = SharedAsrEngine(models_dir=MODELS_DIR)
         logger.info("✔ Shared ASR engine ready.")
+
+        # バックグラウンドで主要モデルを事前ウォームアップ (初回発話のロード遅延を完全排除)
+        def _warmup_worker():
+            try:
+                logger.info("Starting background model warmup (Haas, Reazon, Punctuator, Translator)...")
+                shared_asr_engine.get_haas_recognizer()
+                shared_asr_engine.get_reazon_recognizer()
+                if shared_punctuator:
+                    shared_punctuator.restore("テスト")
+                from cloud.translator import get_translator_pool
+                pool = get_translator_pool()
+                pool.translate("テスト", "en")
+                logger.info("✔ All core models warmed up successfully.")
+            except Exception as _we:
+                logger.warning("Model warmup warning: %s", _we)
+
+        threading.Thread(target=_warmup_worker, daemon=True).start()
     except Exception as e:
         logger.error("Failed to initialize ASR engine: %s", e)
         logger.warning("Gateway will start, but ASR may fail until models are downloaded.")
@@ -608,6 +627,7 @@ async def websocket_mic_endpoint(websocket: WebSocket):
                 logger.warning("Translation dispatch error for %s: %s", lang, e)
 
     def on_transcript(raw_text: str, is_final: bool = True, has_punct: bool = False, latency_ms: float = 0.0, client_ts: Optional[float] = None):
+        t_post_start = time.perf_counter()
         processed = raw_text
 
         # 1. ITN (数値・日付・単位の正規化)
@@ -625,6 +645,10 @@ async def websocket_mic_endpoint(websocket: WebSocket):
             except Exception as e:
                 logger.debug("Punctuation failed: %s", e)
 
+        # サーバー側総処理時間 (ASR推論 + 句読点・ITN後処理)
+        post_ms = (time.perf_counter() - t_post_start) * 1000
+        server_total_ms = latency_ms + post_ms
+
         # 3. ユーザー固有辞書の適用と OBS への送信
         asyncio.run_coroutine_threadsafe(u_sess.broadcast_transcript(processed, is_final), loop)
 
@@ -635,8 +659,9 @@ async def websocket_mic_endpoint(websocket: WebSocket):
             "text": refined,
             "is_final": is_final,
         }
-        if is_final and latency_ms > 0:
-            resp_data["latency_ms"] = round(latency_ms, 1)
+        if is_final and server_total_ms > 0:
+            resp_data["latency_ms"] = round(server_total_ms, 1)
+            resp_data["asr_ms"] = round(latency_ms, 1)
         if client_ts is not None:
             resp_data["client_ts"] = client_ts
 
@@ -685,8 +710,13 @@ async def websocket_mic_endpoint(websocket: WebSocket):
                 # 4バイト float32 配列としてデコード
                 chunk = np.frombuffer(audio_bytes, dtype=np.float32)
                 vad_session.process_audio_chunk(chunk, client_ts=client_ts)
-            elif "text" in message:
-                pass
+            elif "text" in message and message["text"]:
+                try:
+                    t_data = json.loads(message["text"])
+                    if t_data.get("type") == "ping":
+                        await websocket.send_json({"type": "pong", "ts": t_data.get("ts")})
+                except Exception:
+                    pass
     except (WebSocketDisconnect, RuntimeError):
         logger.info("WebSocket mic disconnected: %s", uid)
     except Exception as e:

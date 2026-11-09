@@ -1194,6 +1194,8 @@
   let mediaStream = null;
   let processorNode = null;
   let isRecording = false;
+  let rttMs = 25;
+  let pingTimer = null;
 
   // タブ切り替え
   function switchTab(tab) {
@@ -1648,6 +1650,16 @@
         micText.textContent = "マイク停止";
         statusDot.className = "status-dot recording";
         statusLabel.textContent = "音声認識中";
+
+        // 2秒ごとに ping を送って真の回線往復遅延 (RTT) を実測
+        if (pingTimer) clearInterval(pingTimer);
+        pingTimer = setInterval(() => {
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "ping", ts: performance.now() }));
+          }
+        }, 2000);
+        // 初回即時 ping
+        ws.send(JSON.stringify({ type: "ping", ts: performance.now() }));
       };
 
       ws.onmessage = (evt) => {
@@ -1718,6 +1730,11 @@
     levelBar.style.width = "0%";
     levelVal.textContent = "0 dB";
 
+    if (pingTimer) {
+      clearInterval(pingTimer);
+      pingTimer = null;
+    }
+
     if (processorNode) {
       processorNode.disconnect();
       processorNode = null;
@@ -1752,8 +1769,15 @@
     return result;
   }
 
-  // サーバーメッセージ受信 (案3: 体感E2Eレイテンシ + 推論/通信内訳ハイブリッド)
+  // サーバーメッセージ受信 (案3: 実測RTT + サーバー処理時間の正確なハイブリッド)
   function handleServerMessage(data) {
+    if (data.type === "pong") {
+      if (data.ts) {
+        rttMs = Math.max(1, Math.round(performance.now() - data.ts));
+      }
+      return;
+    }
+
     if (data.type === "engine_info") {
       document.getElementById("engine-val").textContent = data.name;
     } else if (data.type === "transcript") {
@@ -1762,30 +1786,23 @@
         pLive.innerHTML = 'マイクを開始すると、ここに話した内容が即座に表示されます<span class="caret"></span>';
         pLive.classList.add("idle");
 
-        let meta = null;
-        if (data.client_ts != null) {
-          const now = performance.now();
-          const e2eMs = Math.max(1, Math.round(now - data.client_ts));
-          const serverMs = Math.round(data.latency_ms || 0);
-          const netMs = Math.max(0, e2eMs - serverMs);
-          meta = { e2e: e2eMs, server: serverMs, net: netMs };
+        const serverMs = Math.round(data.latency_ms || 0);
+        const asrMs = Math.round(data.asr_ms || serverMs);
+        const netMs = rttMs;
+        // 発話終了・無音検知からブラウザに字幕が届くまでの真の応答速度 (サーバー処理 + 片道下り通信)
+        const perceivedResponseMs = Math.max(1, serverMs + Math.round(netMs / 2));
+        const meta = { e2e: perceivedResponseMs, server: serverMs, asr: asrMs, net: netMs };
 
-          const latVal = document.getElementById("lat-val");
-          const latBreakdown = document.getElementById("lat-breakdown");
-          const latChip = document.getElementById("latency-chip");
-          if (latVal) latVal.textContent = e2eMs;
-          if (latBreakdown) {
-            latBreakdown.textContent = `(推論 ${serverMs}ms / 通信 ${netMs}ms)`;
-            latBreakdown.style.display = "inline";
-          }
-          if (latChip) {
-            latChip.title = `字幕が出るまでの体感遅延: ${e2eMs}ms (サーバー推論: ${serverMs}ms / 通信往復: ${netMs}ms)`;
-          }
-        } else if (data.latency_ms != null) {
-          const serverMs = Math.round(data.latency_ms);
-          meta = { e2e: serverMs, server: serverMs, net: 0 };
-          const latVal = document.getElementById("lat-val");
-          if (latVal) latVal.textContent = serverMs;
+        const latVal = document.getElementById("lat-val");
+        const latBreakdown = document.getElementById("lat-breakdown");
+        const latChip = document.getElementById("latency-chip");
+        if (latVal) latVal.textContent = perceivedResponseMs;
+        if (latBreakdown) {
+          latBreakdown.textContent = `(推論 ${serverMs}ms / 通信 ${netMs}ms)`;
+          latBreakdown.style.display = "inline";
+        }
+        if (latChip) {
+          latChip.title = `発話終了〜字幕表示: ${perceivedResponseMs}ms (サーバー処理: ${serverMs}ms [ASR: ${asrMs}ms] / 回線RTT: ${netMs}ms)`;
         }
 
         appendFinalTranscript(data.text, meta);
