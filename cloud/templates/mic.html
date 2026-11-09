@@ -1,14 +1,22 @@
 <!DOCTYPE html>
 <html lang="ja">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>早耳 クラウドマイク入力</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=M+PLUS+Rounded+1c:wght@500;700&display=swap" rel="stylesheet">
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=M+PLUS+Rounded+1c:wght@500;700&display=swap"
+    rel="stylesheet">
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
     body {
       background-color: #0b0d13;
       color: #e2e8f0;
@@ -17,6 +25,7 @@
       display: flex;
       flex-direction: column;
     }
+
     header {
       background: #151822;
       border-bottom: 1px solid #232736;
@@ -25,11 +34,13 @@
       align-items: center;
       justify-content: space-between;
     }
+
     .header-left {
       display: flex;
       align-items: center;
       gap: 0.75rem;
     }
+
     .btn-back {
       color: #94a3b8;
       text-decoration: none;
@@ -38,12 +49,17 @@
       align-items: center;
       gap: 0.25rem;
     }
-    .btn-back:hover { color: #f1f5f9; }
+
+    .btn-back:hover {
+      color: #f1f5f9;
+    }
+
     .header-title {
       font-size: 1.1rem;
       font-weight: 700;
       color: #f8fafc;
     }
+
     .status-badge {
       display: inline-flex;
       align-items: center;
@@ -55,14 +71,17 @@
       background: #1e293b;
       color: #94a3b8;
     }
+
     .status-badge.connected {
       background: rgba(16, 185, 129, 0.2);
       color: #34d399;
     }
+
     .status-badge.recording {
       background: rgba(239, 68, 68, 0.2);
       color: #f87171;
     }
+
     .status-dot {
       width: 8px;
       height: 8px;
@@ -80,6 +99,7 @@
       flex-direction: column;
       gap: 1.25rem;
     }
+
     .card {
       background: #151822;
       border: 1px solid #232736;
@@ -94,6 +114,7 @@
       gap: 1.25rem;
       flex-wrap: wrap;
     }
+
     .btn-record {
       display: inline-flex;
       align-items: center;
@@ -109,31 +130,44 @@
       box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
       transition: all 0.2s ease;
     }
+
     .btn-record:hover {
       background: #2563eb;
       transform: translateY(-1px);
     }
+
     .btn-record.active {
       background: #ef4444;
       box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
       animation: pulse 2s infinite;
     }
+
     @keyframes pulse {
-      0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
-      70% { box-shadow: 0 0 0 12px rgba(239, 68, 68, 0); }
-      100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+      0% {
+        box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4);
+      }
+
+      70% {
+        box-shadow: 0 0 0 12px rgba(239, 68, 68, 0);
+      }
+
+      100% {
+        box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+      }
     }
 
     .device-select-wrap {
       flex: 1;
       min-width: 200px;
     }
+
     .select-label {
       font-size: 0.75rem;
       color: #94a3b8;
       margin-bottom: 0.25rem;
       display: block;
     }
+
     .device-select {
       width: 100%;
       background: #0f1117;
@@ -153,6 +187,7 @@
       padding: 0.75rem 1rem;
       border-radius: 8px;
     }
+
     .vu-label {
       display: flex;
       justify-content: space-between;
@@ -160,12 +195,14 @@
       color: #94a3b8;
       margin-bottom: 0.4rem;
     }
+
     .vu-bar-bg {
       height: 8px;
       background: #1e293b;
       border-radius: 9999px;
       overflow: hidden;
     }
+
     .vu-bar-fill {
       height: 100%;
       width: 0%;
@@ -181,6 +218,7 @@
       flex-direction: column;
       height: 420px;
     }
+
     .feed-header {
       font-size: 0.95rem;
       font-weight: 600;
@@ -189,6 +227,7 @@
       display: flex;
       justify-content: space-between;
     }
+
     .feed-list {
       flex: 1;
       overflow-y: auto;
@@ -200,6 +239,7 @@
       border-radius: 8px;
       padding: 1rem;
     }
+
     .feed-item {
       padding: 0.6rem 0.85rem;
       background: #181c28;
@@ -209,16 +249,26 @@
       line-height: 1.5;
       animation: fadeIn 0.2s ease;
     }
+
     @keyframes fadeIn {
-      from { opacity: 0; transform: translateY(4px); }
-      to { opacity: 1; transform: translateY(0); }
+      from {
+        opacity: 0;
+        transform: translateY(4px);
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
     }
+
     .feed-empty {
       color: #64748b;
       font-size: 0.9rem;
       text-align: center;
       margin: auto;
     }
+
     .error-banner {
       background: rgba(239, 68, 68, 0.15);
       border: 1px solid rgba(239, 68, 68, 0.3);
@@ -232,6 +282,7 @@
     }
   </style>
 </head>
+
 <body>
   <header>
     <div class="header-left">
@@ -351,7 +402,7 @@
           } else if (data.type === 'error') {
             showError('サーバーエラー: ' + data.message);
           }
-        } catch (e) {}
+        } catch (e) { }
       };
 
       ws.onclose = () => {
@@ -494,17 +545,17 @@
     function stopRecording() {
       isRecording = false;
       if (scriptNode) {
-        try { scriptNode.disconnect(); } catch (e) {}
+        try { scriptNode.disconnect(); } catch (e) { }
         scriptNode = null;
       }
       if (audioCtx) {
-        try { audioCtx.close(); } catch (e) {}
+        try { audioCtx.close(); } catch (e) { }
         audioCtx = null;
       }
       if (micStream) {
         try {
           micStream.getTracks().forEach(t => t.stop());
-        } catch (e) {}
+        } catch (e) { }
         micStream = null;
       }
       btnToggle.className = 'btn-record';
@@ -523,4 +574,5 @@
     loadAudioDevices();
   </script>
 </body>
+
 </html>
