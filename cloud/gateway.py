@@ -694,6 +694,8 @@ async def websocket_mic_endpoint(websocket: WebSocket):
                     loop
                 )
 
+    import queue
+
     vad_session = UserVadSession(
         uid,
         shared_asr_engine,
@@ -701,6 +703,32 @@ async def websocket_mic_endpoint(websocket: WebSocket):
         model_choice=u_sess.settings.get("asr_model", "haas"),
     )
     u_sess.active_vad_session = vad_session
+
+    # 音声チャンク処理用キュー & バックグラウンドワーカースレッド
+    # メインの非同期イベントループを ASR 推論でブロックさせず、ping/pong を 1ms 未満で即答させる
+    audio_queue: queue.Queue = queue.Queue(maxsize=100)
+    worker_running = True
+
+    def audio_worker():
+        while worker_running:
+            try:
+                item = audio_queue.get(timeout=0.1)
+                if item is None:
+                    break
+                chunk, client_ts = item
+                vad_session.process_audio_chunk(chunk, client_ts=client_ts)
+                audio_queue.task_done()
+            except queue.Empty:
+                continue
+            except Exception as ex:
+                logger.warning("Audio worker exception (%s): %s", uid, ex)
+
+    worker_thread = threading.Thread(
+        target=audio_worker,
+        name=f"AudioWorker-{uid[:8]}",
+        daemon=True,
+    )
+    worker_thread.start()
 
     try:
         while True:
@@ -723,7 +751,10 @@ async def websocket_mic_endpoint(websocket: WebSocket):
 
                 # 4バイト float32 配列としてデコード
                 chunk = np.frombuffer(audio_bytes, dtype=np.float32)
-                vad_session.process_audio_chunk(chunk, client_ts=client_ts)
+                try:
+                    audio_queue.put_nowait((chunk, client_ts))
+                except queue.Full:
+                    logger.warning("Audio queue full for %s, dropping chunk", uid)
             elif "text" in message and message["text"]:
                 try:
                     t_data = json.loads(message["text"])
@@ -736,6 +767,12 @@ async def websocket_mic_endpoint(websocket: WebSocket):
     except Exception as e:
         logger.warning("WebSocket mic error (%s): %s", uid, e)
     finally:
+        worker_running = False
+        try:
+            audio_queue.put_nowait(None)
+        except Exception:
+            pass
+        worker_thread.join(timeout=1.0)
         u_sess.active_vad_session = None
         try:
             vad_session.reset()
