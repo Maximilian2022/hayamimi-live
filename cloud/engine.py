@@ -198,13 +198,14 @@ class UserVadSession:
         self,
         user_id: str,
         asr_engine: SharedAsrEngine,
-        on_transcript: Callable[[str, bool, bool, float], None],
+        on_transcript: Callable[[str, bool, bool, float, Optional[float]], None],
         model_choice: str = "haas",
     ):
         self.user_id = user_id
         self.asr_engine = asr_engine
         self.on_transcript = on_transcript
         self.model_choice = model_choice
+        self.last_client_ts: Optional[float] = None
 
         # Silero VAD 初期化
         vad_config = sherpa_onnx.VadModelConfig(
@@ -228,10 +229,13 @@ class UserVadSession:
         """認識モデルの切り替え ('haas' または 'reazon')"""
         self.model_choice = model_choice
 
-    def process_audio_chunk(self, chunk: np.ndarray) -> None:
+    def process_audio_chunk(self, chunk: np.ndarray, client_ts: Optional[float] = None) -> None:
         """ブラウザから届いた 16kHz float32 PCM 音声チャンクを処理する"""
         if len(chunk) == 0:
             return
+
+        if client_ts is not None:
+            self.last_client_ts = client_ts
 
         self.vad.accept_waveform(chunk)
         self.audio_pos += len(chunk) / SAMPLE_RATE
@@ -250,7 +254,7 @@ class UserVadSession:
                     draft_ms = (time.perf_counter() - t_draft) * 1000
                     if draft_text and draft_text != self.last_draft_text:
                         self.last_draft_text = draft_text
-                        self.on_transcript(draft_text, False, False, draft_ms)
+                        self.on_transcript(draft_text, False, False, draft_ms, self.last_client_ts)
                     self.last_partial_pos = self.audio_pos
             except Exception as e:
                 logger.debug("Partial transcription error: %s", e)
@@ -258,6 +262,7 @@ class UserVadSession:
         # 2. 完了した確定音声セグメントを取り出して ASR
         while not self.vad.empty():
             t0 = time.perf_counter()
+            seg_ts = self.last_client_ts
             segment = self.vad.front  # プロパティ参照 (呼び出し不可)
             samples = np.array(segment.samples, dtype=np.float32)
             self.vad.pop()
@@ -267,7 +272,7 @@ class UserVadSession:
                 text, has_punct = self.asr_engine.transcribe(samples, SAMPLE_RATE, model=self.model_choice)
                 latency_ms = (time.perf_counter() - t0) * 1000
                 if text:
-                    self.on_transcript(text, True, has_punct, latency_ms)
+                    self.on_transcript(text, True, has_punct, latency_ms, seg_ts)
 
     def reset(self):
         try:

@@ -727,8 +727,9 @@
             <div id="engine-chip" class="status-badge" style="font-size: 0.65rem; padding: 0.15rem 0.5rem; background: rgba(56, 189, 248, 0.15); color: #38BDF8; border: 1px solid rgba(56, 189, 248, 0.3);">
               <span id="engine-val">接続確認中...</span>
             </div>
-            <div id="latency-chip" class="status-badge" style="font-size: 0.65rem; padding: 0.15rem 0.4rem;">
-              応答: <span id="lat-val">-</span> ms
+            <div id="latency-chip" class="status-badge" style="font-size: 0.65rem; padding: 0.15rem 0.5rem;" title="字幕が出るまでの体感遅延">
+              応答: <span id="lat-val" style="font-weight: 700; color: #7bed9f;">-</span> ms
+              <span id="lat-breakdown" style="color: var(--paper-dim); margin-left: 4px; display: none;"></span>
             </div>
           </div>
         </div>
@@ -1673,7 +1674,18 @@
         const inputRate = audioContext.sampleRate;
         const resampled = resampleTo16k(inputData, inputRate);
         if (resampled && resampled.length > 0) {
-          ws.send(resampled.buffer);
+          // パケットヘッダー付与: b"HYM1" (4バイト) + Float64 performance.now() (8バイト) = 12バイト
+          const pcmBytes = new Uint8Array(resampled.buffer, resampled.byteOffset, resampled.byteLength);
+          const packet = new Uint8Array(12 + pcmBytes.length);
+          // 'H', 'Y', 'M', '1'
+          packet[0] = 72;
+          packet[1] = 89;
+          packet[2] = 77;
+          packet[3] = 49;
+          const view = new DataView(packet.buffer);
+          view.setFloat64(4, performance.now(), true); // little-endian
+          packet.set(pcmBytes, 12);
+          ws.send(packet.buffer);
         }
 
         // VUメーター更新
@@ -1740,7 +1752,7 @@
     return result;
   }
 
-  // サーバーメッセージ受信
+  // サーバーメッセージ受信 (案3: 体感E2Eレイテンシ + 推論/通信内訳ハイブリッド)
   function handleServerMessage(data) {
     if (data.type === "engine_info") {
       document.getElementById("engine-val").textContent = data.name;
@@ -1749,11 +1761,34 @@
       if (data.is_final) {
         pLive.innerHTML = 'マイクを開始すると、ここに話した内容が即座に表示されます<span class="caret"></span>';
         pLive.classList.add("idle");
-        appendFinalTranscript(data.text);
-        if (data.latency_ms != null) {
+
+        let meta = null;
+        if (data.client_ts != null) {
+          const now = performance.now();
+          const e2eMs = Math.max(1, Math.round(now - data.client_ts));
+          const serverMs = Math.round(data.latency_ms || 0);
+          const netMs = Math.max(0, e2eMs - serverMs);
+          meta = { e2e: e2eMs, server: serverMs, net: netMs };
+
           const latVal = document.getElementById("lat-val");
-          if (latVal) latVal.textContent = Math.round(data.latency_ms);
+          const latBreakdown = document.getElementById("lat-breakdown");
+          const latChip = document.getElementById("latency-chip");
+          if (latVal) latVal.textContent = e2eMs;
+          if (latBreakdown) {
+            latBreakdown.textContent = `(推論 ${serverMs}ms / 通信 ${netMs}ms)`;
+            latBreakdown.style.display = "inline";
+          }
+          if (latChip) {
+            latChip.title = `字幕が出るまでの体感遅延: ${e2eMs}ms (サーバー推論: ${serverMs}ms / 通信往復: ${netMs}ms)`;
+          }
+        } else if (data.latency_ms != null) {
+          const serverMs = Math.round(data.latency_ms);
+          meta = { e2e: serverMs, server: serverMs, net: 0 };
+          const latVal = document.getElementById("lat-val");
+          if (latVal) latVal.textContent = serverMs;
         }
+
+        appendFinalTranscript(data.text, meta);
       } else {
         pLive.classList.remove("idle");
         pLive.innerHTML = escapeHtml(data.text) + '<span class="caret"></span>';
@@ -1763,15 +1798,21 @@
     }
   }
 
-  function appendFinalTranscript(text) {
+  function appendFinalTranscript(text, meta) {
     const feed = document.getElementById("final-feed");
     const item = document.createElement("div");
     item.className = "feed-item";
     const now = new Date().toLocaleTimeString();
+
+    let latBadge = "";
+    if (meta && meta.e2e) {
+      latBadge = `<span style="font-size: 0.7rem; font-family: var(--mono); background: rgba(123, 237, 159, 0.15); color: #7bed9f; border: 1px solid rgba(123, 237, 159, 0.3); padding: 1px 6px; border-radius: 4px; margin-left: 6px;" title="体感: ${meta.e2e}ms (推論: ${meta.server}ms / 通信: ${meta.net}ms)">${meta.e2e}ms</span>`;
+    }
+
     item.innerHTML = `
       <div class="feed-meta">
         <span>確定発話</span>
-        <span>${now}</span>
+        <span>${now}${latBadge}</span>
       </div>
       <div class="feed-text">${escapeHtml(text)}</div>
       <div class="feed-trans-container"></div>

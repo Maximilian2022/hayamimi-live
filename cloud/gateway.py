@@ -7,6 +7,7 @@ FastAPI + WebSocket + SSE によるリアルタイム音声認識 & OBS 字幕�
 import asyncio
 import logging
 import os
+import struct
 import sys
 import threading
 from contextlib import asynccontextmanager
@@ -606,7 +607,7 @@ async def websocket_mic_endpoint(websocket: WebSocket):
             except Exception as e:
                 logger.warning("Translation dispatch error for %s: %s", lang, e)
 
-    def on_transcript(raw_text: str, is_final: bool = True, has_punct: bool = False, latency_ms: float = 0.0):
+    def on_transcript(raw_text: str, is_final: bool = True, has_punct: bool = False, latency_ms: float = 0.0, client_ts: Optional[float] = None):
         processed = raw_text
 
         # 1. ITN (数値・日付・単位の正規化)
@@ -636,21 +637,13 @@ async def websocket_mic_endpoint(websocket: WebSocket):
         }
         if is_final and latency_ms > 0:
             resp_data["latency_ms"] = round(latency_ms, 1)
+        if client_ts is not None:
+            resp_data["client_ts"] = client_ts
 
         asyncio.run_coroutine_threadsafe(
             websocket.send_json(resp_data),
             loop
         )
-
-        # 5. 確定時の多言語翻訳 (有効化されている場合)
-        if is_final and u_sess.settings.get("enable_trans", False):
-            target_langs = u_sess.settings.get("trans_target_langs", ["en"])
-            gemini_key = u_sess.get_gemini_key()
-            if target_langs:
-                asyncio.run_coroutine_threadsafe(
-                    _handle_async_translation(refined, target_langs, gemini_key),
-                    loop
-                )
 
         # 5. 確定時の多言語翻訳 (有効化されている場合)
         if is_final and u_sess.settings.get("enable_trans", False):
@@ -678,9 +671,20 @@ async def websocket_mic_endpoint(websocket: WebSocket):
                 break
             if "bytes" in message and message["bytes"]:
                 raw_bytes = message["bytes"]
+                client_ts = None
+                # パケットヘッダー判定: b"HYM1" (4バイト) + Float64 little-endian (8バイト) = 12バイト
+                if len(raw_bytes) >= 12 and raw_bytes[:4] == b"HYM1":
+                    try:
+                        client_ts = struct.unpack("<d", raw_bytes[4:12])[0]
+                        audio_bytes = raw_bytes[12:]
+                    except Exception:
+                        audio_bytes = raw_bytes
+                else:
+                    audio_bytes = raw_bytes
+
                 # 4バイト float32 配列としてデコード
-                chunk = np.frombuffer(raw_bytes, dtype=np.float32)
-                vad_session.process_audio_chunk(chunk)
+                chunk = np.frombuffer(audio_bytes, dtype=np.float32)
+                vad_session.process_audio_chunk(chunk, client_ts=client_ts)
             elif "text" in message:
                 pass
     except (WebSocketDisconnect, RuntimeError):
