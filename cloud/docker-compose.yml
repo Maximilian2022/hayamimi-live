@@ -14,9 +14,18 @@ services:
       - hayamimi_models:/app/models
     mem_limit: 750m
     mem_reservation: 400m
+    networks:
+      - default
+      - tunnel_net
 
 volumes:
   hayamimi_data:
     name: hayamimi_cloud_data
   hayamimi_models:
     name: hayamimi_cloud_models
+
+networks:
+  default:
+  tunnel_net:
+    name: event-tts-bot_bot_network
+    external: true
