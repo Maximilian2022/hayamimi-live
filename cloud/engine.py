@@ -12,6 +12,11 @@ import threading
 import time
 from typing import Callable, Optional
 
+# scripts をインポートパスに追加
+_SCRIPTS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts")
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+
 import numpy as np
 import sherpa_onnx
 
@@ -22,6 +27,46 @@ logger = logging.getLogger("hayamimi.cloud.engine")
 SAMPLE_RATE = 16000
 VAD_MODEL_PATH = os.path.join(MODELS_DIR, "silero_vad.onnx")
 REAZON_DIR = os.path.join(MODELS_DIR, "sherpa-onnx-zipformer-ja-en-reazonspeech-2025-01-17")
+PUNCT_DIR = os.path.join(MODELS_DIR, "mojicast-punct-onnx")
+
+
+class SharedPunctuator:
+    """Mojicast tohoku-nlp による日本語句読点復元器 (遅延・共有ロード)"""
+
+    def __init__(self, model_dir: str = PUNCT_DIR):
+        self.model_dir = model_dir
+        self._punctuator = None
+        self._failed = False
+        self._lock = threading.Lock()
+
+    def restore(self, text: str) -> str:
+        if not text or self._failed:
+            return text
+        if self._punctuator is None:
+            with self._lock:
+                if self._punctuator is None and not self._failed:
+                    try:
+                        from pathlib import Path
+                        from punct_ja import PunctuatorJa
+                        if not os.path.isdir(self.model_dir):
+                            logger.info("Punctuation model dir not found: %s", self.model_dir)
+                            self._failed = True
+                            return text
+                        logger.info("Loading shared Mojicast punctuation model...")
+                        t0 = time.perf_counter()
+                        self._punctuator = PunctuatorJa(model_dir=Path(self.model_dir))
+                        logger.info("✔ Punctuation model loaded in %.2fs", time.perf_counter() - t0)
+                    except Exception as e:
+                        logger.warning("Could not load punctuation model: %s", e)
+                        self._failed = True
+                        return text
+
+        if self._punctuator is not None:
+            try:
+                return self._punctuator.restore(text)
+            except Exception as e:
+                logger.debug("Punctuation restore error: %s", e)
+        return text
 
 
 def _find(model_dir: str, pattern: str) -> str:
@@ -124,3 +169,6 @@ class UserVadSession:
 
     def reset(self):
         self.vad.clear()
+
+
+shared_punctuator = SharedPunctuator()

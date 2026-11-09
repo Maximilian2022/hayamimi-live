@@ -8,8 +8,17 @@ import asyncio
 import logging
 import os
 import sys
+import threading
 from contextlib import asynccontextmanager
 from typing import Optional
+
+# tools / scripts をインポートパスに追加
+_ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _ROOT_DIR not in sys.path:
+    sys.path.insert(0, _ROOT_DIR)
+_SCRIPTS_DIR = os.path.join(_ROOT_DIR, "scripts")
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
 
 import numpy as np
 from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect, HTTPException, Depends
@@ -35,7 +44,7 @@ from cloud.auth import (
     verify_session_token,
 )
 from cloud.session_manager import session_manager, UserSession
-from cloud.engine import SharedAsrEngine, UserVadSession
+from cloud.engine import SharedAsrEngine, UserVadSession, shared_punctuator
 
 # ロギング設定
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -149,6 +158,63 @@ async def logout():
 
 
 # ---------------------------------------------------------------------------
+# YouTube 辞書育成バックグラウンドタスク管理
+# ---------------------------------------------------------------------------
+youtube_grow_tasks: dict[str, dict] = {}
+youtube_grow_lock = threading.Lock()
+
+
+def _run_youtube_grow_worker(user_id: str, url: str, max_videos: int, gemini_key: str):
+    """別スレッドで YouTube 解析と Gemini による置換辞書生成を実行"""
+    u_sess = session_manager.get_or_create_user(user_id)
+    with youtube_grow_lock:
+        task = youtube_grow_tasks[user_id]
+        task["status"] = "running"
+        task["progress"] = 0.05
+        task["message"] = "YouTube 動画のメタデータを解析中..."
+        task["logs"] = ["タスク初期化: YouTube のメタデータ取得を開始します..."]
+
+    def _append_log(msg: str):
+        with youtube_grow_lock:
+            task["logs"].append(msg)
+            if len(task["logs"]) > 60:
+                task["logs"].pop(0)
+
+    def _status_cb(stage: str, prog: float, msg: str):
+        with youtube_grow_lock:
+            task["progress"] = prog
+            task["message"] = msg
+        _append_log(f"[{stage}] (int({prog*100})%) {msg}")
+
+    try:
+        from tools.profile_builder.pipeline import ProfileBuilderPipeline
+        pipeline = ProfileBuilderPipeline(api_key=gemini_key)
+        prof = pipeline.run(
+            youtube_url=url,
+            max_videos=max_videos,
+            status_callback=_status_cb,
+            log_callback=lambda lvl, text: _append_log(f"[{lvl}] {text}"),
+        )
+
+        new_tuples = [(r.pattern, r.replacement) for r in prof.replacement_rules]
+        added_count = u_sess.append_replacements(new_tuples)
+
+        with youtube_grow_lock:
+            task["status"] = "completed"
+            task["progress"] = 1.0
+            task["added_count"] = added_count
+            task["message"] = f"辞書育成が完了しました！新たに {added_count} 個の置換ルールを追加しました。"
+        _append_log(f"完了: 計 {len(new_tuples)} 個の抽出ルールのうち {added_count} 個の新規ルールを replace.txt に追記しました。")
+    except Exception as e:
+        logger.error("YouTube grow task failed for %s: %s", user_id, e)
+        with youtube_grow_lock:
+            task["status"] = "error"
+            task["progress"] = 0.0
+            task["message"] = f"辞書育成に失敗しました: {e}"
+        _append_log(f"エラー発生: {e}")
+
+
+# ---------------------------------------------------------------------------
 # ダッシュボード & 設定
 # ---------------------------------------------------------------------------
 
@@ -165,6 +231,10 @@ async def dashboard(request: Request):
 
     obs_url = f"{BASE_URL}/overlay?token={u_sess.obs_token}"
     dict_text = u_sess.get_replacements_raw()
+    style = u_sess.style
+    settings = u_sess.settings
+    gemini_key = u_sess.get_gemini_key()
+    masked_key = (gemini_key[:4] + "..." + gemini_key[-4:]) if len(gemini_key) >= 8 else ("登録済み" if gemini_key else "未登録")
 
     return templates.TemplateResponse(
         request=request,
@@ -173,6 +243,10 @@ async def dashboard(request: Request):
             "user": user,
             "obs_url": obs_url,
             "dictionary_text": dict_text,
+            "style": style,
+            "settings": settings,
+            "has_gemini_key": bool(gemini_key),
+            "masked_key": masked_key,
         },
     )
 
@@ -203,6 +277,150 @@ async def regenerate_token(request: Request):
 
     new_obs_url = f"{BASE_URL}/overlay?token={new_tok}"
     return {"ok": True, "new_obs_url": new_obs_url}
+
+
+@app.get("/api/style")
+async def get_style(request: Request):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    u_sess = session_manager.get_or_create_user(user["id"])
+    return {"ok": True, "style": u_sess.style}
+
+
+@app.post("/api/style")
+async def save_style(request: Request):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    body = await request.json()
+    u_sess = session_manager.get_or_create_user(user["id"])
+    saved = u_sess.save_style(body)
+    await u_sess.broadcast_style()
+    return {"ok": True, "style": saved}
+
+
+@app.get("/api/settings")
+async def get_settings(request: Request):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    u_sess = session_manager.get_or_create_user(user["id"])
+    return {"ok": True, "settings": u_sess.settings}
+
+
+@app.post("/api/settings")
+async def save_settings(request: Request):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    body = await request.json()
+    u_sess = session_manager.get_or_create_user(user["id"])
+    saved = u_sess.save_settings(body)
+    return {"ok": True, "settings": saved}
+
+
+@app.get("/api/gemini-key")
+async def get_gemini_key_info(request: Request):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    u_sess = session_manager.get_or_create_user(user["id"])
+    key = u_sess.get_gemini_key()
+    return {
+        "ok": True,
+        "is_configured": bool(key),
+        "masked_key": (key[:4] + "..." + key[-4:]) if len(key) >= 8 else ("登録済み" if key else ""),
+    }
+
+
+@app.post("/api/gemini-key")
+async def set_gemini_key(request: Request):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    body = await request.json()
+    key = str(body.get("api_key", "")).strip()
+    u_sess = session_manager.get_or_create_user(user["id"])
+    u_sess.save_gemini_key(key)
+    return {"ok": True, "is_configured": bool(key)}
+
+
+@app.post("/api/gemini-key/test")
+async def test_gemini_key(request: Request):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    u_sess = session_manager.get_or_create_user(user["id"])
+    key = u_sess.get_gemini_key()
+    if not key:
+        return {"ok": False, "error": "Gemini API キーが未登録です"}
+    try:
+        from google import genai
+        client = genai.Client(api_key=key)
+        # 接続確認: gemini-2.5-flash / gemini-2.0-flash / gemini-1.5-flash 等で簡易テキスト生成
+        resp = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents="ping",
+        )
+        return {"ok": True, "message": "✔ Gemini API キーの接続確認に成功しました！"}
+    except Exception as e:
+        return {"ok": False, "error": f"接続テスト失敗: {e}"}
+
+
+@app.post("/api/youtube-grow")
+async def start_youtube_grow(request: Request):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    body = await request.json()
+    url = str(body.get("url", "")).strip()
+    max_videos = int(body.get("max_videos", 5))
+    if not url:
+        return JSONResponse({"ok": False, "error": "YouTube URL を入力してください"}, status_code=400)
+
+    uid = user["id"]
+    u_sess = session_manager.get_or_create_user(uid)
+    key = u_sess.get_gemini_key()
+    if not key:
+        return JSONResponse(
+            {"ok": False, "error": "Gemini API キーが登録されていません。先に上の設定欄から API キーを保存してください。"},
+            status_code=400
+        )
+
+    with youtube_grow_lock:
+        cur = youtube_grow_tasks.get(uid)
+        if cur and cur.get("status") == "running":
+            return JSONResponse({"ok": False, "error": "現在別の辞書育成タスクが実行中です"}, status_code=409)
+
+        youtube_grow_tasks[uid] = {
+            "status": "starting",
+            "progress": 0.0,
+            "message": "タスクを開始中...",
+            "logs": [],
+            "added_count": 0,
+        }
+
+    t = threading.Thread(target=_run_youtube_grow_worker, args=(uid, url, max_videos, key), daemon=True)
+    t.start()
+    return {"ok": True, "message": "辞書育成タスクを開始しました"}
+
+
+@app.get("/api/youtube-grow/status")
+async def get_youtube_grow_status(request: Request):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    uid = user["id"]
+    with youtube_grow_lock:
+        task = youtube_grow_tasks.get(uid, {
+            "status": "idle",
+            "progress": 0.0,
+            "message": "待機中",
+            "logs": [],
+            "added_count": 0,
+        })
+        return {"ok": True, "task": task}
 
 
 # ---------------------------------------------------------------------------
@@ -241,10 +459,28 @@ async def websocket_mic_endpoint(websocket: WebSocket):
     loop = asyncio.get_running_loop()
 
     def on_transcript(raw_text: str, is_final: bool = True):
-        # ユーザー固有辞書の適用と OBS への送信
-        asyncio.run_coroutine_threadsafe(u_sess.broadcast_transcript(raw_text, is_final), loop)
-        # マイク画面へのフィードバック
-        refined = u_sess.apply_replacements(raw_text)
+        processed = raw_text
+
+        # 1. ITN (数値・日付・単位の正規化)
+        if u_sess.settings.get("enable_itn", True):
+            try:
+                import itn_cjk
+                processed = itn_cjk.convert(processed, "ja")
+            except Exception as e:
+                logger.debug("ITN failed: %s", e)
+
+        # 2. 句読点付与 (、。)
+        if is_final and u_sess.settings.get("enable_punct", True) and shared_punctuator:
+            try:
+                processed = shared_punctuator.restore(processed)
+            except Exception as e:
+                logger.debug("Punctuation failed: %s", e)
+
+        # 3. ユーザー固有辞書の適用と OBS への送信
+        asyncio.run_coroutine_threadsafe(u_sess.broadcast_transcript(processed, is_final), loop)
+
+        # 4. マイク画面へのフィードバック
+        refined = u_sess.apply_replacements(processed)
         asyncio.run_coroutine_threadsafe(
             websocket.send_json({"type": "transcript", "text": refined, "is_final": is_final}),
             loop
@@ -286,7 +522,9 @@ async def overlay_page(request: Request, token: str = ""):
             status_code=403,
         )
     return templates.TemplateResponse(
-        request=request, name="overlay.html", context={"token": token, "error": None}
+        request=request,
+        name="overlay.html",
+        context={"token": token, "style": u_sess.style, "error": None},
     )
 
 

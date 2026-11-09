@@ -5,7 +5,7 @@
   <title>早耳 OBS 字幕オーバーレイ</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@700;800;900&family=Yuji+Boku&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Bungee&family=Dela+Gothic+One&family=Do+Hyeon&family=DotGothic16&family=Fredoka:wght@500;700&family=Hachi+Maru+Pop&family=IBM+Plex+Sans+JP:wght@500;700&family=Jua&family=Kaisei+Decol:wght@700&family=Kiwi+Maru:wght@500&family=Kosugi+Maru&family=M+PLUS+1p:wght@500;700&family=M+PLUS+Rounded+1c:wght@500;700;800;900&family=Montserrat:wght@500;700;800&family=Noto+Sans+JP:wght@500;700;900&family=Oswald:wght@500;700&family=Rampart+One&family=Reggae+One&family=Righteous&family=Shippori+Mincho+B1:wght@600;800&family=Yuji+Boku&family=Zen+Kaku+Gothic+New:wght@500;700;900&display=swap" rel="stylesheet">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body {
@@ -13,49 +13,40 @@
       overflow: hidden;
       width: 100vw;
       height: 100vh;
-      font-family: 'M PLUS Rounded 1c', sans-serif;
     }
     #subtitle-container {
       position: absolute;
-      bottom: 40px;
-      left: 40px;
-      right: 40px;
+      left: 2vw;
+      right: 2vw;
+      bottom: 4vh;
       display: flex;
       flex-direction: column;
-      align-items: center;
       pointer-events: none;
+      transition: all 0.2s ease;
     }
     .subtitle-box {
-      background: rgba(15, 17, 23, 0.75);
-      backdrop-filter: blur(8px);
-      padding: 12px 28px;
-      border-radius: 16px;
-      border: 1px solid rgba(255, 255, 255, 0.15);
-      color: #ffffff;
-      font-size: 38px;
-      font-weight: 800;
-      line-height: 1.4;
-      text-align: center;
-      max-width: 90%;
+      display: inline-block;
+      max-width: 96%;
       word-break: break-word;
-      text-shadow: 0 3px 10px rgba(0, 0, 0, 0.8), 0 0 20px rgba(59, 130, 246, 0.4);
-      animation: popIn 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-      transition: opacity 0.8s ease, transform 0.8s ease;
+      line-height: 1.4;
+      transition: opacity 0.6s ease, transform 0.6s ease;
+      animation: popIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
     }
     .subtitle-box.fade-out {
-      opacity: 0;
-      transform: translateY(10px);
+      opacity: 0 !important;
+      transform: translateY(8px);
     }
     @keyframes popIn {
-      from { opacity: 0; transform: scale(0.95) translateY(10px); }
+      from { opacity: 0; transform: scale(0.96) translateY(6px); }
       to { opacity: 1; transform: scale(1) translateY(0); }
     }
     .error-notice {
       color: #f87171;
       font-size: 20px;
-      background: rgba(0, 0, 0, 0.8);
-      padding: 8px 16px;
+      background: rgba(0, 0, 0, 0.85);
+      padding: 10px 20px;
       border-radius: 8px;
+      font-family: sans-serif;
     }
   </style>
 </head>
@@ -70,9 +61,102 @@
 
   {% if not error %}
   <script>
+    const subContainer = document.getElementById('subtitle-container');
     const subBox = document.getElementById('sub-box');
     const token = new URLSearchParams(window.location.search).get('token') || '';
+    let currentStyle = {{ style | tojson if style else '{}' }};
     let fadeTimer = null;
+
+    function hexToRgba(hex, alphaPercent) {
+      hex = (hex || "#000000").replace("#", "");
+      if (hex.length === 3) hex = hex.split("").map(c => c+c).join("");
+      const r = parseInt(hex.substring(0, 2), 16) || 0;
+      const g = parseInt(hex.substring(2, 4), 16) || 0;
+      const b = parseInt(hex.substring(4, 6), 16) || 0;
+      return `rgba(${r}, ${g}, ${b}, ${(alphaPercent || 0) / 100})`;
+    }
+
+    function generateTextShadow(color, width, effect) {
+      if (width <= 0) return "none";
+      if (effect === "glow") {
+        return `0 0 ${width * 2}px ${color}, 0 0 ${width * 4}px ${color}, 0 0 ${width * 7}px ${color}`;
+      }
+      if (effect === "double") {
+        let s = [];
+        for (let x = -width; x <= width; x++) {
+          for (let y = -width; y <= width; y++) {
+            if (x !== 0 || y !== 0) s.push(`${x}px ${y}px 0 #000000`);
+          }
+        }
+        const w2 = width + 2;
+        for (let x = -w2; x <= w2; x += 2) {
+          for (let y = -w2; y <= w2; y += 2) {
+            s.push(`${x}px ${y}px 0 ${color}`);
+          }
+        }
+        s.push(`0 0 ${w2 * 2}px ${color}`);
+        return s.join(", ");
+      }
+      let s = [];
+      for (let x = -width; x <= width; x++) {
+        for (let y = -width; y <= width; y++) {
+          if (x !== 0 || y !== 0) s.push(`${x}px ${y}px 0 ${color}`);
+        }
+      }
+      s.push(`0 0 ${width * 2}px ${color}`);
+      return s.join(", ");
+    }
+
+    function applyStyle(s) {
+      if (!s) return;
+      currentStyle = Object.assign({}, currentStyle, s);
+
+      // 配置
+      const align = currentStyle.align || 'center';
+      if (align === 'left') {
+        subContainer.style.alignItems = 'flex-start';
+        subBox.style.textAlign = 'left';
+      } else if (align === 'right') {
+        subContainer.style.alignItems = 'flex-end';
+        subBox.style.textAlign = 'right';
+      } else {
+        subContainer.style.alignItems = 'center';
+        subBox.style.textAlign = 'center';
+      }
+
+      // 画面下部余白
+      subContainer.style.bottom = (currentStyle.bottom != null ? currentStyle.bottom : 4.0) + 'vh';
+
+      // フォント・文字色・サイズ
+      subBox.style.fontFamily = currentStyle.font || "'Zen Kaku Gothic New', sans-serif";
+      subBox.style.fontSize = (currentStyle.size || 42) + 'px';
+      subBox.style.color = currentStyle.color || '#ffffff';
+      subBox.style.fontWeight = '800';
+
+      // 縁取り / エフェクト
+      const strokeColor = currentStyle.strokeColor || '#000000';
+      const strokeWidth = parseFloat(currentStyle.strokeWidth != null ? currentStyle.strokeWidth : 3.0);
+      const effect = currentStyle.effect || 'stroke';
+      subBox.style.textShadow = generateTextShadow(strokeColor, strokeWidth, effect);
+
+      // 背景・角丸
+      const bgOpacity = parseInt(currentStyle.bgOpacity != null ? currentStyle.bgOpacity : 0);
+      if (bgOpacity > 0) {
+        subBox.style.backgroundColor = hexToRgba(currentStyle.bgColor || '#000000', bgOpacity);
+        subBox.style.padding = '10px 24px';
+        subBox.style.backdropFilter = 'blur(6px)';
+        subBox.style.border = '1px solid rgba(255, 255, 255, 0.12)';
+      } else {
+        subBox.style.backgroundColor = 'transparent';
+        subBox.style.padding = '0';
+        subBox.style.backdropFilter = 'none';
+        subBox.style.border = 'none';
+      }
+      subBox.style.borderRadius = (currentStyle.radius != null ? currentStyle.radius : 8) + 'px';
+    }
+
+    // 初期スタイル適用
+    applyStyle(currentStyle);
 
     function connectSSE() {
       const sseUrl = `/events?token=${encodeURIComponent(token)}`;
@@ -81,7 +165,9 @@
       es.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
-          if (data.text && data.text.trim()) {
+          if (data.type === 'style' && data.style) {
+            applyStyle(data.style);
+          } else if (data.text && data.text.trim()) {
             showSubtitle(data.text);
           }
         } catch (e) {}
@@ -98,18 +184,18 @@
         clearTimeout(fadeTimer);
       }
       subBox.textContent = text;
-      subBox.style.display = 'block';
+      subBox.style.display = 'inline-block';
       subBox.classList.remove('fade-out');
 
-      // 8 秒後にフェードアウト
+      // 7 秒後にフェードアウト
       fadeTimer = setTimeout(() => {
         subBox.classList.add('fade-out');
         setTimeout(() => {
           if (subBox.classList.contains('fade-out')) {
             subBox.style.display = 'none';
           }
-        }, 800);
-      }, 8000);
+        }, 600);
+      }, 7000);
     }
 
     connectSSE();

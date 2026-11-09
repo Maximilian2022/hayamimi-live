@@ -13,3 +13,12 @@ sherpa-onnx==1.13.6
 onnxruntime==1.29.0
 sentencepiece==0.2.2
 huggingface_hub==1.28.0
+
+# Punctuation & NLP
+fugashi>=1.3.0
+unidic-lite>=1.0.8
+
+# YouTube Profile Builder & Gemini
+google-genai>=1.0.0
+yt-dlp>=2025.1.0
+

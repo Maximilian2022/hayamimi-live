@@ -13,6 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsndfile1 \
     libportaudio2 \
     ca-certificates \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Python依存パッケージのインストール
@@ -21,6 +22,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # アプリケーションコードのコピー
 COPY scripts/ /app/scripts/
+COPY tools/ /app/tools/
 COPY cloud/ /app/cloud/
 
 # entrypoint スクリプトの改行コード正規化と権限付与
@@ -31,3 +33,4 @@ EXPOSE 8833
 VOLUME ["/app/data", "/app/models"]
 
 ENTRYPOINT ["/app/cloud/entrypoint.sh"]
+

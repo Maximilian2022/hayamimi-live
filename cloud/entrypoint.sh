@@ -20,3 +20,4 @@ fi
 
 echo "=== hayamimi-cloud ゲートウェイを起動します (Port: 8833) ==="
 exec uvicorn cloud.gateway:app --host 0.0.0.0 --port 8833 --workers 1
+

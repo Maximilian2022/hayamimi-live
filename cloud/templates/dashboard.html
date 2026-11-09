@@ -6,13 +6,13 @@
   <title>早耳 クラウドダッシュボード</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=M+PLUS+Rounded+1c:wght@500;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Bungee&family=Dela+Gothic+One&family=DotGothic16&family=Fredoka:wght@500;700&family=Hachi+Maru+Pop&family=IBM+Plex+Sans+JP:wght@500;700&family=Inter:wght@400;500;600;700&family=Kiwi+Maru:wght@500&family=M+PLUS+Rounded+1c:wght@500;700;800;900&family=Noto+Sans+JP:wght@500;700;900&family=Rampart+One&family=Reggae+One&family=Righteous&family=Shippori+Mincho+B1:wght@600;800&family=Yuji+Boku&family=Zen+Kaku+Gothic+New:wght@500;700;900&display=swap" rel="stylesheet">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       background-color: #0b0d13;
       color: #e2e8f0;
-      font-family: 'Inter', 'M PLUS Rounded 1c', sans-serif;
+      font-family: 'Inter', 'Noto Sans JP', sans-serif;
       min-height: 100vh;
       display: flex;
       flex-direction: column;
@@ -30,9 +30,7 @@
       align-items: center;
       gap: 0.75rem;
     }
-    .header-logo {
-      font-size: 1.5rem;
-    }
+    .header-logo { font-size: 1.5rem; }
     .header-title {
       font-size: 1.25rem;
       font-weight: 700;
@@ -68,13 +66,13 @@
 
     main {
       flex: 1;
-      max-width: 960px;
+      max-width: 1000px;
       width: 100%;
       margin: 2rem auto;
-      padding: 0 1.5rem;
+      padding: 0 1.5rem 3rem;
       display: flex;
       flex-direction: column;
-      gap: 1.5rem;
+      gap: 1.75rem;
     }
     .card {
       background: #151822;
@@ -99,202 +97,794 @@
       line-height: 1.5;
     }
 
-    /* Action Banner */
-    .banner-mic {
-      display: flex;
+    /* ボタン類 */
+    .btn-primary {
+      display: inline-flex;
       align-items: center;
-      justify-content: space-between;
-      background: linear-gradient(135deg, #1e3a8a, #3b82f6);
+      justify-content: center;
+      gap: 0.5rem;
+      padding: 0.75rem 1.5rem;
+      background: #3b82f6;
+      color: #ffffff;
+      font-weight: 600;
+      font-size: 0.95rem;
+      border-radius: 8px;
       border: none;
-      color: #fff;
-      padding: 1.75rem 2rem;
+      cursor: pointer;
+      text-decoration: none;
+      transition: all 0.2s ease;
     }
-    .banner-mic h2 { font-size: 1.4rem; font-weight: 700; margin-bottom: 0.25rem; }
-    .banner-mic p { font-size: 0.95rem; opacity: 0.9; }
-    .btn-mic-start {
+    .btn-primary:hover { background: #2563eb; }
+    .btn-secondary {
       display: inline-flex;
       align-items: center;
       gap: 0.5rem;
-      background: #ffffff;
-      color: #1e3a8a;
-      font-weight: 700;
-      font-size: 1.05rem;
-      padding: 0.85rem 1.75rem;
-      border-radius: 10px;
-      text-decoration: none;
-      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2);
+      padding: 0.6rem 1rem;
+      background: #1e293b;
+      color: #cbd5e1;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.9rem;
       transition: all 0.2s ease;
     }
-    .btn-mic-start:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
-    }
+    .btn-secondary:hover { background: #334155; color: #ffffff; }
 
-    /* URL Box */
     .url-box {
       display: flex;
       gap: 0.5rem;
-      background: #0f1117;
-      border: 1px solid #2d3449;
-      border-radius: 8px;
-      padding: 0.5rem;
-      align-items: center;
+      margin-bottom: 1rem;
     }
     .url-input {
       flex: 1;
-      background: transparent;
-      border: none;
-      color: #38bdf8;
-      font-family: monospace;
-      font-size: 0.95rem;
-      padding: 0.25rem 0.5rem;
-      outline: none;
-    }
-    .btn-copy {
-      background: #2563eb;
-      color: #fff;
-      border: none;
-      padding: 0.5rem 1rem;
-      border-radius: 6px;
-      font-weight: 600;
-      font-size: 0.85rem;
-      cursor: pointer;
-      transition: background 0.2s;
-    }
-    .btn-copy:hover { background: #1d4ed8; }
-    .btn-regen {
-      background: #334155;
-      color: #cbd5e1;
-      border: none;
-      padding: 0.5rem 0.85rem;
-      border-radius: 6px;
-      font-size: 0.85rem;
-      cursor: pointer;
-      margin-top: 0.75rem;
-    }
-    .btn-regen:hover { background: #475569; }
-
-    /* Dictionary Editor */
-    .dict-textarea {
-      width: 100%;
-      height: 180px;
       background: #0f1117;
       border: 1px solid #2d3449;
+      color: #38bdf8;
+      font-family: monospace;
+      padding: 0.75rem 1rem;
       border-radius: 8px;
-      color: #e2e8f0;
+      font-size: 0.95rem;
+    }
+
+    /* プレビュー枠 */
+    .preview-container {
+      background: #000000;
+      background-image: linear-gradient(45deg, #181b24 25%, transparent 25%), linear-gradient(-45deg, #181b24 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #181b24 75%), linear-gradient(-45deg, transparent 75%, #181b24 75%);
+      background-size: 20px 20px;
+      background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
+      border: 1px solid #2d3449;
+      border-radius: 12px;
+      height: 180px;
+      position: relative;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 1.5rem;
+      padding: 1rem;
+    }
+    #preview-sub {
+      display: inline-block;
+      max-width: 90%;
+      word-break: break-word;
+      transition: all 0.2s ease;
+    }
+
+    /* フォームグリッド */
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 1.25rem;
+      margin-bottom: 1.5rem;
+    }
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+    }
+    .form-group label {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: #cbd5e1;
+    }
+    .form-control {
+      background: #0f1117;
+      border: 1px solid #2d3449;
+      color: #f8fafc;
+      padding: 0.6rem 0.8rem;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      width: 100%;
+    }
+    .form-control:focus {
+      outline: none;
+      border-color: #3b82f6;
+    }
+    .range-wrap {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    .range-wrap input[type="range"] {
+      flex: 1;
+    }
+    .range-val {
+      font-family: monospace;
+      font-size: 0.85rem;
+      color: #94a3b8;
+      width: 45px;
+      text-align: right;
+    }
+    .color-picker-wrap {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .color-picker-wrap input[type="color"] {
+      border: none;
+      width: 36px;
+      height: 36px;
+      border-radius: 6px;
+      cursor: pointer;
+      background: transparent;
+    }
+
+    /* エフェクトラジオボタン */
+    .radio-group {
+      display: flex;
+      gap: 0.75rem;
+      align-items: center;
+    }
+    .radio-label {
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+      font-size: 0.85rem;
+      cursor: pointer;
+    }
+
+    /* スイッチ */
+    .switch-wrap {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.75rem 1rem;
+      background: #0f1117;
+      border: 1px solid #232736;
+      border-radius: 8px;
+    }
+    .switch-title { font-size: 0.9rem; font-weight: 600; color: #f1f5f9; }
+    .switch-desc { font-size: 0.8rem; color: #94a3b8; }
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 44px;
+      height: 24px;
+    }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider {
+      position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+      background-color: #334155; transition: .3s; border-radius: 24px;
+    }
+    .slider:before {
+      position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px;
+      background-color: white; transition: .3s; border-radius: 50%;
+    }
+    input:checked + .slider { background-color: #3b82f6; }
+    input:checked + .slider:before { transform: translateX(20px); }
+
+    /* ログターミナル */
+    .log-terminal {
+      background: #090a0f;
+      border: 1px solid #1e2433;
+      border-radius: 8px;
+      padding: 0.75rem 1rem;
+      font-family: monospace;
+      font-size: 0.8rem;
+      color: #94a3b8;
+      max-height: 180px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      line-height: 1.5;
+      margin-top: 0.75rem;
+    }
+    .progress-bar-bg {
+      background: #1e2433;
+      border-radius: 9999px;
+      height: 10px;
+      overflow: hidden;
+      margin-top: 0.75rem;
+    }
+    .progress-bar-fill {
+      background: linear-gradient(90deg, #3b82f6, #8b5cf6);
+      height: 100%;
+      width: 0%;
+      transition: width 0.3s ease;
+    }
+
+    textarea.dict-box {
+      width: 100%;
+      min-height: 200px;
+      background: #0f1117;
+      border: 1px solid #2d3449;
+      color: #f1f5f9;
       font-family: monospace;
       font-size: 0.9rem;
-      padding: 0.75rem;
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
       line-height: 1.5;
       resize: vertical;
-      outline: none;
-      margin-bottom: 0.75rem;
     }
-    .dict-textarea:focus { border-color: #3b82f6; }
-    .btn-save-dict {
+    .toast {
+      position: fixed;
+      bottom: 2rem;
+      right: 2rem;
       background: #10b981;
-      color: #fff;
-      border: none;
-      padding: 0.6rem 1.25rem;
-      border-radius: 6px;
+      color: #ffffff;
+      padding: 0.75rem 1.5rem;
+      border-radius: 8px;
       font-weight: 600;
-      font-size: 0.9rem;
-      cursor: pointer;
-      transition: background 0.2s;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+      opacity: 0;
+      transform: translateY(10px);
+      transition: all 0.3s ease;
+      pointer-events: none;
+      z-index: 999;
     }
-    .btn-save-dict:hover { background: #059669; }
-    .save-status {
-      font-size: 0.85rem;
-      color: #34d399;
-      margin-left: 0.75rem;
-      display: none;
-    }
+    .toast.show { opacity: 1; transform: translateY(0); }
   </style>
 </head>
 <body>
   <header>
     <div class="header-left">
-      <span class="header-logo">🎙️</span>
-      <span class="header-title">hayamimi クラウド</span>
+      <div class="header-logo">🎙️</div>
+      <div class="header-title">早耳 (hayamimi) クラウド</div>
     </div>
     <div class="user-pill">
       {% if user.avatar %}
-      <img class="avatar" src="https://cdn.discordapp.com/avatars/{{ user.id }}/{{ user.avatar }}.png" alt="Avatar">
+      <img src="https://cdn.discordapp.com/avatars/{{ user.id }}/{{ user.avatar }}.png" class="avatar" alt="Avatar">
       {% else %}
       <div class="avatar"></div>
       {% endif %}
       <span class="username">{{ user.global_name or user.username }}</span>
-      <a href="/logout" class="btn-logout">ログアウト</a>
+      <a href="/logout" class="btn-logout" title="ログアウト">退室</a>
     </div>
   </header>
 
   <main>
-    <!-- Webマイク開始バナー -->
-    <div class="card banner-mic">
-      <div>
-        <h2>Webマイクで音声認識を開始</h2>
-        <p>ブラウザのマイクから音声をリアルタイム送信し、OBS へ字幕を届けます。</p>
-      </div>
-      <a href="/mic" target="_blank" class="btn-mic-start">🎙️ マイク画面を開く</a>
-    </div>
-
-    <!-- OBS 字幕用 URL -->
+    <!-- 1. クイックアクション & OBS URL -->
     <div class="card">
-      <h3 class="card-title">📺 あなた専用の OBS 字幕 URL</h3>
-      <p class="card-desc">
-        OBS Studio の「ブラウザソース」を作成し、以下の URL を貼り付けてください。<br>
-        あなた専用の秘密トークンが含まれており、あなたの発話のみが透過字幕として表示されます。
-      </p>
+      <div class="card-title">📡 OBS ブラウザソース用 字幕 URL</div>
+      <div class="card-desc">
+        以下の専用 URL をコピーして OBS の「ブラウザ」ソースに追加してください。あなた専用の字幕が透過表示されます。
+      </div>
       <div class="url-box">
-        <input type="text" id="obs-url" class="url-input" value="{{ obs_url }}" readonly>
-        <button class="btn-copy" onclick="copyObsUrl()">📋 コピー</button>
+        <input type="text" id="obs-url-input" class="url-input" value="{{ obs_url }}" readonly>
+        <button onclick="copyObsUrl()" class="btn-secondary" id="btn-copy">📋 コピー</button>
+        <button onclick="regenerateToken()" class="btn-secondary" title="URL が漏洩した場合に再発行します">🔄 再生成</button>
       </div>
-      <button class="btn-regen" onclick="regenerateToken()">🔄 トークンを再生成（URLを変更）</button>
+      <div style="display: flex; gap: 1rem; align-items: center; margin-top: 1rem;">
+        <a href="/mic" target="_blank" class="btn-primary" style="background: linear-gradient(135deg, #3b82f6, #8b5cf6); padding: 0.875rem 1.75rem;">
+          🎤 マイク入力画面を開く
+        </a>
+        <span style="font-size: 0.85rem; color: #94a3b8;">※ マイク画面を開いて喋るだけで、OBS 側に字幕がリアルタイム配信されます</span>
+      </div>
     </div>
 
-    <!-- 個別置換辞書 -->
+    <!-- 2. 字幕スタイルカスタマイザー -->
     <div class="card">
-      <h3 class="card-title">📖 あなた専用の置換辞書</h3>
-      <p class="card-desc">
-        誤認識しやすい固有名詞やゲーム用語、配信者名を登録できます。<br>
-        書式: <code>誤認識語 => 正しい表記</code> (例: <code>ハヤミミ => 早耳</code>, <code>アマンガス => Among Us</code>)
-      </p>
-      <textarea id="dict-input" class="dict-textarea" placeholder="誤認識語 => 正しい表記">{{ dictionary_text }}</textarea>
-      <div>
-        <button class="btn-save-dict" onclick="saveDictionary()">💾 辞書を保存</button>
-        <span id="save-status" class="save-status">✔ 保存しました</span>
+      <div class="card-title">🎨 字幕デザイン・スタイル設定</div>
+      <div class="card-desc">
+        OBS 上に表示される字幕の色、フォント、縁取り、グロー発光、配置をリアルタイムにカスタマイズできます。保存すると OBS 側も即座に切り替わります。
+      </div>
+
+      <!-- リアルタイムプレビュー -->
+      <div class="preview-container">
+        <div id="preview-sub">早耳リアルタイム字幕プレビュー</div>
+      </div>
+
+      <div class="form-grid">
+        <!-- フォント -->
+        <div class="form-group">
+          <label>フォント</label>
+          <select id="style-font" class="form-control" onchange="updatePreview()">
+            <option value="'Zen Kaku Gothic New', sans-serif">Zen Kaku Gothic New (標準・見やすい)</option>
+            <option value="'M PLUS Rounded 1c', sans-serif">M PLUS Rounded 1c (かわいい丸ゴシック)</option>
+            <option value="'Noto Sans JP', sans-serif">Noto Sans JP (汎用ゴシック)</option>
+            <option value="'Dela Gothic One', sans-serif">Dela Gothic One (極太インパクト・配信向け)</option>
+            <option value="'DotGothic16', sans-serif">DotGothic16 (レトロドット絵風)</option>
+            <option value="'Kiwi Maru', serif">Kiwi Maru (丸みのある明朝風)</option>
+            <option value="'Shippori Mincho B1', serif">Shippori Mincho (美麗な明朝体)</option>
+            <option value="'Yuji Boku', serif">Yuji Boku (毛筆・和風)</option>
+            <option value="'Rampart One', cursive">Rampart One (ブロック立体風)</option>
+            <option value="'Reggae One', cursive">Reggae One (リズミカルポップ)</option>
+            <option value="'IBM Plex Sans JP', sans-serif">IBM Plex Sans JP (スマート)</option>
+            <option value="'Bungee', cursive">Bungee (英語・ポップ)</option>
+            <option value="sans-serif">システム標準 (sans-serif)</option>
+          </select>
+        </div>
+
+        <!-- 文字サイズ -->
+        <div class="form-group">
+          <label>文字サイズ</label>
+          <div class="range-wrap">
+            <input type="range" id="style-size" min="20" max="90" value="{{ style.size }}" oninput="updatePreview()">
+            <span class="range-val" id="val-size">{{ style.size }}px</span>
+          </div>
+        </div>
+
+        <!-- 文字色 -->
+        <div class="form-group">
+          <label>文字色</label>
+          <div class="color-picker-wrap">
+            <input type="color" id="style-color" value="{{ style.color }}" oninput="updatePreview()">
+            <input type="text" id="style-color-hex" class="form-control" value="{{ style.color }}" oninput="syncColorInput('style-color', this.value)">
+          </div>
+        </div>
+
+        <!-- エフェクト種別 -->
+        <div class="form-group">
+          <label>エフェクト種別</label>
+          <div class="radio-group" style="margin-top: 0.4rem;">
+            <label class="radio-label"><input type="radio" name="effect" value="stroke" onchange="updatePreview()" {% if style.effect == 'stroke' %}checked{% endif %}> 単色縁取り</label>
+            <label class="radio-label"><input type="radio" name="effect" value="double" onchange="updatePreview()" {% if style.effect == 'double' %}checked{% endif %}> 二重縁取り</label>
+            <label class="radio-label"><input type="radio" name="effect" value="glow" onchange="updatePreview()" {% if style.effect == 'glow' %}checked{% endif %}> 発光 (Glow)</label>
+          </div>
+        </div>
+
+        <!-- 縁取り色 -->
+        <div class="form-group">
+          <label>縁取り・発光色</label>
+          <div class="color-picker-wrap">
+            <input type="color" id="style-stroke-color" value="{{ style.strokeColor }}" oninput="updatePreview()">
+            <input type="text" id="style-stroke-color-hex" class="form-control" value="{{ style.strokeColor }}" oninput="syncColorInput('style-stroke-color', this.value)">
+          </div>
+        </div>
+
+        <!-- 縁取り太さ -->
+        <div class="form-group">
+          <label>縁取り太さ / 発光半径</label>
+          <div class="range-wrap">
+            <input type="range" id="style-stroke-width" min="0" max="12" step="0.5" value="{{ style.strokeWidth }}" oninput="updatePreview()">
+            <span class="range-val" id="val-stroke-width">{{ style.strokeWidth }}px</span>
+          </div>
+        </div>
+
+        <!-- 配置 -->
+        <div class="form-group">
+          <label>テキスト配置</label>
+          <select id="style-align" class="form-control" onchange="updatePreview()">
+            <option value="center" {% if style.align == 'center' %}selected{% endif %}>中央揃え</option>
+            <option value="left" {% if style.align == 'left' %}selected{% endif %}>左揃え</option>
+            <option value="right" {% if style.align == 'right' %}selected{% endif %}>右揃え</option>
+          </select>
+        </div>
+
+        <!-- 画面下部余白 -->
+        <div class="form-group">
+          <label>画面下部からの余白 (vh)</label>
+          <div class="range-wrap">
+            <input type="range" id="style-bottom" min="0" max="30" step="1" value="{{ style.bottom }}" oninput="updatePreview()">
+            <span class="range-val" id="val-bottom">{{ style.bottom }}%</span>
+          </div>
+        </div>
+
+        <!-- 背景不透明度 -->
+        <div class="form-group">
+          <label>背景の不透明度 (0で透明)</label>
+          <div class="range-wrap">
+            <input type="range" id="style-bg-opacity" min="0" max="100" step="5" value="{{ style.bgOpacity }}" oninput="updatePreview()">
+            <span class="range-val" id="val-bg-opacity">{{ style.bgOpacity }}%</span>
+          </div>
+        </div>
+      </div>
+
+      <button onclick="saveStyle()" class="btn-primary">💾 スタイルを保存 & OBS に反映</button>
+    </div>
+
+    <!-- 3. ASR オプション設定 -->
+    <div class="card">
+      <div class="card-title">⚙️ 音声認識オプション (句読点 & 数値正規化)</div>
+      <div class="card-desc">
+        音声認識結果の後処理パイプライン設定です。
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+        <div class="switch-wrap">
+          <div>
+            <div class="switch-title">句読点の自動付与 (Mojicast ONNX)</div>
+            <div class="switch-desc">文末や文中に自然な「、」「。」を自動挿入します</div>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="setting-punct" {% if settings.enable_punct %}checked{% endif %} onchange="saveSettings()">
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="switch-wrap">
+          <div>
+            <div class="switch-title">数値・日付・単位の自動変換 (ITN)</div>
+            <div class="switch-desc">「三千円」➔「3,000円」、「十五日」➔「15日」のように漢数字を数字表記に変換します</div>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="setting-itn" {% if settings.enable_itn %}checked{% endif %} onchange="saveSettings()">
+            <span class="slider"></span>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <!-- 4. YouTube から辞書を自動生成 (Gemini Multimodal) -->
+    <div class="card">
+      <div class="card-title">🧠 YouTube から辞書を自動生成・育成 (Gemini 連携)</div>
+      <div class="card-desc">
+        YouTube の動画、再生リスト、またはチャンネル URL を入力すると、Gemini が配信特有の固有名詞・口癖・ゲーム用語を自動抽出し、下の置換辞書に自動追加します。
+      </div>
+
+      <!-- Gemini API キー設定 -->
+      <div style="background: #0f1117; border: 1px solid #232736; border-radius: 8px; padding: 1rem; margin-bottom: 1.25rem;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+          <label style="font-size: 0.85rem; font-weight: 600; color: #cbd5e1;">Google AI Studio Gemini API キー (無料)</label>
+          <a href="https://aistudio.google.com/app/apikey" target="_blank" style="font-size: 0.8rem; color: #38bdf8; text-decoration: none;">🔑 API キーを無料で取得 ↗</a>
+        </div>
+        <div style="display: flex; gap: 0.5rem;">
+          <input type="password" id="gemini-key-input" class="form-control" placeholder="{{ masked_key if has_gemini_key else 'AIzaSy...' }}" style="flex: 1;">
+          <button onclick="saveGeminiKey()" class="btn-secondary">保存</button>
+          <button onclick="testGeminiKey()" class="btn-secondary">接続テスト</button>
+        </div>
+        <span id="gemini-key-status" style="font-size: 0.8rem; color: #94a3b8; display: block; margin-top: 0.35rem;">
+          {% if has_gemini_key %}✔ API キー登録済み ({{ masked_key }}){% else %}※ YouTube 辞書生成を利用するには API キーが必要です{% endif %}
+        </span>
+      </div>
+
+      <!-- YouTube URL 入力 & 生成 -->
+      <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+        <div class="form-group">
+          <label>YouTube URL (動画 / 再生リスト / チャンネル)</label>
+          <input type="text" id="yt-url-input" class="form-control" placeholder="https://www.youtube.com/watch?v=... またはチャンネルURL">
+        </div>
+
+        <div style="display: flex; gap: 1rem; align-items: center;">
+          <div class="form-group" style="width: 140px;">
+            <label>解析動画数</label>
+            <select id="yt-max-videos" class="form-control">
+              <option value="1">1 本</option>
+              <option value="3" selected>3 本</option>
+              <option value="5">5 本</option>
+              <option value="10">10 本 (多め)</option>
+            </select>
+          </div>
+          <button onclick="startYouTubeGrow()" id="btn-yt-grow" class="btn-primary" style="margin-top: 1.3rem;">
+            🚀 辞書を自動生成・育成する
+          </button>
+        </div>
+      </div>
+
+      <!-- 進捗ログ & プログレスバー -->
+      <div id="yt-progress-area" style="display: none; margin-top: 1.25rem;">
+        <div style="display: flex; justify-content: space-between; font-size: 0.85rem; color: #cbd5e1;">
+          <span id="yt-status-msg">タスク準備中...</span>
+          <span id="yt-prog-percent">0%</span>
+        </div>
+        <div class="progress-bar-bg">
+          <div id="yt-prog-bar" class="progress-bar-fill"></div>
+        </div>
+        <div id="yt-terminal" class="log-terminal">ログ出力を待機中...</div>
+      </div>
+    </div>
+
+    <!-- 5. 置換辞書エディタ -->
+    <div class="card">
+      <div class="card-title">📖 個別置換辞書 (単語登録)</div>
+      <div class="card-desc">
+        誤認識しやすい固有名詞や単語の置換ルールを設定します。1行に <code>誤認識語 => 正しい表記</code> の形式で入力してください。
+      </div>
+      <textarea id="dict-textarea" class="dict-box" spellcheck="false">{{ dictionary_text }}</textarea>
+      <div style="margin-top: 1rem; display: flex; justify-content: space-between; align-items: center;">
+        <button onclick="saveDictionary()" class="btn-primary">💾 辞書を保存</button>
+        <span style="font-size: 0.85rem; color: #64748b;">例: はやみみ => 早耳</span>
       </div>
     </div>
   </main>
 
+  <div id="toast" class="toast">保存しました！</div>
+
   <script>
+    function showToast(msg) {
+      const toast = document.getElementById('toast');
+      toast.textContent = msg || '保存しました！';
+      toast.classList.add('show');
+      setTimeout(() => toast.classList.remove('show'), 2500);
+    }
+
     function copyObsUrl() {
-      const input = document.getElementById('obs-url');
+      const input = document.getElementById('obs-url-input');
       input.select();
       navigator.clipboard.writeText(input.value).then(() => {
-        alert('OBS 字幕 URL をクリップボードにコピーしました！\nOBS のブラウザソースに貼り付けてください。');
+        showToast('OBS URL をコピーしました！');
       });
     }
 
     async function regenerateToken() {
-      if (!confirm('OBS トークンを再生成しますか？\n既存の OBS ブラウザソースの URL を更新する必要があります。')) {
-        return;
-      }
+      if (!confirm('OBS 字幕 URL を再生成しますか？古い URL は即座に使えなくなります。')) return;
       try {
         const res = await fetch('/api/regenerate-token', { method: 'POST' });
         const data = await res.json();
         if (data.ok) {
-          document.getElementById('obs-url').value = data.new_obs_url;
-          alert('新しい OBS URL が発行されました！');
+          document.getElementById('obs-url-input').value = data.new_obs_url;
+          showToast('新 URL を再生成しました！');
         }
       } catch (e) {
         alert('再生成に失敗しました: ' + e);
       }
     }
 
+    // -------------------------------------------------------------
+    // スタイルプレビュー & 保存
+    // -------------------------------------------------------------
+    function hexToRgba(hex, alphaPercent) {
+      hex = (hex || "#000000").replace("#", "");
+      if (hex.length === 3) hex = hex.split("").map(c => c+c).join("");
+      const r = parseInt(hex.substring(0, 2), 16) || 0;
+      const g = parseInt(hex.substring(2, 4), 16) || 0;
+      const b = parseInt(hex.substring(4, 6), 16) || 0;
+      return `rgba(${r}, ${g}, ${b}, ${(alphaPercent || 0) / 100})`;
+    }
+
+    function generateTextShadow(color, width, effect) {
+      if (width <= 0) return "none";
+      if (effect === "glow") {
+        return `0 0 ${width * 2}px ${color}, 0 0 ${width * 4}px ${color}, 0 0 ${width * 7}px ${color}`;
+      }
+      if (effect === "double") {
+        let s = [];
+        for (let x = -width; x <= width; x++) {
+          for (let y = -width; y <= width; y++) {
+            if (x !== 0 || y !== 0) s.push(`${x}px ${y}px 0 #000000`);
+          }
+        }
+        const w2 = width + 2;
+        for (let x = -w2; x <= w2; x += 2) {
+          for (let y = -w2; y <= w2; y += 2) {
+            s.push(`${x}px ${y}px 0 ${color}`);
+          }
+        }
+        s.push(`0 0 ${w2 * 2}px ${color}`);
+        return s.join(", ");
+      }
+      let s = [];
+      for (let x = -width; x <= width; x++) {
+        for (let y = -width; y <= width; y++) {
+          if (x !== 0 || y !== 0) s.push(`${x}px ${y}px 0 ${color}`);
+        }
+      }
+      s.push(`0 0 ${width * 2}px ${color}`);
+      return s.join(", ");
+    }
+
+    function syncColorInput(pickerId, hex) {
+      if (/^#[0-9a-fA-F]{6}$/.test(hex)) {
+        document.getElementById(pickerId).value = hex;
+        updatePreview();
+      }
+    }
+
+    function getStyleFromForm() {
+      const font = document.getElementById('style-font').value;
+      const size = parseInt(document.getElementById('style-size').value);
+      const color = document.getElementById('style-color').value;
+      const strokeColor = document.getElementById('style-stroke-color').value;
+      const strokeWidth = parseFloat(document.getElementById('style-stroke-width').value);
+      const effect = document.querySelector('input[name="effect"]:checked').value;
+      const align = document.getElementById('style-align').value;
+      const bottom = parseFloat(document.getElementById('style-bottom').value);
+      const bgOpacity = parseInt(document.getElementById('style-bg-opacity').value);
+
+      return {
+        font, size, color, strokeColor, strokeWidth, effect, align, bottom, bgOpacity,
+        bgColor: "#000000", radius: 8
+      };
+    }
+
+    function updatePreview() {
+      const s = getStyleFromForm();
+      document.getElementById('val-size').textContent = s.size + 'px';
+      document.getElementById('val-stroke-width').textContent = s.strokeWidth + 'px';
+      document.getElementById('val-bottom').textContent = s.bottom + '%';
+      document.getElementById('val-bg-opacity').textContent = s.bgOpacity + '%';
+      document.getElementById('style-color-hex').value = s.color;
+      document.getElementById('style-stroke-color-hex').value = s.strokeColor;
+
+      const p = document.getElementById('preview-sub');
+      p.style.fontFamily = s.font;
+      p.style.fontSize = Math.min(s.size, 52) + 'px';
+      p.style.color = s.color;
+      p.style.fontWeight = '800';
+      p.style.textShadow = generateTextShadow(s.strokeColor, s.strokeWidth, s.effect);
+
+      if (s.bgOpacity > 0) {
+        p.style.backgroundColor = hexToRgba('#000000', s.bgOpacity);
+        p.style.padding = '8px 20px';
+        p.style.borderRadius = '8px';
+      } else {
+        p.style.backgroundColor = 'transparent';
+        p.style.padding = '0';
+      }
+    }
+
+    async function saveStyle() {
+      const s = getStyleFromForm();
+      try {
+        const res = await fetch('/api/style', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(s)
+        });
+        const data = await res.json();
+        if (data.ok) {
+          showToast('字幕スタイルを保存し、OBS に反映しました！');
+        }
+      } catch (e) {
+        alert('スタイルの保存に失敗しました: ' + e);
+      }
+    }
+
+    // -------------------------------------------------------------
+    // ASR オプション保存
+    // -------------------------------------------------------------
+    async function saveSettings() {
+      const enable_punct = document.getElementById('setting-punct').checked;
+      const enable_itn = document.getElementById('setting-itn').checked;
+      try {
+        await fetch('/api/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enable_punct, enable_itn })
+        });
+        showToast('ASR オプション設定を保存しました');
+      } catch (e) {
+        alert('設定保存エラー: ' + e);
+      }
+    }
+
+    // -------------------------------------------------------------
+    // Gemini API キー管理
+    // -------------------------------------------------------------
+    async function saveGeminiKey() {
+      const key = document.getElementById('gemini-key-input').value.trim();
+      if (!key) return;
+      try {
+        const res = await fetch('/api/gemini-key', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ api_key: key })
+        });
+        const data = await res.json();
+        if (data.ok) {
+          document.getElementById('gemini-key-input').value = '';
+          document.getElementById('gemini-key-status').textContent = '✔ API キーを保存しました！';
+          document.getElementById('gemini-key-status').style.color = '#34d399';
+          showToast('Gemini API キーを保存しました');
+        }
+      } catch (e) {
+        alert('API キー保存失敗: ' + e);
+      }
+    }
+
+    async function testGeminiKey() {
+      const statusEl = document.getElementById('gemini-key-status');
+      statusEl.textContent = '接続テスト中...';
+      statusEl.style.color = '#38bdf8';
+      try {
+        const res = await fetch('/api/gemini-key/test', { method: 'POST' });
+        const data = await res.json();
+        if (data.ok) {
+          statusEl.textContent = data.message;
+          statusEl.style.color = '#34d399';
+          showToast('Gemini 接続テスト成功！');
+        } else {
+          statusEl.textContent = '❌ ' + data.error;
+          statusEl.style.color = '#f87171';
+        }
+      } catch (e) {
+        statusEl.textContent = '❌ 通信エラー: ' + e;
+        statusEl.style.color = '#f87171';
+      }
+    }
+
+    // -------------------------------------------------------------
+    // YouTube 辞書自動生成
+    // -------------------------------------------------------------
+    let pollTimer = null;
+
+    async function startYouTubeGrow() {
+      const url = document.getElementById('yt-url-input').value.trim();
+      const maxVideos = parseInt(document.getElementById('yt-max-videos').value);
+      if (!url) {
+        alert('YouTube URL を入力してください');
+        return;
+      }
+
+      const btn = document.getElementById('btn-yt-grow');
+      btn.disabled = true;
+      btn.textContent = '⏳ 解析実行中...';
+
+      const progressArea = document.getElementById('yt-progress-area');
+      progressArea.style.display = 'block';
+
+      try {
+        const res = await fetch('/api/youtube-grow', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url, max_videos: maxVideos })
+        });
+        const data = await res.json();
+        if (!data.ok) {
+          alert(data.error);
+          btn.disabled = false;
+          btn.textContent = '🚀 辞書を自動生成・育成する';
+          return;
+        }
+
+        // ポーリング開始
+        pollProgress();
+      } catch (e) {
+        alert('リクエスト送信エラー: ' + e);
+        btn.disabled = false;
+        btn.textContent = '🚀 辞書を自動生成・育成する';
+      }
+    }
+
+    async function pollProgress() {
+      if (pollTimer) clearTimeout(pollTimer);
+      try {
+        const res = await fetch('/api/youtube-grow/status');
+        const data = await res.json();
+        if (data.ok && data.task) {
+          const t = data.task;
+          const pct = Math.round((t.progress || 0) * 100);
+          document.getElementById('yt-prog-percent').textContent = pct + '%';
+          document.getElementById('yt-prog-bar').style.width = pct + '%';
+          document.getElementById('yt-status-msg').textContent = t.message || '';
+
+          if (t.logs && t.logs.length) {
+            const term = document.getElementById('yt-terminal');
+            term.textContent = t.logs.join('\n');
+            term.scrollTop = term.scrollHeight;
+          }
+
+          if (t.status === 'completed') {
+            document.getElementById('btn-yt-grow').disabled = false;
+            document.getElementById('btn-yt-grow').textContent = '🚀 辞書を自動生成・育成する';
+            showToast('辞書育成が完了しました！');
+            // 辞書テキストエリアを自動リフレッシュ
+            reloadDictionary();
+            return;
+          } else if (t.status === 'error') {
+            document.getElementById('btn-yt-grow').disabled = false;
+            document.getElementById('btn-yt-grow').textContent = '🚀 辞書を自動生成・育成する';
+            return;
+          }
+        }
+      } catch (e) {}
+
+      pollTimer = setTimeout(pollProgress, 2000);
+    }
+
+    async function reloadDictionary() {
+      try {
+        const res = await fetch('/');
+        const html = await res.text();
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        const newText = doc.getElementById('dict-textarea').value;
+        document.getElementById('dict-textarea').value = newText;
+      } catch (e) {}
+    }
+
+    // -------------------------------------------------------------
+    // 置換辞書保存
+    // -------------------------------------------------------------
     async function saveDictionary() {
-      const text = document.getElementById('dict-input').value;
-      const status = document.getElementById('save-status');
+      const text = document.getElementById('dict-textarea').value;
       try {
         const res = await fetch('/api/dictionary', {
           method: 'POST',
@@ -303,15 +893,15 @@
         });
         const data = await res.json();
         if (data.ok) {
-          status.style.display = 'inline';
-          setTimeout(() => { status.style.display = 'none'; }, 2500);
-        } else {
-          alert('保存エラー: ' + (data.message || '不明'));
+          showToast('置換辞書を保存しました！');
         }
       } catch (e) {
-        alert('通信エラー: ' + e);
+        alert('辞書保存エラー: ' + e);
       }
     }
+
+    // 初期プレビュー描画
+    updatePreview();
   </script>
 </body>
 </html>

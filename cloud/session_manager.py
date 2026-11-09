@@ -9,10 +9,75 @@ import json
 import logging
 import os
 import secrets
-from typing import Dict, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 from cloud.config import DATA_DIR
 
 logger = logging.getLogger("hayamimi.cloud.session")
+
+DEFAULT_OVERLAY_STYLE: Dict[str, Any] = {
+    "font": "'Zen Kaku Gothic New', sans-serif",
+    "size": 42,
+    "color": "#ffffff",
+    "strokeColor": "#000000",
+    "strokeWidth": 3.0,
+    "effect": "stroke",  # "stroke" | "double" | "glow"
+    "align": "center",   # "left" | "center" | "right"
+    "bottom": 4.0,       # vh
+    "bgColor": "#000000",
+    "bgOpacity": 0,      # 0 to 100%
+    "radius": 8,         # px
+}
+
+DEFAULT_SETTINGS: Dict[str, Any] = {
+    "enable_punct": True,
+    "enable_itn": True,
+}
+
+
+def sanitize_style(style: dict) -> dict:
+    """スタイル辞書のバリデーションとクランプ"""
+    res = dict(DEFAULT_OVERLAY_STYLE)
+    if not isinstance(style, dict):
+        return res
+
+    if "font" in style and isinstance(style["font"], str):
+        res["font"] = style["font"][:100]
+    if "size" in style:
+        try:
+            res["size"] = max(12, min(160, int(style["size"])))
+        except (ValueError, TypeError):
+            pass
+    if "color" in style and isinstance(style["color"], str):
+        res["color"] = style["color"][:20]
+    if "strokeColor" in style and isinstance(style["strokeColor"], str):
+        res["strokeColor"] = style["strokeColor"][:20]
+    if "strokeWidth" in style:
+        try:
+            res["strokeWidth"] = max(0.0, min(20.0, float(style["strokeWidth"])))
+        except (ValueError, TypeError):
+            pass
+    if "effect" in style and style["effect"] in ("stroke", "double", "glow"):
+        res["effect"] = style["effect"]
+    if "align" in style and style["align"] in ("left", "center", "right"):
+        res["align"] = style["align"]
+    if "bottom" in style:
+        try:
+            res["bottom"] = max(0.0, min(50.0, float(style["bottom"])))
+        except (ValueError, TypeError):
+            pass
+    if "bgColor" in style and isinstance(style["bgColor"], str):
+        res["bgColor"] = style["bgColor"][:20]
+    if "bgOpacity" in style:
+        try:
+            res["bgOpacity"] = max(0, min(100, int(style["bgOpacity"])))
+        except (ValueError, TypeError):
+            pass
+    if "radius" in style:
+        try:
+            res["radius"] = max(0, min(50, int(style["radius"])))
+        except (ValueError, TypeError):
+            pass
+    return res
 
 
 class UserSession:
@@ -27,6 +92,8 @@ class UserSession:
 
         self.obs_token: str = self._load_or_create_obs_token()
         self.replacements: list[tuple[str, str]] = self._load_replacements()
+        self.style: Dict[str, Any] = self._load_style()
+        self.settings: Dict[str, Any] = self._load_settings()
         self.obs_subscribers: Set[asyncio.Queue] = set()
         self.last_transcript: str = ""
 
@@ -112,6 +179,121 @@ class UserSession:
             if src and src in result:
                 result = result.replace(src, dst)
         return result
+
+    def append_replacements(self, new_rules: List[tuple[str, str]]) -> int:
+        """新しい置換ルールを replace.txt に追記（重複排除）し、追加件数を返す"""
+        if not new_rules:
+            return 0
+        existing_srcs = {src for src, _ in self.replacements}
+        added = []
+        for src, dst in new_rules:
+            src = src.strip()
+            dst = dst.strip()
+            if not src or not dst or src in existing_srcs:
+                continue
+            added.append((src, dst))
+            existing_srcs.add(src)
+
+        if not added:
+            return 0
+
+        rep_path = os.path.join(self.user_dir, "replace.txt")
+        with open(rep_path, "a", encoding="utf-8") as f:
+            f.write("\n# YouTube 自動抽出ルール\n")
+            for src, dst in added:
+                f.write(f"{src} => {dst}\n")
+
+        self.replacements = self._load_replacements()
+        return len(added)
+
+    def _load_style(self) -> Dict[str, Any]:
+        """ユーザー専用字幕スタイル (style.json) をロードする"""
+        path = os.path.join(self.user_dir, "style.json")
+        if os.path.isfile(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    return sanitize_style(data)
+            except Exception as e:
+                logger.warning("Failed to load style.json for %s: %s", self.user_id, e)
+        return dict(DEFAULT_OVERLAY_STYLE)
+
+    def save_style(self, style: dict) -> Dict[str, Any]:
+        """スタイルを保存し、メモリを更新して OBS へ通知する"""
+        sanitized = sanitize_style(style)
+        path = os.path.join(self.user_dir, "style.json")
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(sanitized, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error("Failed to save style.json for %s: %s", self.user_id, e)
+
+        self.style = sanitized
+        return sanitized
+
+    async def broadcast_style(self) -> None:
+        """接続中の OBS クライアントにスタイル変更を通知して即時反映させる"""
+        payload = {
+            "type": "style",
+            "style": self.style,
+            "user_id": self.user_id,
+        }
+        event_str = f"event: message\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        dead_queues = []
+        for q in list(self.obs_subscribers):
+            try:
+                q.put_nowait(event_str)
+            except asyncio.QueueFull:
+                dead_queues.append(q)
+        for q in dead_queues:
+            self.obs_subscribers.discard(q)
+
+    def _load_settings(self) -> Dict[str, Any]:
+        """ASR 設定 (settings.json: 句読点・ITN 等) をロードする"""
+        path = os.path.join(self.user_dir, "settings.json")
+        if os.path.isfile(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    return {**DEFAULT_SETTINGS, **data}
+            except Exception as e:
+                logger.warning("Failed to load settings.json for %s: %s", self.user_id, e)
+        return dict(DEFAULT_SETTINGS)
+
+    def save_settings(self, settings: dict) -> Dict[str, Any]:
+        """ASR 設定を保存する"""
+        cur = dict(self.settings)
+        if "enable_punct" in settings:
+            cur["enable_punct"] = bool(settings["enable_punct"])
+        if "enable_itn" in settings:
+            cur["enable_itn"] = bool(settings["enable_itn"])
+
+        path = os.path.join(self.user_dir, "settings.json")
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(cur, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error("Failed to save settings.json for %s: %s", self.user_id, e)
+
+        self.settings = cur
+        return cur
+
+    def get_gemini_key(self) -> str:
+        """ユーザーの Gemini API キーを取得する"""
+        path = os.path.join(self.user_dir, "gemini_key.txt")
+        if os.path.isfile(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    return f.read().strip()
+            except Exception:
+                pass
+        return ""
+
+    def save_gemini_key(self, key: str) -> None:
+        """ユーザーの Gemini API キーを安全に保存する"""
+        path = os.path.join(self.user_dir, "gemini_key.txt")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(key.strip())
 
     def subscribe_obs(self) -> asyncio.Queue:
         """OBS ブラウザソース用の SSE キューを登録する"""
@@ -201,3 +383,4 @@ class SessionManager:
 
 # シングルトンインスタンス
 session_manager = SessionManager()
+
