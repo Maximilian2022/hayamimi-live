@@ -7,6 +7,9 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:8833:8833"
+    environment:
+      - HAYAMIMI_DATA_DIR=/app/data
+      - HAYAMIMI_MODELS_DIR=/app/models
     env_file:
       - .env
     volumes:

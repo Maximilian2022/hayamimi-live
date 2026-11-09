@@ -50,6 +50,24 @@ ADMIN_DISCORD_ID: str = "310034034690359308"
 # ディレクトリパス
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BASE_DIR)
-DATA_DIR: str = os.getenv("HAYAMIMI_DATA_DIR", os.path.join(BASE_DIR, "data"))
+DATA_DIR: str = os.getenv("HAYAMIMI_DATA_DIR", os.path.join(PROJECT_ROOT, "data"))
 MODELS_DIR: str = os.getenv("HAYAMIMI_MODELS_DIR", os.path.join(PROJECT_ROOT, "models"))
+
+# レガシーパスからの自動マイグレーション (/app/cloud/data -> /app/data)
+_legacy_data = os.path.join(BASE_DIR, "data")
+if os.path.isdir(_legacy_data) and _legacy_data != DATA_DIR:
+    import shutil
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        for item in os.listdir(_legacy_data):
+            s = os.path.join(_legacy_data, item)
+            d = os.path.join(DATA_DIR, item)
+            if not os.path.exists(d):
+                if os.path.isdir(s):
+                    shutil.copytree(s, d)
+                else:
+                    shutil.copy2(s, d)
+    except Exception as _e:
+        pass
+
 
