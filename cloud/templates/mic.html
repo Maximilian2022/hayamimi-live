@@ -364,11 +364,25 @@
 
     .feed-list {
       display: flex;
-      flex-direction: column-reverse;
+      flex-direction: column;
       gap: 0.6rem;
-      max-height: 380px;
+      max-height: 420px;
       overflow-y: auto;
       padding-right: 4px;
+    }
+    .feed-list::-webkit-scrollbar {
+      width: 6px;
+    }
+    .feed-list::-webkit-scrollbar-track {
+      background: rgba(0, 0, 0, 0.2);
+      border-radius: 3px;
+    }
+    .feed-list::-webkit-scrollbar-thumb {
+      background: #2a2f3a;
+      border-radius: 3px;
+    }
+    .feed-list::-webkit-scrollbar-thumb:hover {
+      background: var(--line);
     }
     .feed-item {
       padding: 0.75rem 1rem;
@@ -1805,20 +1819,24 @@
           latChip.title = `発話終了〜字幕表示: ${perceivedResponseMs}ms (サーバー処理: ${serverMs}ms [ASR: ${asrMs}ms] / 回線RTT: ${netMs}ms)`;
         }
 
-        appendFinalTranscript(data.text, meta);
+        appendFinalTranscript(data.text, meta, data.seq);
       } else {
         pLive.classList.remove("idle");
         pLive.innerHTML = escapeHtml(data.text) + '<span class="caret"></span>';
       }
     } else if (data.type === "translation") {
-      appendTranslation(data.lang, data.text);
+      appendTranslation(data.lang, data.text, data.seq, data.original);
     }
   }
 
-  function appendFinalTranscript(text, meta) {
+  function appendFinalTranscript(text, meta, seq) {
     const feed = document.getElementById("final-feed");
     const item = document.createElement("div");
     item.className = "feed-item";
+    if (seq != null) {
+      item.dataset.seq = seq;
+    }
+    item.dataset.text = text;
     const now = new Date().toLocaleTimeString();
 
     let latBadge = "";
@@ -1834,19 +1852,53 @@
       <div class="feed-text">${escapeHtml(text)}</div>
       <div class="feed-trans-container"></div>
     `;
+    // 最新が常に一番上に来るように prepend
     feed.prepend(item);
+
+    // 最大件数 (50件) を超えたら古いログ (下端) を自動削除
+    while (feed.children.length > 50) {
+      feed.removeChild(feed.lastElementChild);
+    }
+
+    // 常に最新の一番上が見えるようにスクロール位置を最上部に
+    feed.scrollTop = 0;
   }
 
-  function appendTranslation(lang, transText) {
+  function appendTranslation(lang, transText, seq, originalText) {
     const feed = document.getElementById("final-feed");
-    const firstItem = feed.firstElementChild;
-    if (!firstItem) return;
-    const transContainer = firstItem.querySelector(".feed-trans-container");
+    let targetItem = null;
+
+    if (seq != null) {
+      targetItem = feed.querySelector(`.feed-item[data-seq="${seq}"]`);
+    }
+    if (!targetItem && originalText) {
+      const items = feed.querySelectorAll('.feed-item');
+      for (const it of items) {
+        if (it.dataset.text === originalText) {
+          targetItem = it;
+          break;
+        }
+      }
+    }
+    if (!targetItem) {
+      targetItem = feed.firstElementChild;
+    }
+    if (!targetItem) return;
+
+    const transContainer = targetItem.querySelector(".feed-trans-container");
     if (!transContainer) return;
-    const tDiv = document.createElement("div");
-    tDiv.className = "feed-trans";
-    tDiv.textContent = `→ [${lang}] ${transText}`;
-    transContainer.appendChild(tDiv);
+
+    // 重複防止: 同じ言語の翻訳があれば差し替え、なければ追加
+    const existing = transContainer.querySelector(`[data-lang="${lang}"]`);
+    if (existing) {
+      existing.textContent = `→ [${lang}] ${transText}`;
+    } else {
+      const tDiv = document.createElement("div");
+      tDiv.className = "feed-trans";
+      tDiv.dataset.lang = lang;
+      tDiv.textContent = `→ [${lang}] ${transText}`;
+      transContainer.appendChild(tDiv);
+    }
   }
 
   function escapeHtml(s) {

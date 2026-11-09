@@ -603,6 +603,7 @@ async def websocket_mic_endpoint(websocket: WebSocket):
 
     # イベントループへの安全な非同期コールバック
     loop = asyncio.get_running_loop()
+    utterance_counter = 0
 
     # 初期エンジン情報を通知
     asr_model = u_sess.settings.get("asr_model", "haas")
@@ -613,20 +614,27 @@ async def websocket_mic_endpoint(websocket: WebSocket):
         "name": model_disp,
     })
 
-    async def _handle_async_translation(text: str, target_langs: list, gemini_key: str):
+    async def _handle_async_translation(text: str, target_langs: list, gemini_key: str, seq: int):
         for lang in target_langs:
             try:
                 trans_text = await loop.run_in_executor(None, translate_text, text, lang, gemini_key)
                 if trans_text:
                     await u_sess.broadcast_translation(lang, trans_text, original=text)
                     try:
-                        await websocket.send_json({"type": "translation", "lang": lang, "text": trans_text})
+                        await websocket.send_json({
+                            "type": "translation",
+                            "lang": lang,
+                            "text": trans_text,
+                            "seq": seq,
+                            "original": text,
+                        })
                     except Exception:
                         pass
             except Exception as e:
                 logger.warning("Translation dispatch error for %s: %s", lang, e)
 
     def on_transcript(raw_text: str, is_final: bool = True, has_punct: bool = False, latency_ms: float = 0.0, client_ts: Optional[float] = None):
+        nonlocal utterance_counter
         t_post_start = time.perf_counter()
         processed = raw_text
 
@@ -649,6 +657,11 @@ async def websocket_mic_endpoint(websocket: WebSocket):
         post_ms = (time.perf_counter() - t_post_start) * 1000
         server_total_ms = latency_ms + post_ms
 
+        curr_seq = None
+        if is_final:
+            utterance_counter += 1
+            curr_seq = utterance_counter
+
         # 3. ユーザー固有辞書の適用と OBS への送信
         asyncio.run_coroutine_threadsafe(u_sess.broadcast_transcript(processed, is_final), loop)
 
@@ -659,9 +672,11 @@ async def websocket_mic_endpoint(websocket: WebSocket):
             "text": refined,
             "is_final": is_final,
         }
-        if is_final and server_total_ms > 0:
-            resp_data["latency_ms"] = round(server_total_ms, 1)
-            resp_data["asr_ms"] = round(latency_ms, 1)
+        if is_final:
+            resp_data["seq"] = curr_seq
+            if server_total_ms > 0:
+                resp_data["latency_ms"] = round(server_total_ms, 1)
+                resp_data["asr_ms"] = round(latency_ms, 1)
         if client_ts is not None:
             resp_data["client_ts"] = client_ts
 
@@ -676,7 +691,7 @@ async def websocket_mic_endpoint(websocket: WebSocket):
             gemini_key = u_sess.get_gemini_key()
             if target_langs:
                 asyncio.run_coroutine_threadsafe(
-                    _handle_async_translation(refined, target_langs, gemini_key),
+                    _handle_async_translation(refined, target_langs, gemini_key, curr_seq),
                     loop
                 )
 
