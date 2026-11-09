@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>早耳 クラウドマイク入力</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=M+PLUS+Rounded+1c:wght@500;700&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: #0b0d13;
+      color: #e2e8f0;
+      font-family: 'Inter', 'M PLUS Rounded 1c', sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      background: #151822;
+      border-bottom: 1px solid #232736;
+      padding: 0.75rem 1.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    .btn-back {
+      color: #94a3b8;
+      text-decoration: none;
+      font-size: 0.9rem;
+      display: flex;
+      align-items: center;
+      gap: 0.25rem;
+    }
+    .btn-back:hover { color: #f1f5f9; }
+    .header-title {
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: #f8fafc;
+    }
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.3rem 0.75rem;
+      border-radius: 9999px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      background: #1e293b;
+      color: #94a3b8;
+    }
+    .status-badge.connected {
+      background: rgba(16, 185, 129, 0.2);
+      color: #34d399;
+    }
+    .status-badge.recording {
+      background: rgba(239, 68, 68, 0.2);
+      color: #f87171;
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    main {
+      flex: 1;
+      max-width: 800px;
+      width: 100%;
+      margin: 1.5rem auto;
+      padding: 0 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+    }
+    .card {
+      background: #151822;
+      border: 1px solid #232736;
+      border-radius: 12px;
+      padding: 1.25rem;
+    }
+
+    /* Controls */
+    .controls-row {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+    .btn-record {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: #2563eb;
+      color: #fff;
+      border: none;
+      font-size: 1.05rem;
+      font-weight: 700;
+      padding: 0.75rem 1.75rem;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-record:hover { background: #1d4ed8; }
+    .btn-record.active {
+      background: #dc2626;
+      animation: pulse-red 2s infinite;
+    }
+    @keyframes pulse-red {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.85; }
+    }
+
+    /* VU Meter */
+    .vu-meter-container {
+      flex: 1;
+      min-width: 200px;
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+    }
+    .vu-label {
+      font-size: 0.75rem;
+      color: #94a3b8;
+      display: flex;
+      justify-content: space-between;
+    }
+    .vu-bar-bg {
+      height: 8px;
+      background: #1f2433;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .vu-bar-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #10b981 60%, #f59e0b 85%, #ef4444 100%);
+      transition: width 0.05s ease;
+    }
+
+    /* Transcripts Feed */
+    .feed-container {
+      display: flex;
+      flex-direction: column;
+      height: 420px;
+    }
+    .feed-header {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: #94a3b8;
+      margin-bottom: 0.75rem;
+      display: flex;
+      justify-content: space-between;
+    }
+    .feed-list {
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column-reverse;
+      gap: 0.6rem;
+      background: #0f1117;
+      border: 1px solid #232736;
+      border-radius: 8px;
+      padding: 1rem;
+    }
+    .feed-item {
+      padding: 0.6rem 0.85rem;
+      background: #181c28;
+      border-left: 3px solid #3b82f6;
+      border-radius: 0 6px 6px 0;
+      font-size: 1rem;
+      line-height: 1.5;
+      animation: fadeIn 0.2s ease;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .feed-empty {
+      color: #64748b;
+      font-size: 0.9rem;
+      text-align: center;
+      margin: auto;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="header-left">
+      <a href="/" class="btn-back">◀ ダッシュボード</a>
+      <span class="header-title">Webマイク入力</span>
+    </div>
+    <div id="status-badge" class="status-badge">
+      <span class="status-dot"></span>
+      <span id="status-text">未接続</span>
+    </div>
+  </header>
+
+  <main>
+    <div class="card">
+      <div class="controls-row">
+        <button id="btn-toggle" class="btn-record" onclick="toggleRecording()">
+          <span id="btn-icon">🎙️</span>
+          <span id="btn-text">マイク開始</span>
+        </button>
+
+        <div class="vu-meter-container">
+          <div class="vu-label">
+            <span>マイク音量</span>
+            <span id="vu-val">0%</span>
+          </div>
+          <div class="vu-bar-bg">
+            <div id="vu-fill" class="vu-bar-fill"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card feed-container">
+      <div class="feed-header">
+        <span>リアルタイム認識ログ（最新が上）</span>
+        <span style="font-size: 0.8rem; color: #64748b;">※ OBS にも同時に送信されます</span>
+      </div>
+      <div id="feed-list" class="feed-list">
+        <div id="feed-empty" class="feed-empty">マイクを開始して話すと、ここに字幕が表示されます</div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    let ws = null;
+    let audioCtx = null;
+    let micStream = null;
+    let scriptNode = null;
+    let isRecording = false;
+
+    const statusBadge = document.getElementById('status-badge');
+    const statusText = document.getElementById('status-text');
+    const btnToggle = document.getElementById('btn-toggle');
+    const btnIcon = document.getElementById('btn-icon');
+    const btnText = document.getElementById('btn-text');
+    const vuFill = document.getElementById('vu-fill');
+    const vuVal = document.getElementById('vu-val');
+    const feedList = document.getElementById('feed-list');
+    const feedEmpty = document.getElementById('feed-empty');
+
+    function connectWs() {
+      const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${protocol}//${location.host}/ws/mic`;
+      ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        statusBadge.className = 'status-badge connected';
+        statusText.textContent = '接続完了 (待機中)';
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === 'transcript') {
+            addTranscript(data.text);
+          }
+        } catch (e) {}
+      };
+
+      ws.onclose = () => {
+        statusBadge.className = 'status-badge';
+        statusText.textContent = '切断 (再接続中...)';
+        if (isRecording) {
+          stopRecording();
+        }
+        setTimeout(connectWs, 2000);
+      };
+    }
+
+    function addTranscript(text) {
+      if (!text || !text.trim()) return;
+      if (feedEmpty) feedEmpty.style.display = 'none';
+
+      const item = document.createElement('div');
+      item.className = 'feed-item';
+      item.textContent = text;
+      feedList.insertBefore(item, feedList.firstChild);
+
+      // 上限 50 件
+      while (feedList.children.length > 50) {
+        feedList.removeChild(feedList.lastChild);
+      }
+    }
+
+    async function toggleRecording() {
+      if (isRecording) {
+        stopRecording();
+      } else {
+        await startRecording();
+      }
+    }
+
+    async function startRecording() {
+      try {
+        micStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            sampleRate: 16000,
+            channelCount: 1,
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          }
+        });
+
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+        const source = audioCtx.createMediaStreamSource(micStream);
+
+        // 4096 サンプル (約 0.25 秒) ごとに PCM データを抽出
+        scriptNode = audioCtx.createScriptProcessor(4096, 1, 1);
+        scriptNode.onaudioprocess = (e) => {
+          if (!isRecording || !ws || ws.readyState !== WebSocket.OPEN) return;
+          const inputData = e.inputBuffer.getChannelData(0);
+
+          // VU メーター計算
+          let sum = 0;
+          for (let i = 0; i < inputData.length; i++) {
+            sum += inputData[i] * inputData[i];
+          }
+          const rms = Math.sqrt(sum / inputData.length);
+          const level = Math.min(100, Math.round(rms * 400));
+          vuFill.style.width = level + '%';
+          vuVal.textContent = level + '%';
+
+          // float32 配列を直接バイナリ送信
+          ws.send(inputData.buffer);
+        };
+
+        source.connect(scriptNode);
+        scriptNode.connect(audioCtx.destination);
+
+        isRecording = true;
+        btnToggle.className = 'btn-record active';
+        btnIcon.textContent = '⏹️';
+        btnText.textContent = 'マイク停止';
+        statusBadge.className = 'status-badge recording';
+        statusText.textContent = '● 認識中';
+
+      } catch (err) {
+        alert('マイクへのアクセスに失敗しました: ' + err);
+      }
+    }
+
+    function stopRecording() {
+      isRecording = false;
+      if (scriptNode) {
+        scriptNode.disconnect();
+        scriptNode = null;
+      }
+      if (audioCtx) {
+        audioCtx.close();
+        audioCtx = null;
+      }
+      if (micStream) {
+        micStream.getTracks().forEach(t => t.stop());
+        micStream = null;
+      }
+      btnToggle.className = 'btn-record';
+      btnIcon.textContent = '🎙️';
+      btnText.textContent = 'マイク開始';
+      vuFill.style.width = '0%';
+      vuVal.textContent = '0%';
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        statusBadge.className = 'status-badge connected';
+        statusText.textContent = '接続完了 (待機中)';
+      }
+    }
+
+    // 初回接続
+    connectWs();
+  </script>
+</body>
+</html>

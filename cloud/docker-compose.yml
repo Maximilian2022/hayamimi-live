@@ -1,0 +1,22 @@
+services:
+  hayamimi-cloud:
+    build:
+      context: ..
+      dockerfile: cloud/Dockerfile
+    container_name: hayamimi_cloud
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8833:8833"
+    env_file:
+      - .env
+    volumes:
+      - hayamimi_data:/app/data
+      - hayamimi_models:/app/models
+    mem_limit: 750m
+    mem_reservation: 400m
+
+volumes:
+  hayamimi_data:
+    name: hayamimi_cloud_data
+  hayamimi_models:
+    name: hayamimi_cloud_models

@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>早耳 クラウドダッシュボード</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=M+PLUS+Rounded+1c:wght@500;700&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: #0b0d13;
+      color: #e2e8f0;
+      font-family: 'Inter', 'M PLUS Rounded 1c', sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      background: #151822;
+      border-bottom: 1px solid #232736;
+      padding: 1rem 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    .header-logo {
+      font-size: 1.5rem;
+    }
+    .header-title {
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: #f8fafc;
+    }
+    .user-pill {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      background: #1f2433;
+      padding: 0.4rem 0.8rem;
+      border-radius: 9999px;
+      border: 1px solid #2d3449;
+    }
+    .avatar {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: #475569;
+    }
+    .username {
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: #f1f5f9;
+    }
+    .btn-logout {
+      color: #94a3b8;
+      font-size: 0.85rem;
+      text-decoration: none;
+      margin-left: 0.5rem;
+    }
+    .btn-logout:hover { color: #f87171; }
+
+    main {
+      flex: 1;
+      max-width: 960px;
+      width: 100%;
+      margin: 2rem auto;
+      padding: 0 1.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+    }
+    .card {
+      background: #151822;
+      border: 1px solid #232736;
+      border-radius: 14px;
+      padding: 1.5rem;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+    }
+    .card-title {
+      font-size: 1.15rem;
+      font-weight: 700;
+      margin-bottom: 0.5rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      color: #f8fafc;
+    }
+    .card-desc {
+      font-size: 0.9rem;
+      color: #94a3b8;
+      margin-bottom: 1.25rem;
+      line-height: 1.5;
+    }
+
+    /* Action Banner */
+    .banner-mic {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: linear-gradient(135deg, #1e3a8a, #3b82f6);
+      border: none;
+      color: #fff;
+      padding: 1.75rem 2rem;
+    }
+    .banner-mic h2 { font-size: 1.4rem; font-weight: 700; margin-bottom: 0.25rem; }
+    .banner-mic p { font-size: 0.95rem; opacity: 0.9; }
+    .btn-mic-start {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: #ffffff;
+      color: #1e3a8a;
+      font-weight: 700;
+      font-size: 1.05rem;
+      padding: 0.85rem 1.75rem;
+      border-radius: 10px;
+      text-decoration: none;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2);
+      transition: all 0.2s ease;
+    }
+    .btn-mic-start:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+    }
+
+    /* URL Box */
+    .url-box {
+      display: flex;
+      gap: 0.5rem;
+      background: #0f1117;
+      border: 1px solid #2d3449;
+      border-radius: 8px;
+      padding: 0.5rem;
+      align-items: center;
+    }
+    .url-input {
+      flex: 1;
+      background: transparent;
+      border: none;
+      color: #38bdf8;
+      font-family: monospace;
+      font-size: 0.95rem;
+      padding: 0.25rem 0.5rem;
+      outline: none;
+    }
+    .btn-copy {
+      background: #2563eb;
+      color: #fff;
+      border: none;
+      padding: 0.5rem 1rem;
+      border-radius: 6px;
+      font-weight: 600;
+      font-size: 0.85rem;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .btn-copy:hover { background: #1d4ed8; }
+    .btn-regen {
+      background: #334155;
+      color: #cbd5e1;
+      border: none;
+      padding: 0.5rem 0.85rem;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      cursor: pointer;
+      margin-top: 0.75rem;
+    }
+    .btn-regen:hover { background: #475569; }
+
+    /* Dictionary Editor */
+    .dict-textarea {
+      width: 100%;
+      height: 180px;
+      background: #0f1117;
+      border: 1px solid #2d3449;
+      border-radius: 8px;
+      color: #e2e8f0;
+      font-family: monospace;
+      font-size: 0.9rem;
+      padding: 0.75rem;
+      line-height: 1.5;
+      resize: vertical;
+      outline: none;
+      margin-bottom: 0.75rem;
+    }
+    .dict-textarea:focus { border-color: #3b82f6; }
+    .btn-save-dict {
+      background: #10b981;
+      color: #fff;
+      border: none;
+      padding: 0.6rem 1.25rem;
+      border-radius: 6px;
+      font-weight: 600;
+      font-size: 0.9rem;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .btn-save-dict:hover { background: #059669; }
+    .save-status {
+      font-size: 0.85rem;
+      color: #34d399;
+      margin-left: 0.75rem;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="header-left">
+      <span class="header-logo">🎙️</span>
+      <span class="header-title">hayamimi クラウド</span>
+    </div>
+    <div class="user-pill">
+      {% if user.avatar %}
+      <img class="avatar" src="https://cdn.discordapp.com/avatars/{{ user.id }}/{{ user.avatar }}.png" alt="Avatar">
+      {% else %}
+      <div class="avatar"></div>
+      {% endif %}
+      <span class="username">{{ user.global_name or user.username }}</span>
+      <a href="/logout" class="btn-logout">ログアウト</a>
+    </div>
+  </header>
+
+  <main>
+    <!-- Webマイク開始バナー -->
+    <div class="card banner-mic">
+      <div>
+        <h2>Webマイクで音声認識を開始</h2>
+        <p>ブラウザのマイクから音声をリアルタイム送信し、OBS へ字幕を届けます。</p>
+      </div>
+      <a href="/mic" target="_blank" class="btn-mic-start">🎙️ マイク画面を開く</a>
+    </div>
+
+    <!-- OBS 字幕用 URL -->
+    <div class="card">
+      <h3 class="card-title">📺 あなた専用の OBS 字幕 URL</h3>
+      <p class="card-desc">
+        OBS Studio の「ブラウザソース」を作成し、以下の URL を貼り付けてください。<br>
+        あなた専用の秘密トークンが含まれており、あなたの発話のみが透過字幕として表示されます。
+      </p>
+      <div class="url-box">
+        <input type="text" id="obs-url" class="url-input" value="{{ obs_url }}" readonly>
+        <button class="btn-copy" onclick="copyObsUrl()">📋 コピー</button>
+      </div>
+      <button class="btn-regen" onclick="regenerateToken()">🔄 トークンを再生成（URLを変更）</button>
+    </div>
+
+    <!-- 個別置換辞書 -->
+    <div class="card">
+      <h3 class="card-title">📖 あなた専用の置換辞書</h3>
+      <p class="card-desc">
+        誤認識しやすい固有名詞やゲーム用語、配信者名を登録できます。<br>
+        書式: <code>誤認識語 => 正しい表記</code> (例: <code>ハヤミミ => 早耳</code>, <code>アマンガス => Among Us</code>)
+      </p>
+      <textarea id="dict-input" class="dict-textarea" placeholder="誤認識語 => 正しい表記">{{ dictionary_text }}</textarea>
+      <div>
+        <button class="btn-save-dict" onclick="saveDictionary()">💾 辞書を保存</button>
+        <span id="save-status" class="save-status">✔ 保存しました</span>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    function copyObsUrl() {
+      const input = document.getElementById('obs-url');
+      input.select();
+      navigator.clipboard.writeText(input.value).then(() => {
+        alert('OBS 字幕 URL をクリップボードにコピーしました！\nOBS のブラウザソースに貼り付けてください。');
+      });
+    }
+
+    async function regenerateToken() {
+      if (!confirm('OBS トークンを再生成しますか？\n既存の OBS ブラウザソースの URL を更新する必要があります。')) {
+        return;
+      }
+      try {
+        const res = await fetch('/api/regenerate-token', { method: 'POST' });
+        const data = await res.json();
+        if (data.ok) {
+          document.getElementById('obs-url').value = data.new_obs_url;
+          alert('新しい OBS URL が発行されました！');
+        }
+      } catch (e) {
+        alert('再生成に失敗しました: ' + e);
+      }
+    }
+
+    async function saveDictionary() {
+      const text = document.getElementById('dict-input').value;
+      const status = document.getElementById('save-status');
+      try {
+        const res = await fetch('/api/dictionary', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text })
+        });
+        const data = await res.json();
+        if (data.ok) {
+          status.style.display = 'inline';
+          setTimeout(() => { status.style.display = 'none'; }, 2500);
+        } else {
+          alert('保存エラー: ' + (data.message || '不明'));
+        }
+      } catch (e) {
+        alert('通信エラー: ' + e);
+      }
+    }
+  </script>
+</body>
+</html>
