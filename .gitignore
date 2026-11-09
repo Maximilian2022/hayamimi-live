@@ -127,7 +127,33 @@ testdata/
 hayamimi4b/
 
 # ==============================================================================
-# Cloud Multi-Tenant Data (クラウド版 ユーザーデータ・トークン・個別辞書)
+# Cloud Edition (hayamimi-cloud 認証情報・ユーザーデータ・一時領域)
 # ==============================================================================
+# 環境変数・トークン・シークレット
+cloud/.env
+cloud/.env.*
+!cloud/.env.example
+cloud/*.secret
+cloud/*.token
+cloud/*.key
+cloud/*gemini_key*
+
+# ユーザー個別データ (OBSトークン・個別辞書・スタイル・設定・APIキー)
 cloud/data/
+cloud/data/**
+
+# クラウド用モデル・キャッシュ・一時ダウンロード・ログ
+cloud/models/
+cloud/cache/
+cloud/logs/
+cloud/temp/
+cloud/tmp/
+cloud/downloads/
+
+# yt-dlp / メディア解析時の一時成果物
+*.ytdl
+*.part
+*.temp
+*.webm
+*.m4a
 
