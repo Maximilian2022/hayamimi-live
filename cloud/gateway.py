@@ -322,6 +322,113 @@ async def save_settings(request: Request):
     return {"ok": True, "settings": saved}
 
 
+# Standalone 互換 API エンドポイント (/config, /overlay-style, /replacements, /reset)
+@app.get("/config")
+async def get_config(request: Request):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    u_sess = session_manager.get_or_create_user(user["id"])
+    settings = u_sess.settings
+    return {
+        "lang": settings.get("lang", "ja-haas"),
+        "ja_tier": "haas" if settings.get("asr_model", "haas") == "haas" else "rz",
+        "asr_model": settings.get("asr_model", "haas"),
+        "translate": settings.get("trans_target_langs", ["en"]) if settings.get("enable_trans", False) else [],
+        "translate_enabled": settings.get("enable_trans", False),
+        "punctuate": settings.get("enable_punct", True),
+        "itn": settings.get("enable_itn", True),
+        "obs_token": u_sess.obs_token,
+        "obs_url": f"{BASE_URL}/overlay?token={u_sess.obs_token}",
+    }
+
+
+@app.post("/config")
+async def post_config(request: Request):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    body = await request.json()
+    u_sess = session_manager.get_or_create_user(user["id"])
+    update_dict = {}
+    if "lang" in body:
+        update_dict["lang"] = body["lang"]
+    if "asr_model" in body:
+        update_dict["asr_model"] = body["asr_model"]
+    if "translate" in body:
+        trans_list = body["translate"] if isinstance(body["translate"], list) else []
+        update_dict["enable_trans"] = len(trans_list) > 0
+        if trans_list:
+            update_dict["trans_target_langs"] = trans_list
+    if "translate_enabled" in body:
+        update_dict["enable_trans"] = bool(body["translate_enabled"])
+    if "punctuate" in body:
+        update_dict["enable_punct"] = bool(body["punctuate"])
+    if "enable_punct" in body:
+        update_dict["enable_punct"] = bool(body["enable_punct"])
+    if "itn" in body:
+        update_dict["enable_itn"] = bool(body["itn"])
+    if "enable_itn" in body:
+        update_dict["enable_itn"] = bool(body["enable_itn"])
+
+    saved = u_sess.save_settings(update_dict)
+    return {"ok": True, "settings": saved}
+
+
+@app.get("/overlay-style")
+async def get_overlay_style(request: Request):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    u_sess = session_manager.get_or_create_user(user["id"])
+    return u_sess.style
+
+
+@app.post("/overlay-style")
+async def post_overlay_style(request: Request):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    body = await request.json()
+    u_sess = session_manager.get_or_create_user(user["id"])
+    saved = u_sess.save_style(body)
+    await u_sess.broadcast_style()
+    return saved
+
+
+@app.get("/replacements")
+async def get_replacements_compat(request: Request):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    u_sess = session_manager.get_or_create_user(user["id"])
+    return {a: b for a, b in u_sess.replacements}
+
+
+@app.post("/replacements")
+async def post_replacements_compat(request: Request):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    body = await request.json()
+    u_sess = session_manager.get_or_create_user(user["id"])
+    if isinstance(body, dict):
+        lines = [f"{k}={v}" for k, v in body.items()]
+        u_sess.save_replacements("\n".join(lines))
+    return {"ok": True}
+
+
+@app.post("/reset")
+async def reset_session_endpoint(request: Request):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    u_sess = session_manager.get_or_create_user(user["id"])
+    if u_sess.active_vad_session:
+        u_sess.active_vad_session.reset()
+    return {"ok": True}
+
+
 @app.get("/api/gemini-key")
 async def get_gemini_key_info(request: Request):
     user = get_current_user(request)
@@ -434,12 +541,23 @@ async def mic_page(request: Request):
     user = get_current_user(request)
     if not user:
         return RedirectResponse(url="/login", status_code=302)
+    u_sess = session_manager.get_or_create_user(user["id"])
     return templates.TemplateResponse(
-        request=request, name="mic.html", context={"user": user}
+        request=request,
+        name="mic.html",
+        context={
+            "user": user,
+            "obs_token": u_sess.obs_token,
+            "obs_url": f"{BASE_URL}/overlay?token={u_sess.obs_token}",
+            "settings": u_sess.settings,
+            "style": u_sess.style,
+            "replacements": u_sess.replacements,
+        },
     )
 
 
 @app.websocket("/ws/mic")
+@app.websocket("/ingest")
 async def websocket_mic_endpoint(websocket: WebSocket):
     session_cookie = websocket.cookies.get(SESSION_COOKIE_NAME)
     user = verify_session_token(session_cookie) if session_cookie else None
@@ -460,6 +578,15 @@ async def websocket_mic_endpoint(websocket: WebSocket):
     # イベントループへの安全な非同期コールバック
     loop = asyncio.get_running_loop()
 
+    # 初期エンジン情報を通知
+    asr_model = u_sess.settings.get("asr_model", "haas")
+    model_disp = "Haas-ja-v1.0 (ONNX)" if asr_model == "haas" else "ReazonSpeech (Zipformer)"
+    await websocket.send_json({
+        "type": "engine_info",
+        "engine": asr_model,
+        "name": model_disp,
+    })
+
     async def _handle_async_translation(text: str, target_langs: list, gemini_key: str):
         for lang in target_langs:
             try:
@@ -473,7 +600,7 @@ async def websocket_mic_endpoint(websocket: WebSocket):
             except Exception as e:
                 logger.warning("Translation dispatch error for %s: %s", lang, e)
 
-    def on_transcript(raw_text: str, is_final: bool = True):
+    def on_transcript(raw_text: str, is_final: bool = True, has_punct: bool = False):
         processed = raw_text
 
         # 1. ITN (数値・日付・単位の正規化)
@@ -484,8 +611,8 @@ async def websocket_mic_endpoint(websocket: WebSocket):
             except Exception as e:
                 logger.debug("ITN failed: %s", e)
 
-        # 2. 句読点付与 (、。) - 確定時のみ
-        if is_final and u_sess.settings.get("enable_punct", True) and shared_punctuator:
+        # 2. 句読点付与 (、。) - 確定時かつモデル自前の句読点がない場合のみ
+        if is_final and u_sess.settings.get("enable_punct", True) and not has_punct and shared_punctuator:
             try:
                 processed = shared_punctuator.restore(processed)
             except Exception as e:
@@ -511,7 +638,13 @@ async def websocket_mic_endpoint(websocket: WebSocket):
                     loop
                 )
 
-    vad_session = UserVadSession(uid, shared_asr_engine, on_transcript)
+    vad_session = UserVadSession(
+        uid,
+        shared_asr_engine,
+        on_transcript,
+        model_choice=u_sess.settings.get("asr_model", "haas"),
+    )
+    u_sess.active_vad_session = vad_session
 
     try:
         while True:
@@ -531,6 +664,7 @@ async def websocket_mic_endpoint(websocket: WebSocket):
     except Exception as e:
         logger.warning("WebSocket mic error (%s): %s", uid, e)
     finally:
+        u_sess.active_vad_session = None
         try:
             vad_session.reset()
         except Exception:

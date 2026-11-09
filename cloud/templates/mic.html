@@ -1,638 +1,1415 @@
 <!DOCTYPE html>
 <html lang="ja">
-
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>早耳 クラウドマイク入力</title>
+  <title>早耳 WEB MIC & STUDIO (クラウド版)</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link
-    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=M+PLUS+Rounded+1c:wght@500;700&display=swap"
-    rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Bungee&family=Dela+Gothic+One&family=Do+Hyeon&family=DotGothic16&family=Fredoka:wght@600&family=Hachi+Maru+Pop&family=IBM+Plex+Sans+JP:wght@600;700&family=IBM+Plex+Sans+KR:wght@600;700&family=IBM+Plex+Sans:wght@600;700&family=Inter:wght@400;500;600;700&family=Jua&family=Kiwi+Maru:wght@500&family=LINE+Seed+JP:wght@700&family=LINE+Seed+KR:wght@700&family=M+PLUS+Rounded+1c:wght@500;700;800&family=Ma+Shan+Zheng&family=Montserrat:wght@700;900&family=Noto+Sans+JP:wght@700;900&family=Noto+Sans+KR:wght@700;900&family=Noto+Sans+SC:wght@700;900&family=Noto+Sans+TC:wght@700;900&family=Oswald:wght@600;700&family=Rampart+One&family=Reggae+One&family=Righteous&family=Shippori+Mincho+B1:wght@700&family=Yuji+Boku&family=ZCOOL+KuaiLe&family=Zen+Kaku+Gothic+New:wght@700;900&display=swap" rel="stylesheet">
   <style>
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
+    :root {
+      --ink: #0E1015;
+      --paper: #ECE6D9;
+      --paper-dim: #9E988A;
+      --shu: #E04F2F;
+      --shu-hot: #FF6A47;
+      --sumi: #181B22;
+      --sumi-light: #232732;
+      --line: #2C3240;
+      --blue: #5B7FD4;
+      --green: #4ADE80;
+      --mono: "SF Mono", Monaco, Consolas, monospace;
     }
 
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
     body {
-      background-color: #0b0d13;
-      color: #e2e8f0;
-      font-family: 'Inter', 'M PLUS Rounded 1c', sans-serif;
+      background-color: var(--ink);
+      color: var(--paper);
+      font-family: 'Zen Kaku Gothic New', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       min-height: 100vh;
       display: flex;
       flex-direction: column;
+      overflow-x: hidden;
+      background-image: 
+        radial-gradient(1200px 500px at 15% -10%, rgba(91,127,212,.08), transparent 60%),
+        radial-gradient(1200px 500px at 85% -10%, rgba(224,79,47,.08), transparent 60%),
+        repeating-linear-gradient(0deg, transparent 0 2px, rgba(255,255,255,.005) 2px 4px);
     }
 
     header {
-      background: #151822;
-      border-bottom: 1px solid #232736;
-      padding: 0.75rem 1.5rem;
+      padding: 0.8rem 1.6rem;
+      border-bottom: 1px solid var(--line);
       display: flex;
       align-items: center;
-      justify-content: space-between;
+      gap: 1.2rem;
+      background: rgba(14, 16, 21, 0.85);
+      backdrop-filter: blur(12px);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      flex-wrap: wrap;
     }
 
-    .header-left {
+    .logotype {
+      font-weight: 900;
+      letter-spacing: -0.04em;
+      font-size: 1.25rem;
+      color: var(--paper);
       display: flex;
       align-items: center;
-      gap: 0.75rem;
+      gap: 0.4rem;
+    }
+    .logotype em {
+      font-style: normal;
+      color: var(--shu);
+    }
+    .romaji {
+      font-size: 0.7rem;
+      letter-spacing: 0.25em;
+      color: var(--paper-dim);
+      font-family: var(--mono);
+      text-transform: uppercase;
     }
 
-    .btn-back {
-      color: #94a3b8;
-      text-decoration: none;
-      font-size: 0.9rem;
-      display: flex;
-      align-items: center;
-      gap: 0.25rem;
+    .tab-bar {
+      display: inline-flex;
+      background: var(--sumi);
+      border: 1px solid var(--line);
+      border-radius: 9999px;
+      padding: 3px;
+      gap: 3px;
     }
-
-    .btn-back:hover {
-      color: #f1f5f9;
-    }
-
-    .header-title {
-      font-size: 1.1rem;
+    .tab-btn {
+      background: transparent;
+      border: none;
+      color: var(--paper-dim);
+      padding: 0.4rem 1.1rem;
+      font-size: 0.85rem;
       font-weight: 700;
-      color: #f8fafc;
+      border-radius: 9999px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      transition: all 0.2s;
+    }
+    .tab-btn:hover { color: var(--paper); }
+    .tab-btn.active {
+      background: var(--shu);
+      color: #fff;
+      box-shadow: 0 2px 8px rgba(224, 79, 47, 0.35);
+    }
+    .tab-btn svg { width: 14px; height: 14px; fill: currentColor; }
+
+    .split-toggle-wrap {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.8rem;
+      color: var(--paper-dim);
+      margin-left: 0.5rem;
+      cursor: pointer;
+    }
+    @media (max-width: 1024px) {
+      .split-toggle-wrap { display: none; }
+    }
+
+    .spacer { flex: 1; }
+
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 0.8rem;
     }
 
     .status-badge {
       display: inline-flex;
       align-items: center;
-      gap: 0.4rem;
+      gap: 0.45rem;
       padding: 0.3rem 0.75rem;
       border-radius: 9999px;
-      font-size: 0.8rem;
-      font-weight: 600;
-      background: #1e293b;
-      color: #94a3b8;
+      background: var(--sumi);
+      border: 1px solid var(--line);
+      font-size: 0.75rem;
+      font-family: var(--mono);
+      color: var(--paper-dim);
     }
-
-    .status-badge.connected {
-      background: rgba(16, 185, 129, 0.2);
-      color: #34d399;
-    }
-
-    .status-badge.recording {
-      background: rgba(239, 68, 68, 0.2);
-      color: #f87171;
-    }
-
     .status-dot {
       width: 8px;
       height: 8px;
       border-radius: 50%;
-      background: currentColor;
+      background: #71717a;
+      transition: background 0.3s ease;
+    }
+    .status-dot.connected { background: var(--blue); }
+    .status-dot.recording {
+      background: var(--shu);
+      animation: pulse 1.2s infinite;
+    }
+    @keyframes pulse {
+      0% { transform: scale(0.95); opacity: 0.8; }
+      50% { transform: scale(1.2); opacity: 1; }
+      100% { transform: scale(0.95); opacity: 0.8; }
+    }
+
+    .link-obs {
+      color: var(--paper);
+      text-decoration: none;
+      font-size: 0.8rem;
+      padding: 0.35rem 0.85rem;
+      border-radius: 6px;
+      background: var(--sumi-light);
+      border: 1px solid var(--line);
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      transition: all 0.2s;
+    }
+    .link-obs:hover {
+      border-color: var(--paper-dim);
+      background: #2b313f;
     }
 
     main {
       flex: 1;
-      max-width: 860px;
+      padding: 1.4rem;
+      max-width: 1400px;
       width: 100%;
-      margin: 1.5rem auto;
-      padding: 0 1rem;
+      margin: 0 auto;
       display: flex;
       flex-direction: column;
-      gap: 1.25rem;
+      gap: 1.4rem;
+    }
+
+    .view-container.tab-mode > .panel-view { display: none; }
+    .view-container.tab-mode > .panel-view.active {
+      display: flex;
+      flex-direction: column;
+      gap: 1.2rem;
+      animation: fadeIn 0.2s ease-out;
+    }
+    .view-container.split-mode {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.5rem;
+      align-items: start;
+    }
+    .view-container.split-mode > .panel-view {
+      display: flex;
+      flex-direction: column;
+      gap: 1.2rem;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
     }
 
     .card {
-      background: #151822;
-      border: 1px solid #232736;
+      background: var(--sumi);
+      border: 1px solid var(--line);
       border-radius: 12px;
       padding: 1.25rem;
-    }
-
-    /* Controls */
-    .controls-row {
-      display: flex;
-      align-items: center;
-      gap: 1.25rem;
-      flex-wrap: wrap;
-    }
-
-    .btn-record {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.5rem;
-      padding: 0.875rem 1.75rem;
-      background: #3b82f6;
-      color: white;
-      font-size: 1rem;
-      font-weight: 700;
-      border: none;
-      border-radius: 10px;
-      cursor: pointer;
-      box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
-      transition: all 0.2s ease;
-    }
-
-    .btn-record:hover {
-      background: #2563eb;
-      transform: translateY(-1px);
-    }
-
-    .btn-record.active {
-      background: #ef4444;
-      box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
-      animation: pulse 2s infinite;
-    }
-
-    @keyframes pulse {
-      0% {
-        box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4);
-      }
-
-      70% {
-        box-shadow: 0 0 0 12px rgba(239, 68, 68, 0);
-      }
-
-      100% {
-        box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
-      }
-    }
-
-    .device-select-wrap {
-      flex: 1;
-      min-width: 200px;
-    }
-
-    .select-label {
-      font-size: 0.75rem;
-      color: #94a3b8;
-      margin-bottom: 0.25rem;
-      display: block;
-    }
-
-    .device-select {
-      width: 100%;
-      background: #0f1117;
-      border: 1px solid #2d3449;
-      color: #f1f5f9;
-      padding: 0.5rem 0.75rem;
-      border-radius: 8px;
-      font-size: 0.85rem;
-    }
-
-    /* VU Meter */
-    .vu-meter-container {
-      width: 100%;
-      margin-top: 1rem;
-      background: #0f1117;
-      border: 1px solid #232736;
-      padding: 0.75rem 1rem;
-      border-radius: 8px;
-    }
-
-    .vu-label {
-      display: flex;
-      justify-content: space-between;
-      font-size: 0.8rem;
-      color: #94a3b8;
-      margin-bottom: 0.4rem;
-    }
-
-    .vu-bar-bg {
-      height: 8px;
-      background: #1e293b;
-      border-radius: 9999px;
-      overflow: hidden;
-    }
-
-    .vu-bar-fill {
-      height: 100%;
-      width: 0%;
-      background: linear-gradient(90deg, #10b981 0%, #f59e0b 70%, #ef4444 100%);
-      border-radius: 9999px;
-      transition: width 0.08s ease-out;
-    }
-
-    /* Feed Container */
-    .feed-container {
-      flex: 1;
       display: flex;
       flex-direction: column;
-      height: 420px;
+      gap: 1rem;
+      position: relative;
     }
-
-    .feed-header {
+    .card-title {
       font-size: 0.95rem;
-      font-weight: 600;
-      color: #94a3b8;
-      margin-bottom: 0.75rem;
+      font-weight: 700;
+      color: var(--paper);
       display: flex;
+      align-items: center;
       justify-content: space-between;
     }
+    .card-title .tag {
+      font-size: 0.68rem;
+      font-family: var(--mono);
+      background: rgba(255,255,255,0.06);
+      padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+      color: var(--paper-dim);
+    }
+
+    .mic-control-card {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 2rem 1.5rem;
+      background: linear-gradient(180deg, var(--sumi) 0%, rgba(24,27,34,0.6) 100%);
+    }
+
+    .btn-mic {
+      width: 110px;
+      height: 110px;
+      border-radius: 50%;
+      background: var(--sumi-light);
+      border: 2px solid var(--line);
+      color: var(--paper);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 0.4rem;
+      cursor: pointer;
+      font-size: 0.85rem;
+      font-weight: 700;
+      transition: all 0.25s ease;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.4);
+      position: relative;
+    }
+    .btn-mic:hover {
+      border-color: var(--shu);
+      transform: translateY(-2px);
+    }
+    .btn-mic.recording {
+      background: var(--shu);
+      border-color: var(--shu-hot);
+      color: #fff;
+      box-shadow: 0 0 25px rgba(224, 79, 47, 0.6);
+    }
+    .btn-mic svg { width: 34px; height: 34px; fill: currentColor; }
+
+    .level-container {
+      width: 100%;
+      max-width: 440px;
+      margin-top: 1.2rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+    }
+    .level-header {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.75rem;
+      color: var(--paper-dim);
+      font-family: var(--mono);
+    }
+    .level-meter {
+      height: 8px;
+      background: var(--ink);
+      border-radius: 9999px;
+      overflow: hidden;
+      position: relative;
+      border: 1px solid var(--line);
+    }
+    .level-bar {
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 0%;
+      background: linear-gradient(90deg, #4ade80 0%, #facc15 70%, #ef4444 100%);
+      border-radius: 9999px;
+      transition: width 0.08s ease;
+    }
+
+    .device-selector {
+      width: 100%;
+      max-width: 440px;
+      margin-top: 0.8rem;
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+    }
+    .device-selector label {
+      font-size: 0.78rem;
+      font-weight: 500;
+      color: var(--paper-dim);
+      white-space: nowrap;
+    }
+    .device-selector select {
+      flex: 1;
+      background: var(--ink);
+      border: 1px solid var(--line);
+      color: var(--paper);
+      padding: 0.45rem 0.75rem;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      outline: none;
+    }
+
+    #partial-live-text {
+      min-height: 52px;
+      padding: 0.9rem 1.1rem;
+      background: rgba(14, 16, 21, 0.7);
+      border: 1px dashed var(--line);
+      border-radius: 8px;
+      font-size: 1.15rem;
+      font-weight: 700;
+      color: #38BDF8;
+      display: flex;
+      align-items: center;
+      line-height: 1.5;
+      word-break: break-all;
+    }
+    #partial-live-text.idle {
+      color: var(--paper-dim);
+      font-size: 0.9rem;
+      font-weight: 400;
+      font-style: italic;
+    }
+    .caret {
+      display: inline-block;
+      width: 2px;
+      height: 1.2em;
+      background: #38BDF8;
+      margin-left: 4px;
+      animation: blink 0.8s infinite;
+      vertical-align: middle;
+    }
+    @keyframes blink { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0; } }
 
     .feed-list {
-      flex: 1;
-      overflow-y: auto;
       display: flex;
       flex-direction: column-reverse;
       gap: 0.6rem;
-      background: #0f1117;
-      border: 1px solid #232736;
-      border-radius: 8px;
-      padding: 1rem;
+      max-height: 380px;
+      overflow-y: auto;
+      padding-right: 4px;
     }
-
     .feed-item {
-      padding: 0.6rem 0.85rem;
-      background: #181c28;
-      border-left: 3px solid #3b82f6;
-      border-radius: 0 6px 6px 0;
-      font-size: 1rem;
-      line-height: 1.5;
-      animation: fadeIn 0.2s ease;
-    }
-
-    .feed-item.partial {
-      background: rgba(59, 130, 246, 0.12);
-      border-left: 3px solid #60a5fa;
-      color: #93c5fd;
-      font-style: italic;
-    }
-
-    .feed-item-trans {
-      font-size: 0.9rem;
-      color: #ffd166;
-      margin-top: 0.25rem;
-      display: flex;
-      gap: 0.4rem;
-      align-items: baseline;
-    }
-
-    .lang-tag {
-      background: rgba(255, 209, 102, 0.2);
-      color: #ffd166;
-      font-size: 0.72rem;
-      font-weight: 700;
-      padding: 1px 5px;
-      border-radius: 4px;
-    }
-
-    @keyframes fadeIn {
-      from {
-        opacity: 0;
-        transform: translateY(4px);
-      }
-
-      to {
-        opacity: 1;
-        transform: translateY(0);
-      }
-    }
-
-    .feed-empty {
-      color: #64748b;
-      font-size: 0.9rem;
-      text-align: center;
-      margin: auto;
-    }
-
-    .error-banner {
-      background: rgba(239, 68, 68, 0.15);
-      border: 1px solid rgba(239, 68, 68, 0.3);
-      color: #fca5a5;
       padding: 0.75rem 1rem;
+      background: rgba(14, 16, 21, 0.5);
+      border: 1px solid var(--line);
       border-radius: 8px;
-      font-size: 0.85rem;
-      display: none;
-      margin-top: 0.75rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.3rem;
+      animation: rise 0.2s ease-out;
+    }
+    @keyframes rise { from { opacity: 0; transform: translateY(4px); } }
+    .feed-meta {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.7rem;
+      color: var(--paper-dim);
+      font-family: var(--mono);
+    }
+    .feed-text {
+      font-size: 1.05rem;
+      line-height: 1.5;
+      color: var(--paper);
+      word-break: break-all;
+    }
+    .feed-trans {
+      font-size: 0.92rem;
       line-height: 1.4;
+      color: #ffd166;
+      border-top: 1px dashed rgba(255,255,255,0.08);
+      padding-top: 0.35rem;
+      margin-top: 0.15rem;
+    }
+
+    .obs-sync-card {
+      border-color: rgba(91, 127, 212, 0.3);
+      background: linear-gradient(180deg, var(--sumi) 0%, rgba(24, 30, 44, 0.5) 100%);
+    }
+    .obs-sync-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.8rem;
+      flex-wrap: wrap;
+    }
+    .obs-toggle-wrap {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+    }
+    .obs-badge {
+      font-size: 0.75rem;
+      font-family: var(--mono);
+      padding: 0.25rem 0.65rem;
+      border-radius: 9999px;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      background: var(--ink);
+      border: 1px solid var(--line);
+    }
+    .obs-badge.connected { color: #4ADE80; border-color: rgba(74, 222, 128, 0.3); }
+    .obs-badge.disconnected { color: #94A3B8; }
+    .obs-badge.muted { color: #F87171; border-color: rgba(248, 113, 113, 0.3); }
+
+    .url-row {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      background: var(--ink);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 0.45rem 0.75rem;
+      font-size: 0.8rem;
+    }
+    .url-label {
+      color: var(--paper-dim);
+      font-weight: 600;
+      white-space: nowrap;
+      min-width: 75px;
+    }
+    .url-text {
+      flex: 1;
+      font-family: var(--mono);
+      color: var(--paper);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      user-select: all;
+    }
+    .btn-copy {
+      background: var(--sumi-light);
+      border: 1px solid var(--line);
+      color: var(--paper);
+      padding: 0.25rem 0.6rem;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.15s;
+    }
+    .btn-copy:hover {
+      background: var(--blue);
+      border-color: var(--blue);
+      color: #fff;
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+    }
+    .form-group label {
+      font-size: 0.85rem;
+      font-weight: 700;
+      color: var(--paper);
+    }
+    .form-group .desc {
+      font-size: 0.75rem;
+      color: var(--paper-dim);
+      line-height: 1.4;
+    }
+    .form-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.8rem;
+    }
+
+    input[type="text"], select {
+      background: var(--ink);
+      color: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 0.55rem 0.8rem;
+      font-size: 0.85rem;
+      outline: none;
+      width: 100%;
+    }
+    input[type="text"]:focus, select:focus {
+      border-color: var(--shu);
+    }
+
+    .toggle-switch {
+      position: relative;
+      display: inline-block;
+      width: 44px;
+      height: 24px;
+      flex-shrink: 0;
+    }
+    .toggle-switch input { opacity: 0; width: 0; height: 0; }
+    .toggle-slider {
+      position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+      background-color: #333; transition: .2s; border-radius: 24px;
+    }
+    .toggle-slider:before {
+      position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px;
+      background-color: white; transition: .2s; border-radius: 50%;
+    }
+    input:checked + .toggle-slider { background-color: var(--shu); }
+    input:checked + .toggle-slider:before { transform: translateX(20px); }
+
+    .trans-lang-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+      gap: 0.5rem;
+      margin-top: 0.4rem;
+    }
+    .lang-pill-item {
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      background: var(--ink);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 0.45rem 0.65rem;
+      font-size: 0.8rem;
+      cursor: pointer;
+      user-select: none;
+      transition: all 0.15s;
+    }
+    .lang-pill-item:hover { border-color: var(--paper-dim); }
+    .lang-pill-item.active {
+      background: rgba(224, 79, 47, 0.12);
+      border-color: var(--shu);
+      color: var(--shu-hot);
+    }
+    .lang-pill-item input[type="checkbox"] { display: none; }
+
+    .preview-box-container {
+      background: #000;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      min-height: 140px;
+      padding: 1.5rem;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      align-items: center;
+      position: relative;
+      overflow: hidden;
+    }
+    .preview-bg-switch {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      display: flex;
+      gap: 4px;
+    }
+    .btn-bg-mode {
+      background: rgba(255,255,255,0.1);
+      border: none;
+      color: #fff;
+      font-size: 0.65rem;
+      padding: 2px 6px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .btn-bg-mode.active { background: var(--shu); }
+
+    .save-alert {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: var(--green);
+      color: #000;
+      padding: 0.6rem 1.2rem;
+      border-radius: 8px;
+      font-weight: 700;
+      font-size: 0.85rem;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.4);
+      display: none;
+      z-index: 1000;
     }
   </style>
 </head>
-
 <body>
-  <header>
-    <div class="header-left">
-      <a href="/" class="btn-back">◀ ダッシュボード</a>
-      <span class="header-title">Webマイク入力</span>
-    </div>
-    <div id="status-badge" class="status-badge">
-      <span class="status-dot"></span>
-      <span id="status-text">未接続</span>
-    </div>
-  </header>
 
-  <main>
-    <div class="card">
-      <div class="controls-row">
-        <button id="btn-toggle" class="btn-record" onclick="toggleRecording()">
-          <span id="btn-icon">🎙️</span>
-          <span id="btn-text">マイク開始</span>
+<header>
+  <div class="logotype">早<em>耳</em></div>
+  <div class="romaji">WEB MIC & STUDIO</div>
+
+  <!-- タブセレクタ -->
+  <div class="tab-bar">
+    <button id="tab-btn-mic" class="tab-btn active" onclick="switchTab('mic')">
+      <svg viewBox="0 0 24 24"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/><path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>
+      マイク入力
+    </button>
+    <button id="tab-btn-settings" class="tab-btn" onclick="switchTab('settings')">
+      <svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+      字幕・翻訳設定
+    </button>
+  </div>
+
+  <!-- 分割表示トグル (PC用) -->
+  <div class="split-toggle-wrap">
+    <label class="toggle-switch" style="width: 34px; height: 18px;">
+      <input type="checkbox" id="split-mode-toggle" onchange="toggleSplitMode(this.checked)">
+      <span class="toggle-slider"></span>
+    </label>
+    <span>分割表示 (2画面並列)</span>
+  </div>
+
+  <div class="spacer"></div>
+
+  <div class="header-right">
+    <div class="status-badge">
+      <div id="status-dot" class="status-dot"></div>
+      <span id="status-label">待機中 (切断)</span>
+    </div>
+
+    <!-- Discord ユーザー情報 -->
+    <div style="display: flex; align-items: center; gap: 0.5rem; background: rgba(255,255,255,0.06); padding: 0.25rem 0.65rem; border-radius: 20px; border: 1px solid rgba(255,255,255,0.1);">
+      {% if user.avatar %}
+      <img src="https://cdn.discordapp.com/avatars/{{ user.id }}/{{ user.avatar }}.png" style="width: 20px; height: 20px; border-radius: 50%;">
+      {% endif %}
+      <span style="font-size: 0.8rem; font-weight: 700; color: #fff;">{{ user.global_name or user.username }}</span>
+    </div>
+
+    <a href="/" class="link-obs" title="ダッシュボード・辞書管理を開く">⚙ ダッシュボード ↗</a>
+    <a href="/overlay?token={{ obs_token }}" target="_blank" class="link-obs" title="OBS用字幕画面を開く">OBSオーバーレイ ↗</a>
+    <a href="/logout" class="link-obs" style="border-color: rgba(239, 68, 68, 0.4); color: #f87171;" title="ログアウト">🚪 ログアウト</a>
+  </div>
+</header>
+
+<main>
+  <div id="save-msg" class="save-alert">設定を保存し、OBSに即時反映しました！</div>
+
+  <div id="view-container" class="view-container tab-mode">
+    
+    <!-- ================= パネル 1: マイク入力・文字起こし ================= -->
+    <div id="panel-mic" class="panel-view active">
+      
+      <!-- マイク操作カード -->
+      <div class="card mic-control-card">
+        <button id="btn-toggle-mic" class="btn-mic" aria-label="マイク開始/停止">
+          <svg viewBox="0 0 24 24" id="mic-icon">
+            <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+            <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+          </svg>
+          <span id="btn-mic-text">マイク開始</span>
         </button>
 
-        <div class="device-select-wrap">
-          <label class="select-label">マイク入力デバイス</label>
-          <select id="audio-device-select" class="device-select" onchange="switchDevice()">
+        <div class="level-container">
+          <div class="level-header">
+            <span>マイク入力レベル</span>
+            <span id="level-val">0 dB</span>
+          </div>
+          <div class="level-meter">
+            <div id="level-bar" class="level-bar"></div>
+          </div>
+        </div>
+
+        <div class="device-selector">
+          <label for="audio-source">入力マイク:</label>
+          <select id="audio-source">
             <option value="">デフォルトマイク</option>
           </select>
         </div>
       </div>
 
-      <div class="vu-meter-container">
-        <div class="vu-label">
-          <span>マイク入力レベル</span>
-          <span id="vu-val">0%</span>
+      <!-- リアルタイム文字起こしプレビューカード -->
+      <div class="card" style="flex: 1; min-height: 240px;">
+        <div class="card-title">
+          <span>リアルタイム文字起こしプレビュー</span>
+          <div style="display: flex; gap: 6px; align-items: center;">
+            <div id="engine-chip" class="status-badge" style="font-size: 0.65rem; padding: 0.15rem 0.5rem; background: rgba(56, 189, 248, 0.15); color: #38BDF8; border: 1px solid rgba(56, 189, 248, 0.3);">
+              <span id="engine-val">接続確認中...</span>
+            </div>
+            <div id="latency-chip" class="status-badge" style="font-size: 0.65rem; padding: 0.15rem 0.4rem;">
+              応答: <span id="lat-val">-</span> ms
+            </div>
+          </div>
         </div>
-        <div class="vu-bar-bg">
-          <div id="vu-fill" class="vu-bar-fill"></div>
+
+        <!-- ドラフト追随テキストエリア -->
+        <div id="partial-live-text" class="idle">
+          マイクを開始すると、ここに話した内容が即座に表示されます<span class="caret"></span>
+        </div>
+
+        <!-- 確定字幕履歴 -->
+        <div class="feed-list" id="final-feed"></div>
+      </div>
+
+      <!-- 🎥 OBS マイクミュート連動カード -->
+      <div class="card obs-sync-card">
+        <div class="card-title">
+          OBS マイクミュート連動
+          <span class="tag" style="background: rgba(91, 127, 212, 0.2); color: var(--blue);">OBS WebSocket v5</span>
+        </div>
+
+        <div class="obs-sync-header">
+          <div class="obs-toggle-wrap">
+            <label class="toggle-switch">
+              <input type="checkbox" id="obs-sync-toggle" checked>
+              <span class="toggle-slider"></span>
+            </label>
+            <span style="font-size: 0.85rem; font-weight: 600;">OBS 連動（OBSマイクミュート時に文字起こしを自動休止）</span>
+          </div>
+          <div id="obs-status-badge" class="obs-badge disconnected">
+            <span id="obs-status-text">未接続 (OBS未起動)</span>
+          </div>
+        </div>
+
+        <!-- OBS 設定詳細アコーディオン -->
+        <details style="margin-top: 0.6rem; font-size: 0.85rem;">
+          <summary style="cursor: pointer; color: var(--paper-dim);">OBS 接続設定・マイク選択</summary>
+          <div style="display: flex; flex-direction: column; gap: 0.6rem; margin-top: 0.6rem;">
+            <div class="form-row">
+              <label style="width: 130px; font-size: 0.8rem;">OBS WebSocket:</label>
+              <input type="text" id="obs-ws-url" value="ws://127.0.0.1:4455" style="font-size: 0.8rem;">
+            </div>
+            <div class="form-row">
+              <label style="width: 130px; font-size: 0.8rem;">パスワード:</label>
+              <input type="password" id="obs-ws-password" placeholder="OBS側で認証有効時は入力" style="font-size: 0.8rem;">
+            </div>
+            <div class="form-row">
+              <label style="width: 130px; font-size: 0.8rem;">監視マイク:</label>
+              <select id="obs-target-source" style="font-size: 0.8rem;">
+                <option value="__auto__">自動検出 (Mic/Aux または最初のマイク)</option>
+              </select>
+            </div>
+            <div style="display: flex; gap: 0.5rem; justify-content: flex-end;">
+              <button class="btn-copy" id="btn-obs-reconnect">🔄 再接続テスト</button>
+            </div>
+          </div>
+        </details>
+      </div>
+
+      <!-- OBS Studio URL ガイド -->
+      <div class="card">
+        <div class="card-title">
+          OBS Studio ブラウザソース設定用 URL
+          <span class="tag">OBS URL</span>
+        </div>
+        <div class="url-row">
+          <div class="url-label">通常字幕:</div>
+          <div class="url-text" id="obs-url-both">{{ obs_url }}</div>
+          <button class="btn-copy" onclick="copyText('{{ obs_url }}')">コピー</button>
+        </div>
+        <div class="url-row">
+          <div class="url-label">確定のみ:</div>
+          <div class="url-text" id="obs-url-final">{{ obs_url }}&mode=final</div>
+          <button class="btn-copy" onclick="copyText('{{ obs_url }}&mode=final')">コピー</button>
+        </div>
+        <div class="url-row">
+          <div class="url-label">認識中のみ:</div>
+          <div class="url-text" id="obs-url-partial">{{ obs_url }}&mode=partial</div>
+          <button class="btn-copy" onclick="copyText('{{ obs_url }}&mode=partial')">コピー</button>
         </div>
       </div>
 
-      <div id="error-banner" class="error-banner"></div>
     </div>
 
-    <div class="card feed-container">
-      <div class="feed-header">
-        <span>リアルタイム認識フィード（最新が上）</span>
-        <span style="font-size: 0.8rem; color: #64748b;">※ OBS 側にもリアルタイムに配信されています</span>
+    <!-- ================= パネル 2: 字幕・翻訳設定 ================= -->
+    <div id="panel-settings" class="panel-view">
+      
+      <!-- 1. 音声認識 & リアルタイム翻訳設定 -->
+      <div class="card">
+        <div class="card-title">
+          音声認識 & リアルタイム翻訳設定 <span class="tag">ASR & TRANSLATE</span>
+        </div>
+
+        <!-- 認識言語・モデル選択 -->
+        <div class="form-group">
+          <label for="cfg-lang">認識モデル・言語モード:</label>
+          <select id="cfg-lang" onchange="saveAsrSettings()">
+            <option value="ja-haas" {% if settings.lang == 'ja-haas' %}selected{% endif %}>🇯🇵 日本語（Haas-ja-v1.0 / 推奨・自然な会話・配信向け）</option>
+            <option value="ja" {% if settings.lang == 'ja' %}selected{% endif %}>🇯🇵 日本語（ReazonSpeech / 超高速・ニュース調）</option>
+          </select>
+          <div class="desc">
+            ※ <strong>Haas-ja-v1.0</strong> はゲーム実況やくだけた配信音声に極めて強く、<strong>ReazonSpeech</strong> は軽量・ニュース調に最適です。選択した瞬間にサーバー側で切り替わります。
+          </div>
+        </div>
+
+        <!-- リアルタイム多言語翻訳トグル -->
+        <div class="form-row" style="margin-top: 0.6rem;">
+          <div>
+            <label style="font-weight: 700; font-size: 0.85rem;">リアルタイム翻訳 (話した音声を即座に他言語へ同時翻訳):</label>
+            <div class="desc">Standalone 版と同一の CTranslate2 (FuguMT & M2M-100) 完全ローカル自前推論</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="cfg-trans-enable" onchange="toggleTrans(this.checked)" {% if settings.enable_trans %}checked{% endif %}>
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+
+        <!-- 翻訳先言語ピルグリッド -->
+        <div class="form-group" id="trans-lang-group" style="{% if not settings.enable_trans %}display: none;{% endif %} margin-top: 0.4rem;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <label style="font-size: 0.8rem;">翻訳先言語 (複数同時選択可能):</label>
+            <span id="trans-active-badge" class="tag" style="background: rgba(224, 79, 47, 0.2); color: #FF7A59;">0言語選択中</span>
+          </div>
+          <div class="trans-lang-grid">
+            <label class="lang-pill-item">
+              <input type="checkbox" name="trans-lang" value="en" onchange="saveAsrSettings()">
+              <span>🇺🇸 英語 (en)</span>
+            </label>
+            <label class="lang-pill-item">
+              <input type="checkbox" name="trans-lang" value="zh" onchange="saveAsrSettings()">
+              <span>🇨🇳 中国語・簡体 (zh)</span>
+            </label>
+            <label class="lang-pill-item">
+              <input type="checkbox" name="trans-lang" value="zh-tw" onchange="saveAsrSettings()">
+              <span>🇹🇼 台湾語・繁体 (zh-tw)</span>
+            </label>
+            <label class="lang-pill-item">
+              <input type="checkbox" name="trans-lang" value="ko" onchange="saveAsrSettings()">
+              <span>🇰🇷 韓国語 (ko)</span>
+            </label>
+            <label class="lang-pill-item">
+              <input type="checkbox" name="trans-lang" value="es" onchange="saveAsrSettings()">
+              <span>🇪🇸 スペイン語 (es)</span>
+            </label>
+            <label class="lang-pill-item">
+              <input type="checkbox" name="trans-lang" value="fr" onchange="saveAsrSettings()">
+              <span>🇫🇷 フランス語 (fr)</span>
+            </label>
+            <label class="lang-pill-item">
+              <input type="checkbox" name="trans-lang" value="de" onchange="saveAsrSettings()">
+              <span>🇩🇪 ドイツ語 (de)</span>
+            </label>
+            <label class="lang-pill-item">
+              <input type="checkbox" name="trans-lang" value="pt" onchange="saveAsrSettings()">
+              <span>🇵🇹 ポルトガル語 (pt)</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- 句読点付与トグル -->
+        <div class="form-row" style="margin-top: 0.6rem;">
+          <div>
+            <label style="font-weight: 700; font-size: 0.85rem;">句読点自動付与 (Punctuator):</label>
+            <div class="desc">確定した文章に「、」「。」を自動補正します。</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="cfg-punct" onchange="saveAsrSettings()" {% if settings.enable_punct %}checked{% endif %}>
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+
+        <!-- ITN 正規化トグル -->
+        <div class="form-row">
+          <div>
+            <label style="font-weight: 700; font-size: 0.85rem;">ITN (数値・単位正規化):</label>
+            <div class="desc">漢数字（一万二千）を算用数字（12,000）に自動正規化します。</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="cfg-itn" onchange="saveAsrSettings()" {% if settings.enable_itn %}checked{% endif %}>
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+
+        <div style="display: flex; gap: 0.8rem; margin-top: 0.3rem;">
+          <button class="btn-copy" onclick="resetSession()">セッション履歴リセット</button>
+        </div>
       </div>
-      <div id="feed-list" class="feed-list">
-        <div id="feed-empty" class="feed-empty">マイクを開始して話すと、ここにリアルタイム字幕が表示されます</div>
+
+      <!-- 2. OBS 字幕デザイン設定 -->
+      <div class="card">
+        <div class="card-title">
+          OBS 字幕デザイン設定 <span class="tag">SUBTITLE STYLING</span>
+        </div>
+
+        <!-- フォント選択 -->
+        <div class="form-group">
+          <label for="style-font">字幕フォント (Google Fonts 20種):</label>
+          <select id="style-font" onchange="updatePreview()">
+            <optgroup label="🇯🇵 日本語 定番">
+              <option value="'Zen Kaku Gothic New', sans-serif" selected>Zen Kaku Gothic New (洗練モダン角ゴシック)</option>
+              <option value="'M PLUS Rounded 1c', sans-serif">M PLUS Rounded 1c (丸ゴシック・VTuber大人気)</option>
+              <option value="'Dela Gothic One', sans-serif">Dela Gothic One (極太インパクトタイトル風)</option>
+              <option value="'Hachi Maru Pop', sans-serif">Hachi Maru Pop (手書き可愛いポップ系)</option>
+              <option value="'DotGothic16', sans-serif">DotGothic16 (レトロゲームピクセル風)</option>
+              <option value="'Reggae One', sans-serif">Reggae One (バラエティ・リアクション風)</option>
+              <option value="'Rampart One', sans-serif">Rampart One (3Dアウトライン立体ブロック風)</option>
+              <option value="'Kiwi Maru', serif">Kiwi Maru (丸明朝・レトロ可愛い)</option>
+              <option value="'Yuji Boku', serif">Yuji Boku (毛筆・和風筆文字)</option>
+              <option value="'Shippori Mincho B1', serif">Shippori Mincho B1 (上品・和風明朝体)</option>
+            </optgroup>
+            <optgroup label="🇺🇸 欧文・海外風">
+              <option value="'Montserrat', sans-serif">Montserrat (洗練欧文モダン)</option>
+              <option value="'Bungee', cursive">Bungee (アーケードゲーム極太)</option>
+              <option value="'Fredoka', sans-serif">Fredoka (丸みのある可愛いポップ)</option>
+              <option value="'Oswald', sans-serif">Oswald (映画字幕風)</option>
+              <option value="'Righteous', cursive">Righteous (サイバーレトロ)</option>
+            </optgroup>
+          </select>
+        </div>
+
+        <div class="form-row">
+          <label for="style-size" style="font-size: 0.85rem;">文字サイズ: <span id="val-size">42</span>px</label>
+          <input type="range" id="style-size" min="20" max="90" value="42" oninput="updatePreview()" style="flex: 1; max-width: 250px;">
+        </div>
+
+        <div class="form-row">
+          <label for="style-color" style="font-size: 0.85rem;">文字色:</label>
+          <input type="color" id="style-color" value="#ffffff" oninput="updatePreview()">
+        </div>
+
+        <div class="form-row">
+          <label for="style-effect" style="font-size: 0.85rem;">エフェクト演出:</label>
+          <select id="style-effect" onchange="updatePreview()" style="max-width: 250px;">
+            <option value="stroke" selected>通常縁取り（クッキリ強調）</option>
+            <option value="double">二重縁取り（テレビテロップ風）</option>
+            <option value="glow">ネオン発光（サイバー・光る文字）</option>
+          </select>
+        </div>
+
+        <div class="form-row">
+          <label for="style-stroke-color" style="font-size: 0.85rem;">縁取り色:</label>
+          <input type="color" id="style-stroke-color" value="#000000" oninput="updatePreview()">
+        </div>
+
+        <div class="form-row">
+          <label for="style-align" style="font-size: 0.85rem;">字幕の配置:</label>
+          <select id="style-align" onchange="updatePreview()" style="max-width: 250px;">
+            <option value="center" selected>中央揃え</option>
+            <option value="left">左寄せ</option>
+            <option value="right">右寄せ</option>
+          </select>
+        </div>
+
+        <!-- リアルタイム字幕プレビュー枠 -->
+        <div class="form-group" style="margin-top: 0.8rem;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <label style="font-size: 0.8rem;">リアルタイムプレビュー (OBSでの見え方):</label>
+          </div>
+          <div class="preview-box-container" id="preview-box">
+            <div class="preview-bg-switch">
+              <button class="btn-bg-mode active" onclick="setPreviewBg('#000000', this)">黒背景</button>
+              <button class="btn-bg-mode" onclick="setPreviewBg('#00ff00', this)">Green</button>
+              <button class="btn-bg-mode" onclick="setPreviewBg('#1f2430', this)">Dark</button>
+            </div>
+            <div id="preview-text" style="font-size: 32px; font-weight: 700; color: #fff; text-align: center; transition: all 0.15s;">
+              早耳リアルタイム字幕プレビュー
+            </div>
+            <div id="preview-trans" style="font-size: 22px; font-weight: 600; color: #ffd166; text-align: center; margin-top: 6px; transition: all 0.15s;">
+              → [en] Hayamimi Realtime Live Subtitles
+            </div>
+          </div>
+        </div>
+
       </div>
+
     </div>
-  </main>
 
-  <script>
-    let ws = null;
-    let audioCtx = null;
-    let micStream = null;
-    let scriptNode = null;
-    let isRecording = false;
+  </div>
+</main>
 
-    const statusBadge = document.getElementById('status-badge');
-    const statusText = document.getElementById('status-text');
-    const btnToggle = document.getElementById('btn-toggle');
-    const btnIcon = document.getElementById('btn-icon');
-    const btnText = document.getElementById('btn-text');
-    const vuFill = document.getElementById('vu-fill');
-    const vuVal = document.getElementById('vu-val');
-    const feedList = document.getElementById('feed-list');
-    const feedEmpty = document.getElementById('feed-empty');
-    const errorBanner = document.getElementById('error-banner');
-    const deviceSelect = document.getElementById('audio-device-select');
+<script>
+  // ユーザー設定初期値 (Jinja2)
+  const initialSettings = {{ settings | tojson | safe }};
+  const initialStyle = {{ style | tojson | safe }};
+  const obsToken = {{ obs_token | tojson | safe }};
 
-    function showError(msg) {
-      if (msg) {
-        errorBanner.textContent = msg;
-        errorBanner.style.display = 'block';
-      } else {
-        errorBanner.style.display = 'none';
-      }
+  let ws = null;
+  let audioContext = null;
+  let mediaStream = null;
+  let processorNode = null;
+  let isRecording = false;
+
+  // タブ切り替え
+  function switchTab(tab) {
+    const vc = document.getElementById("view-container");
+    if (vc.classList.contains("split-mode")) return;
+
+    document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+    document.querySelectorAll(".panel-view").forEach(p => p.classList.remove("active"));
+
+    if (tab === "mic") {
+      document.getElementById("tab-btn-mic").classList.add("active");
+      document.getElementById("panel-mic").classList.add("active");
+    } else {
+      document.getElementById("tab-btn-settings").classList.add("active");
+      document.getElementById("panel-settings").classList.add("active");
+    }
+  }
+
+  // 分割表示トグル
+  function toggleSplitMode(isSplit) {
+    const vc = document.getElementById("view-container");
+    if (isSplit) {
+      vc.classList.remove("tab-mode");
+      vc.classList.add("split-mode");
+      document.getElementById("tab-btn-mic").classList.add("active");
+      document.getElementById("tab-btn-settings").classList.add("active");
+    } else {
+      vc.classList.remove("split-mode");
+      vc.classList.add("tab-mode");
+      switchTab("mic");
+    }
+  }
+
+  // クリップボードコピー
+  function copyText(txt) {
+    navigator.clipboard.writeText(txt).then(() => {
+      showAlert("OBS URL をコピーしました！");
+    });
+  }
+
+  function showAlert(msg) {
+    const el = document.getElementById("save-msg");
+    el.textContent = msg;
+    el.style.display = "block";
+    setTimeout(() => { el.style.display = "none"; }, 2500);
+  }
+
+  // プレビュー背景変更
+  function setPreviewBg(color, btn) {
+    document.getElementById("preview-box").style.background = color;
+    document.querySelectorAll(".btn-bg-mode").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+  }
+
+  // スタイルプレビュー更新 & 自動保存
+  let _styleSaveTimer = null;
+  function updatePreview() {
+    const font = document.getElementById("style-font").value;
+    const size = document.getElementById("style-size").value;
+    const color = document.getElementById("style-color").value;
+    const effect = document.getElementById("style-effect").value;
+    const strokeColor = document.getElementById("style-stroke-color").value;
+    const align = document.getElementById("style-align").value;
+
+    document.getElementById("val-size").textContent = size;
+
+    const pText = document.getElementById("preview-text");
+    pText.style.fontFamily = font;
+    pText.style.fontSize = (size * 0.75) + "px"; // プレビュー用にスケーリング
+    pText.style.color = color;
+    pText.style.textAlign = align;
+
+    if (effect === "stroke") {
+      pText.style.textShadow = `
+        -2px -2px 0 ${strokeColor}, 2px -2px 0 ${strokeColor},
+        -2px 2px 0 ${strokeColor}, 2px 2px 0 ${strokeColor},
+        0 2px 4px rgba(0,0,0,0.8)
+      `;
+    } else if (effect === "double") {
+      pText.style.textShadow = `
+        -2px -2px 0 ${strokeColor}, 2px -2px 0 ${strokeColor},
+        -2px 2px 0 ${strokeColor}, 2px 2px 0 ${strokeColor},
+        -4px -4px 0 #fff, 4px -4px 0 #fff,
+        -4px 4px 0 #fff, 4px 4px 0 #fff
+      `;
+    } else if (effect === "glow") {
+      pText.style.textShadow = `0 0 8px ${color}, 0 0 16px ${color}, 0 0 24px ${color}`;
     }
 
-    async function loadAudioDevices() {
+    // デバウンス保存
+    if (_styleSaveTimer) clearTimeout(_styleSaveTimer);
+    _styleSaveTimer = setTimeout(async () => {
       try {
-        if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const audioInputs = devices.filter(d => d.kind === 'audioinput');
-        if (audioInputs.length === 0) return;
-
-        const curVal = deviceSelect.value;
-        deviceSelect.innerHTML = '<option value="">デフォルトマイク</option>';
-        audioInputs.forEach((d, idx) => {
-          const opt = document.createElement('option');
-          opt.value = d.deviceId;
-          opt.textContent = d.label || `マイク ${idx + 1}`;
-          if (d.deviceId === curVal) opt.selected = true;
-          deviceSelect.appendChild(opt);
+        await fetch("/overlay-style", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            font, size: parseInt(size), color, effect, strokeColor, align
+          })
         });
+        showAlert("スタイルを保存し、OBSに即時反映しました！");
       } catch (e) {
-        console.warn('マイクデバイス列挙失敗:', e);
+        console.error("Style save error:", e);
+      }
+    }, 400);
+  }
+
+  // ASR 設定保存
+  let _asrSaveTimer = null;
+  function saveAsrSettings() {
+    const lang = document.getElementById("cfg-lang").value;
+    const punct = document.getElementById("cfg-punct").checked;
+    const itn = document.getElementById("cfg-itn").checked;
+    const transEnabled = document.getElementById("cfg-trans-enable").checked;
+
+    const checkedLangs = [];
+    document.querySelectorAll('input[name="trans-lang"]:checked').forEach(c => {
+      checkedLangs.push(c.value);
+    });
+
+    // ピルのactiveクラス更新
+    document.querySelectorAll(".lang-pill-item").forEach(item => {
+      const chk = item.querySelector('input[type="checkbox"]');
+      if (chk && chk.checked) item.classList.add("active");
+      else item.classList.remove("active");
+    });
+    document.getElementById("trans-active-badge").textContent = `${checkedLangs.length}言語選択中`;
+
+    if (_asrSaveTimer) clearTimeout(_asrSaveTimer);
+    _asrSaveTimer = setTimeout(async () => {
+      try {
+        const res = await fetch("/config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            lang,
+            asr_model: lang === "ja" ? "reazon" : "haas",
+            enable_punct: punct,
+            punctuate: punct,
+            enable_itn: itn,
+            itn: itn,
+            translate_enabled: transEnabled,
+            translate: checkedLangs,
+          })
+        });
+        if (res.ok) {
+          showAlert(lang === "ja-haas" ? "Haas-ja-v1.0 に切り替えました" : "ReazonSpeech に切り替えました");
+          // エンジンチップ更新
+          document.getElementById("engine-val").textContent = lang === "ja-haas" ? "Haas-ja-v1.0" : "ReazonSpeech";
+        }
+      } catch (e) {
+        console.error("ASR config save error:", e);
+      }
+    }, 300);
+  }
+
+  function toggleTrans(enabled) {
+    document.getElementById("trans-lang-group").style.display = enabled ? "block" : "none";
+    if (enabled) {
+      // 1つも選択されていなければデフォルトでenを選択
+      const anyChecked = document.querySelectorAll('input[name="trans-lang"]:checked').length > 0;
+      if (!anyChecked) {
+        const enChk = document.querySelector('input[name="trans-lang"][value="en"]');
+        if (enChk) enChk.checked = true;
       }
     }
+    saveAsrSettings();
+  }
 
-    function connectWs() {
-      const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${location.host}/ws/mic`;
+  async function resetSession() {
+    if (!confirm("セッション履歴をリセットしますか？")) return;
+    try {
+      await fetch("/reset", { method: "POST" });
+      document.getElementById("final-feed").innerHTML = "";
+      document.getElementById("partial-live-text").innerHTML = 'マイクを開始すると、ここに話した内容が即座に表示されます<span class="caret"></span>';
+      document.getElementById("partial-live-text").classList.add("idle");
+      showAlert("履歴をリセットしました");
+    } catch (e) {
+      alert("リセット失敗: " + e);
+    }
+  }
+
+  // ================= マイク・WebSocket 通信 =================
+  const btnMic = document.getElementById("btn-toggle-mic");
+  const micText = document.getElementById("btn-mic-text");
+  const statusDot = document.getElementById("status-dot");
+  const statusLabel = document.getElementById("status-label");
+  const levelBar = document.getElementById("level-bar");
+  const levelVal = document.getElementById("level-val");
+
+  btnMic.addEventListener("click", () => {
+    if (isRecording) stopMic();
+    else startMic();
+  });
+
+  async function initMicrophones() {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const sel = document.getElementById("audio-source");
+      sel.innerHTML = '<option value="">デフォルトマイク</option>';
+      devices.forEach(d => {
+        if (d.kind === "audioinput") {
+          const opt = document.createElement("option");
+          opt.value = d.deviceId;
+          opt.textContent = d.label || `マイク (${d.deviceId.slice(0, 5)}...)`;
+          sel.appendChild(opt);
+        }
+      });
+    } catch (e) {
+      console.warn("Device enumeration error:", e);
+    }
+  }
+
+  async function startMic() {
+    try {
+      const devId = document.getElementById("audio-source").value;
+      const constraints = {
+        audio: devId ? { deviceId: { exact: devId } } : true,
+      };
+      mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+      audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      
+      const source = audioContext.createMediaStreamSource(mediaStream);
+      
+      // VUメーター用 Analyser
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+
+      // 16kHz リサンプラー & PCM 抽出
+      const bufferSize = 4096;
+      processorNode = audioContext.createScriptProcessor(bufferSize, 1, 1);
+      
+      const wsProto = location.protocol === "https:" ? "wss:" : "ws:";
+      const wsUrl = `${wsProto}//${location.host}/ws/mic`;
       ws = new WebSocket(wsUrl);
+      ws.binaryType = "arraybuffer";
 
       ws.onopen = () => {
-        statusBadge.className = 'status-badge connected';
-        statusText.textContent = isRecording ? '● 認識中' : '接続完了 (待機中)';
+        isRecording = true;
+        btnMic.classList.add("recording");
+        micText.textContent = "マイク停止";
+        statusDot.className = "status-dot recording";
+        statusLabel.textContent = "音声認識中";
       };
 
-      ws.onmessage = (event) => {
+      ws.onmessage = (evt) => {
         try {
-          const data = JSON.parse(event.data);
-          if (data.type === 'transcript') {
-            handleTranscript(data.text, data.is_final);
-          } else if (data.type === 'translation') {
-            handleTranslation(data.lang, data.text);
-          } else if (data.type === 'error') {
-            showError('サーバーエラー: ' + data.message);
-          }
-        } catch (e) { }
+          const data = JSON.parse(evt.data);
+          handleServerMessage(data);
+        } catch (e) {}
       };
 
       ws.onclose = () => {
-        statusBadge.className = 'status-badge';
-        statusText.textContent = '切断 (再接続中...)';
-        if (isRecording) {
-          stopRecording();
-        }
-        setTimeout(connectWs, 2000);
+        stopMic();
       };
-    }
 
-    let curPartialEl = null;
-    let lastFinalEl = null;
+      // 音声処理
+      processorNode.onaudioprocess = (e) => {
+        if (!isRecording || !ws || ws.readyState !== WebSocket.OPEN) return;
 
-    function handleTranscript(text, isFinal) {
-      if (!text || !text.trim()) return;
-      if (feedEmpty) feedEmpty.style.display = 'none';
+        // OBS マイクミュート連動チェック
+        if (window.isObsMuted) return;
 
-      if (!isFinal) {
-        // 発話中の追随字幕
-        if (!curPartialEl) {
-          curPartialEl = document.createElement('div');
-          curPartialEl.className = 'feed-item partial';
-          feedList.insertBefore(curPartialEl, feedList.firstChild);
+        const inputData = e.inputBuffer.getChannelData(0);
+
+        // 16kHz への簡易リサンプリング
+        const inputRate = audioContext.sampleRate;
+        const resampled = resampleTo16k(inputData, inputRate);
+        if (resampled && resampled.length > 0) {
+          ws.send(resampled.buffer);
         }
-        curPartialEl.textContent = '… ' + text;
+
+        // VUメーター更新
+        const dataArr = new Uint8Array(analyser.frequencyBinCount);
+        analyser.getByteFrequencyData(dataArr);
+        let sum = 0;
+        for (let i = 0; i < dataArr.length; i++) sum += dataArr[i];
+        const avg = sum / dataArr.length;
+        const pct = Math.min(100, Math.round((avg / 128) * 100));
+        levelBar.style.width = pct + "%";
+        levelVal.textContent = Math.round(pct) + " %";
+      };
+
+      source.connect(processorNode);
+      processorNode.connect(audioContext.destination);
+
+    } catch (err) {
+      console.error("Microphone start error:", err);
+      alert("マイク開始エラー: " + err.message);
+      stopMic();
+    }
+  }
+
+  function stopMic() {
+    isRecording = false;
+    btnMic.classList.remove("recording");
+    micText.textContent = "マイク開始";
+    statusDot.className = "status-dot";
+    statusLabel.textContent = "待機中 (切断)";
+    levelBar.style.width = "0%";
+    levelVal.textContent = "0 dB";
+
+    if (processorNode) {
+      processorNode.disconnect();
+      processorNode = null;
+    }
+    if (mediaStream) {
+      mediaStream.getTracks().forEach(t => t.stop());
+      mediaStream = null;
+    }
+    if (audioContext) {
+      audioContext.close();
+      audioContext = null;
+    }
+    if (ws) {
+      ws.close();
+      ws = null;
+    }
+  }
+
+  // 16kHz リサンプラー (線形補間)
+  function resampleTo16k(audioData, fromSampleRate) {
+    if (fromSampleRate === 16000) return new Float32Array(audioData);
+    const ratio = 16000 / fromSampleRate;
+    const newLen = Math.round(audioData.length * ratio);
+    const result = new Float32Array(newLen);
+    for (let i = 0; i < newLen; i++) {
+      const pos = i / ratio;
+      const index = Math.floor(pos);
+      const frac = pos - index;
+      const next = index + 1 < audioData.length ? audioData[index + 1] : audioData[index];
+      result[i] = audioData[index] * (1 - frac) + next * frac;
+    }
+    return result;
+  }
+
+  // サーバーメッセージ受信
+  function handleServerMessage(data) {
+    if (data.type === "engine_info") {
+      document.getElementById("engine-val").textContent = data.name;
+    } else if (data.type === "transcript") {
+      const pLive = document.getElementById("partial-live-text");
+      if (data.is_final) {
+        pLive.innerHTML = 'マイクを開始すると、ここに話した内容が即座に表示されます<span class="caret"></span>';
+        pLive.classList.add("idle");
+        appendFinalTranscript(data.text);
       } else {
-        // 確定字幕
-        let targetEl = curPartialEl;
-        if (targetEl) {
-          targetEl.className = 'feed-item';
-          targetEl.textContent = text;
-          curPartialEl = null;
-        } else {
-          targetEl = document.createElement('div');
-          targetEl.className = 'feed-item';
-          targetEl.textContent = text;
-          feedList.insertBefore(targetEl, feedList.firstChild);
-        }
-        lastFinalEl = targetEl;
-
-        while (feedList.children.length > 60) {
-          feedList.removeChild(feedList.lastChild);
-        }
+        pLive.classList.remove("idle");
+        pLive.innerHTML = escapeHtml(data.text) + '<span class="caret"></span>';
       }
+    } else if (data.type === "translation") {
+      appendTranslation(data.lang, data.text);
     }
+  }
 
-    function handleTranslation(lang, text) {
-      if (!text || !text.trim()) return;
-      const target = lastFinalEl || feedList.firstElementChild;
-      if (!target || target === feedEmpty) return;
+  function appendFinalTranscript(text) {
+    const feed = document.getElementById("final-feed");
+    const item = document.createElement("div");
+    item.className = "feed-item";
+    const now = new Date().toLocaleTimeString();
+    item.innerHTML = `
+      <div class="feed-meta">
+        <span>確定発話</span>
+        <span>${now}</span>
+      </div>
+      <div class="feed-text">${escapeHtml(text)}</div>
+      <div class="feed-trans-container"></div>
+    `;
+    feed.prepend(item);
+  }
 
-      const transEl = document.createElement('div');
-      transEl.className = 'feed-item-trans';
-      transEl.innerHTML = `<span class="lang-tag">${lang}</span> <span>${text}</span>`;
-      target.appendChild(transEl);
+  function appendTranslation(lang, transText) {
+    const feed = document.getElementById("final-feed");
+    const firstItem = feed.firstElementChild;
+    if (!firstItem) return;
+    const transContainer = firstItem.querySelector(".feed-trans-container");
+    if (!transContainer) return;
+    const tDiv = document.createElement("div");
+    tDiv.className = "feed-trans";
+    tDiv.textContent = `→ [${lang}] ${transText}`;
+    transContainer.appendChild(tDiv);
+  }
+
+  function escapeHtml(s) {
+    return (s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  // 初期化ロード
+  window.addEventListener("DOMContentLoaded", () => {
+    initMicrophones();
+    if (initialSettings) {
+      if (initialSettings.lang) document.getElementById("cfg-lang").value = initialSettings.lang;
+      document.getElementById("engine-val").textContent = initialSettings.lang === "ja-haas" ? "Haas-ja-v1.0" : "ReazonSpeech";
+      if (initialSettings.trans_target_langs) {
+        initialSettings.trans_target_langs.forEach(code => {
+          const chk = document.querySelector(`input[name="trans-lang"][value="${code}"]`);
+          if (chk) chk.checked = true;
+        });
+      }
+      document.getElementById("trans-active-badge").textContent = `${(initialSettings.trans_target_langs || []).length}言語選択中`;
+      document.querySelectorAll(".lang-pill-item").forEach(item => {
+        const chk = item.querySelector('input[type="checkbox"]');
+        if (chk && chk.checked) item.classList.add("active");
+      });
     }
-
-    async function toggleRecording() {
-      showError(null);
-      if (isRecording) {
-        stopRecording();
-      } else {
-        await startRecording();
+    if (initialStyle) {
+      if (initialStyle.font) document.getElementById("style-font").value = initialStyle.font;
+      if (initialStyle.size) {
+        document.getElementById("style-size").value = initialStyle.size;
+        document.getElementById("val-size").textContent = initialStyle.size;
       }
+      if (initialStyle.color) document.getElementById("style-color").value = initialStyle.color;
+      if (initialStyle.effect) document.getElementById("style-effect").value = initialStyle.effect;
+      if (initialStyle.strokeColor) document.getElementById("style-stroke-color").value = initialStyle.strokeColor;
+      if (initialStyle.align) document.getElementById("style-align").value = initialStyle.align;
     }
+    updatePreview();
+  });
+</script>
 
-    async function switchDevice() {
-      if (isRecording) {
-        stopRecording();
-        await startRecording();
-      }
-    }
-
-    // ネイティブレートから 16000Hz への正確な線形補間リサンプラー
-    function resampleTo16k(inputData, inSampleRate) {
-      if (inSampleRate === 16000) {
-        return inputData;
-      }
-      const ratio = inSampleRate / 16000;
-      const outLength = Math.floor(inputData.length / ratio);
-      const output = new Float32Array(outLength);
-
-      for (let i = 0; i < outLength; i++) {
-        const srcPos = i * ratio;
-        const srcIdx = Math.floor(srcPos);
-        const frac = srcPos - srcIdx;
-        const s0 = inputData[srcIdx] || 0;
-        const s1 = inputData[srcIdx + 1] || s0;
-        output[i] = s0 + (s1 - s0) * frac;
-      }
-      return output;
-    }
-
-    async function startRecording() {
-      try {
-        const selectedDev = deviceSelect.value;
-        const constraints = {
-          audio: {
-            channelCount: 1,
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-          }
-        };
-        if (selectedDev) {
-          constraints.audio.deviceId = { ideal: selectedDev };
-        }
-
-        try {
-          micStream = await navigator.mediaDevices.getUserMedia(constraints);
-        } catch (e1) {
-          console.warn('詳細制約でのマイク取得失敗、基本設定で再試行:', e1);
-          micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        }
-
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        if (audioCtx.state === 'suspended') {
-          await audioCtx.resume();
-        }
-
-        const source = audioCtx.createMediaStreamSource(micStream);
-        const inSampleRate = audioCtx.sampleRate;
-
-        // 4096 サンプルごとに処理
-        scriptNode = audioCtx.createScriptProcessor(4096, 1, 1);
-        scriptNode.onaudioprocess = (e) => {
-          if (!isRecording || !ws || ws.readyState !== WebSocket.OPEN) return;
-          const inputData = e.inputBuffer.getChannelData(0);
-
-          // VU メーター計算 (RMS)
-          let sum = 0;
-          for (let i = 0; i < inputData.length; i++) {
-            sum += inputData[i] * inputData[i];
-          }
-          const rms = Math.sqrt(sum / inputData.length);
-          const level = Math.min(100, Math.round(rms * 450));
-          vuFill.style.width = level + '%';
-          vuVal.textContent = level + '%';
-
-          // 16kHz にリサンプルして Float32Array バイナリを送信
-          const resampled16k = resampleTo16k(inputData, inSampleRate);
-          ws.send(resampled16k.buffer);
-        };
-
-        source.connect(scriptNode);
-        scriptNode.connect(audioCtx.destination);
-
-        isRecording = true;
-        btnToggle.className = 'btn-record active';
-        btnIcon.textContent = '⏹️';
-        btnText.textContent = 'マイク停止';
-        statusBadge.className = 'status-badge recording';
-        statusText.textContent = '● 認識中';
-
-        loadAudioDevices();
-      } catch (err) {
-        console.error('マイクアクセス例外:', err);
-        let msg = 'マイクへのアクセスに失敗しました: ' + err.message;
-        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-          msg = '🚫 マイクの使用がブラウザまたはOSでブロックされています。アドレスバーの鍵アイコン等からマイクアクセスを許可してください。';
-        } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
-          msg = '🎤 マイクが見つかりません。マイクがPCに正しく接続されているか確認してください。';
-        } else if (err.name === 'NotReadableError') {
-          msg = '⚠️ マイクが別のアプリ（Discord、Zoomなど）で排他使用されている可能性があります。';
-        }
-        showError(msg);
-        stopRecording();
-      }
-    }
-
-    function stopRecording() {
-      isRecording = false;
-      if (scriptNode) {
-        try { scriptNode.disconnect(); } catch (e) { }
-        scriptNode = null;
-      }
-      if (audioCtx) {
-        try { audioCtx.close(); } catch (e) { }
-        audioCtx = null;
-      }
-      if (micStream) {
-        try {
-          micStream.getTracks().forEach(t => t.stop());
-        } catch (e) { }
-        micStream = null;
-      }
-      btnToggle.className = 'btn-record';
-      btnIcon.textContent = '🎙️';
-      btnText.textContent = 'マイク開始';
-      vuFill.style.width = '0%';
-      vuVal.textContent = '0%';
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        statusBadge.className = 'status-badge connected';
-        statusText.textContent = '接続完了 (待機中)';
-      }
-    }
-
-    // 初回接続
-    connectWs();
-    loadAudioDevices();
-  </script>
 </body>
-
 </html>

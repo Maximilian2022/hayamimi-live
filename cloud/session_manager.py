@@ -36,6 +36,8 @@ DEFAULT_OVERLAY_STYLE: Dict[str, Any] = {
 }
 
 DEFAULT_SETTINGS: Dict[str, Any] = {
+    "asr_model": "haas",  # "haas" (Haas-ja-v1.0) or "reazon" (ReazonSpeech)
+    "lang": "ja-haas",    # "ja-haas" or "ja" (Standalone互換)
     "enable_punct": True,
     "enable_itn": True,
     "enable_trans": False,
@@ -123,6 +125,7 @@ class UserSession:
         self.settings: Dict[str, Any] = self._load_settings()
         self.obs_subscribers: Set[asyncio.Queue] = set()
         self.last_transcript: str = ""
+        self.active_vad_session: Any = None
 
     def _load_or_create_obs_token(self) -> str:
         """OBS 字幕用シークレットトークンをロード、または新規生成する"""
@@ -290,6 +293,15 @@ class UserSession:
     def save_settings(self, settings: dict) -> Dict[str, Any]:
         """ASR 設定を保存する"""
         cur = dict(self.settings)
+        if "asr_model" in settings:
+            model = str(settings["asr_model"]).lower().strip()
+            cur["asr_model"] = "reazon" if model in ("reazon", "rz", "ja") else "haas"
+            cur["lang"] = "ja" if cur["asr_model"] == "reazon" else "ja-haas"
+        elif "lang" in settings:
+            lang = str(settings["lang"]).lower().strip()
+            cur["lang"] = lang
+            cur["asr_model"] = "reazon" if lang == "ja" else "haas"
+
         if "enable_punct" in settings:
             cur["enable_punct"] = bool(settings["enable_punct"])
         if "enable_itn" in settings:
@@ -307,6 +319,15 @@ class UserSession:
             logger.error("Failed to save settings.json for %s: %s", self.user_id, e)
 
         self.settings = cur
+
+        # アクティブな VAD セッションがあればモデルを即時切り替え
+        if self.active_vad_session is not None and hasattr(self.active_vad_session, "set_model_choice"):
+            try:
+                self.active_vad_session.set_model_choice(cur["asr_model"])
+                logger.info("Switched live ASR model for user %s to %s", self.user_id, cur["asr_model"])
+            except Exception as e:
+                logger.warning("Failed to update active VAD session model: %s", e)
+
         return cur
 
     def get_gemini_key(self) -> str:
