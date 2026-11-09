@@ -72,7 +72,7 @@
 
     main {
       flex: 1;
-      max-width: 800px;
+      max-width: 860px;
       width: 100%;
       margin: 1.5rem auto;
       padding: 0 1rem;
@@ -91,62 +91,92 @@
     .controls-row {
       display: flex;
       align-items: center;
-      gap: 1rem;
+      gap: 1.25rem;
       flex-wrap: wrap;
     }
     .btn-record {
       display: inline-flex;
       align-items: center;
       gap: 0.5rem;
-      background: #2563eb;
-      color: #fff;
-      border: none;
-      font-size: 1.05rem;
+      padding: 0.875rem 1.75rem;
+      background: #3b82f6;
+      color: white;
+      font-size: 1rem;
       font-weight: 700;
-      padding: 0.75rem 1.75rem;
+      border: none;
       border-radius: 10px;
       cursor: pointer;
-      transition: all 0.2s;
+      box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+      transition: all 0.2s ease;
     }
-    .btn-record:hover { background: #1d4ed8; }
+    .btn-record:hover {
+      background: #2563eb;
+      transform: translateY(-1px);
+    }
     .btn-record.active {
-      background: #dc2626;
-      animation: pulse-red 2s infinite;
+      background: #ef4444;
+      box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+      animation: pulse 2s infinite;
     }
-    @keyframes pulse-red {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.85; }
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+      70% { box-shadow: 0 0 0 12px rgba(239, 68, 68, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+    }
+
+    .device-select-wrap {
+      flex: 1;
+      min-width: 200px;
+    }
+    .select-label {
+      font-size: 0.75rem;
+      color: #94a3b8;
+      margin-bottom: 0.25rem;
+      display: block;
+    }
+    .device-select {
+      width: 100%;
+      background: #0f1117;
+      border: 1px solid #2d3449;
+      color: #f1f5f9;
+      padding: 0.5rem 0.75rem;
+      border-radius: 8px;
+      font-size: 0.85rem;
     }
 
     /* VU Meter */
     .vu-meter-container {
-      flex: 1;
-      min-width: 200px;
-      display: flex;
-      flex-direction: column;
-      gap: 0.35rem;
+      width: 100%;
+      margin-top: 1rem;
+      background: #0f1117;
+      border: 1px solid #232736;
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
     }
     .vu-label {
-      font-size: 0.75rem;
-      color: #94a3b8;
       display: flex;
       justify-content: space-between;
+      font-size: 0.8rem;
+      color: #94a3b8;
+      margin-bottom: 0.4rem;
     }
     .vu-bar-bg {
       height: 8px;
-      background: #1f2433;
-      border-radius: 4px;
+      background: #1e293b;
+      border-radius: 9999px;
       overflow: hidden;
     }
     .vu-bar-fill {
       height: 100%;
       width: 0%;
-      background: linear-gradient(90deg, #10b981 60%, #f59e0b 85%, #ef4444 100%);
-      transition: width 0.05s ease;
+      background: linear-gradient(90deg, #10b981 0%, #f59e0b 70%, #ef4444 100%);
+      border-radius: 9999px;
+      transition: width 0.08s ease-out;
     }
 
-    /* Transcripts Feed */
+    /* Feed Container */
     .feed-container {
+      flex: 1;
       display: flex;
       flex-direction: column;
       height: 420px;
@@ -189,6 +219,17 @@
       text-align: center;
       margin: auto;
     }
+    .error-banner {
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      color: #fca5a5;
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      display: none;
+      margin-top: 0.75rem;
+      line-height: 1.4;
+    }
   </style>
 </head>
 <body>
@@ -211,25 +252,34 @@
           <span id="btn-text">マイク開始</span>
         </button>
 
-        <div class="vu-meter-container">
-          <div class="vu-label">
-            <span>マイク音量</span>
-            <span id="vu-val">0%</span>
-          </div>
-          <div class="vu-bar-bg">
-            <div id="vu-fill" class="vu-bar-fill"></div>
-          </div>
+        <div class="device-select-wrap">
+          <label class="select-label">マイク入力デバイス</label>
+          <select id="audio-device-select" class="device-select" onchange="switchDevice()">
+            <option value="">デフォルトマイク</option>
+          </select>
         </div>
       </div>
+
+      <div class="vu-meter-container">
+        <div class="vu-label">
+          <span>マイク入力レベル</span>
+          <span id="vu-val">0%</span>
+        </div>
+        <div class="vu-bar-bg">
+          <div id="vu-fill" class="vu-bar-fill"></div>
+        </div>
+      </div>
+
+      <div id="error-banner" class="error-banner"></div>
     </div>
 
     <div class="card feed-container">
       <div class="feed-header">
-        <span>リアルタイム認識ログ（最新が上）</span>
-        <span style="font-size: 0.8rem; color: #64748b;">※ OBS にも同時に送信されます</span>
+        <span>リアルタイム認識フィード（最新が上）</span>
+        <span style="font-size: 0.8rem; color: #64748b;">※ OBS 側にもリアルタイムに配信されています</span>
       </div>
       <div id="feed-list" class="feed-list">
-        <div id="feed-empty" class="feed-empty">マイクを開始して話すと、ここに字幕が表示されます</div>
+        <div id="feed-empty" class="feed-empty">マイクを開始して話すと、ここにリアルタイム字幕が表示されます</div>
       </div>
     </div>
   </main>
@@ -250,6 +300,38 @@
     const vuVal = document.getElementById('vu-val');
     const feedList = document.getElementById('feed-list');
     const feedEmpty = document.getElementById('feed-empty');
+    const errorBanner = document.getElementById('error-banner');
+    const deviceSelect = document.getElementById('audio-device-select');
+
+    function showError(msg) {
+      if (msg) {
+        errorBanner.textContent = msg;
+        errorBanner.style.display = 'block';
+      } else {
+        errorBanner.style.display = 'none';
+      }
+    }
+
+    async function loadAudioDevices() {
+      try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const audioInputs = devices.filter(d => d.kind === 'audioinput');
+        if (audioInputs.length === 0) return;
+
+        const curVal = deviceSelect.value;
+        deviceSelect.innerHTML = '<option value="">デフォルトマイク</option>';
+        audioInputs.forEach((d, idx) => {
+          const opt = document.createElement('option');
+          opt.value = d.deviceId;
+          opt.textContent = d.label || `マイク ${idx + 1}`;
+          if (d.deviceId === curVal) opt.selected = true;
+          deviceSelect.appendChild(opt);
+        });
+      } catch (e) {
+        console.warn('マイクデバイス列挙失敗:', e);
+      }
+    }
 
     function connectWs() {
       const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -258,7 +340,7 @@
 
       ws.onopen = () => {
         statusBadge.className = 'status-badge connected';
-        statusText.textContent = '接続完了 (待機中)';
+        statusText.textContent = isRecording ? '● 認識中' : '接続完了 (待機中)';
       };
 
       ws.onmessage = (event) => {
@@ -266,6 +348,8 @@
           const data = JSON.parse(event.data);
           if (data.type === 'transcript') {
             addTranscript(data.text);
+          } else if (data.type === 'error') {
+            showError('サーバーエラー: ' + data.message);
           }
         } catch (e) {}
       };
@@ -289,13 +373,13 @@
       item.textContent = text;
       feedList.insertBefore(item, feedList.firstChild);
 
-      // 上限 50 件
-      while (feedList.children.length > 50) {
+      while (feedList.children.length > 60) {
         feedList.removeChild(feedList.lastChild);
       }
     }
 
     async function toggleRecording() {
+      showError(null);
       if (isRecording) {
         stopRecording();
       } else {
@@ -303,39 +387,82 @@
       }
     }
 
+    async function switchDevice() {
+      if (isRecording) {
+        stopRecording();
+        await startRecording();
+      }
+    }
+
+    // ネイティブレートから 16000Hz への正確な線形補間リサンプラー
+    function resampleTo16k(inputData, inSampleRate) {
+      if (inSampleRate === 16000) {
+        return inputData;
+      }
+      const ratio = inSampleRate / 16000;
+      const outLength = Math.floor(inputData.length / ratio);
+      const output = new Float32Array(outLength);
+
+      for (let i = 0; i < outLength; i++) {
+        const srcPos = i * ratio;
+        const srcIdx = Math.floor(srcPos);
+        const frac = srcPos - srcIdx;
+        const s0 = inputData[srcIdx] || 0;
+        const s1 = inputData[srcIdx + 1] || s0;
+        output[i] = s0 + (s1 - s0) * frac;
+      }
+      return output;
+    }
+
     async function startRecording() {
       try {
-        micStream = await navigator.mediaDevices.getUserMedia({
+        const selectedDev = deviceSelect.value;
+        const constraints = {
           audio: {
-            sampleRate: 16000,
             channelCount: 1,
             echoCancellation: true,
             noiseSuppression: true,
             autoGainControl: true,
           }
-        });
+        };
+        if (selectedDev) {
+          constraints.audio.deviceId = { ideal: selectedDev };
+        }
 
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+        try {
+          micStream = await navigator.mediaDevices.getUserMedia(constraints);
+        } catch (e1) {
+          console.warn('詳細制約でのマイク取得失敗、基本設定で再試行:', e1);
+          micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        }
+
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === 'suspended') {
+          await audioCtx.resume();
+        }
+
         const source = audioCtx.createMediaStreamSource(micStream);
+        const inSampleRate = audioCtx.sampleRate;
 
-        // 4096 サンプル (約 0.25 秒) ごとに PCM データを抽出
+        // 4096 サンプルごとに処理
         scriptNode = audioCtx.createScriptProcessor(4096, 1, 1);
         scriptNode.onaudioprocess = (e) => {
           if (!isRecording || !ws || ws.readyState !== WebSocket.OPEN) return;
           const inputData = e.inputBuffer.getChannelData(0);
 
-          // VU メーター計算
+          // VU メーター計算 (RMS)
           let sum = 0;
           for (let i = 0; i < inputData.length; i++) {
             sum += inputData[i] * inputData[i];
           }
           const rms = Math.sqrt(sum / inputData.length);
-          const level = Math.min(100, Math.round(rms * 400));
+          const level = Math.min(100, Math.round(rms * 450));
           vuFill.style.width = level + '%';
           vuVal.textContent = level + '%';
 
-          // float32 配列を直接バイナリ送信
-          ws.send(inputData.buffer);
+          // 16kHz にリサンプルして Float32Array バイナリを送信
+          const resampled16k = resampleTo16k(inputData, inSampleRate);
+          ws.send(resampled16k.buffer);
         };
 
         source.connect(scriptNode);
@@ -348,23 +475,36 @@
         statusBadge.className = 'status-badge recording';
         statusText.textContent = '● 認識中';
 
+        loadAudioDevices();
       } catch (err) {
-        alert('マイクへのアクセスに失敗しました: ' + err);
+        console.error('マイクアクセス例外:', err);
+        let msg = 'マイクへのアクセスに失敗しました: ' + err.message;
+        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+          msg = '🚫 マイクの使用がブラウザまたはOSでブロックされています。アドレスバーの鍵アイコン等からマイクアクセスを許可してください。';
+        } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+          msg = '🎤 マイクが見つかりません。マイクがPCに正しく接続されているか確認してください。';
+        } else if (err.name === 'NotReadableError') {
+          msg = '⚠️ マイクが別のアプリ（Discord、Zoomなど）で排他使用されている可能性があります。';
+        }
+        showError(msg);
+        stopRecording();
       }
     }
 
     function stopRecording() {
       isRecording = false;
       if (scriptNode) {
-        scriptNode.disconnect();
+        try { scriptNode.disconnect(); } catch (e) {}
         scriptNode = null;
       }
       if (audioCtx) {
-        audioCtx.close();
+        try { audioCtx.close(); } catch (e) {}
         audioCtx = null;
       }
       if (micStream) {
-        micStream.getTracks().forEach(t => t.stop());
+        try {
+          micStream.getTracks().forEach(t => t.stop());
+        } catch (e) {}
         micStream = null;
       }
       btnToggle.className = 'btn-record';
@@ -380,7 +520,7 @@
 
     // 初回接続
     connectWs();
+    loadAudioDevices();
   </script>
 </body>
 </html>
-

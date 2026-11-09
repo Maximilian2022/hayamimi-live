@@ -1,14 +1,22 @@
 <!DOCTYPE html>
 <html lang="ja">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>早耳 クラウドダッシュボード</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Bungee&family=Dela+Gothic+One&family=DotGothic16&family=Fredoka:wght@500;700&family=Hachi+Maru+Pop&family=IBM+Plex+Sans+JP:wght@500;700&family=Inter:wght@400;500;600;700&family=Kiwi+Maru:wght@500&family=M+PLUS+Rounded+1c:wght@500;700;800;900&family=Noto+Sans+JP:wght@500;700;900&family=Rampart+One&family=Reggae+One&family=Righteous&family=Shippori+Mincho+B1:wght@600;800&family=Yuji+Boku&family=Zen+Kaku+Gothic+New:wght@500;700;900&display=swap" rel="stylesheet">
+  <link
+    href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Bungee&family=Dela+Gothic+One&family=DotGothic16&family=Fredoka:wght@500;700&family=Hachi+Maru+Pop&family=IBM+Plex+Sans+JP:wght@500;700&family=Inter:wght@400;500;600;700&family=Kiwi+Maru:wght@500&family=M+PLUS+Rounded+1c:wght@500;700;800;900&family=Noto+Sans+JP:wght@500;700;900&family=Rampart+One&family=Reggae+One&family=Righteous&family=Shippori+Mincho+B1:wght@600;800&family=Yuji+Boku&family=Zen+Kaku+Gothic+New:wght@500;700;900&display=swap"
+    rel="stylesheet">
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
     body {
       background-color: #0b0d13;
       color: #e2e8f0;
@@ -17,6 +25,7 @@
       display: flex;
       flex-direction: column;
     }
+
     header {
       background: #151822;
       border-bottom: 1px solid #232736;
@@ -25,17 +34,23 @@
       align-items: center;
       justify-content: space-between;
     }
+
     .header-left {
       display: flex;
       align-items: center;
       gap: 0.75rem;
     }
-    .header-logo { font-size: 1.5rem; }
+
+    .header-logo {
+      font-size: 1.5rem;
+    }
+
     .header-title {
       font-size: 1.25rem;
       font-weight: 700;
       color: #f8fafc;
     }
+
     .user-pill {
       display: flex;
       align-items: center;
@@ -45,24 +60,30 @@
       border-radius: 9999px;
       border: 1px solid #2d3449;
     }
+
     .avatar {
       width: 28px;
       height: 28px;
       border-radius: 50%;
       background: #475569;
     }
+
     .username {
       font-size: 0.9rem;
       font-weight: 600;
       color: #f1f5f9;
     }
+
     .btn-logout {
       color: #94a3b8;
       font-size: 0.85rem;
       text-decoration: none;
       margin-left: 0.5rem;
     }
-    .btn-logout:hover { color: #f87171; }
+
+    .btn-logout:hover {
+      color: #f87171;
+    }
 
     main {
       flex: 1;
@@ -74,6 +95,7 @@
       flex-direction: column;
       gap: 1.75rem;
     }
+
     .card {
       background: #151822;
       border: 1px solid #232736;
@@ -81,6 +103,7 @@
       padding: 1.5rem;
       box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
     }
+
     .card-title {
       font-size: 1.15rem;
       font-weight: 700;
@@ -90,6 +113,7 @@
       gap: 0.5rem;
       color: #f8fafc;
     }
+
     .card-desc {
       font-size: 0.9rem;
       color: #94a3b8;
@@ -114,7 +138,11 @@
       text-decoration: none;
       transition: all 0.2s ease;
     }
-    .btn-primary:hover { background: #2563eb; }
+
+    .btn-primary:hover {
+      background: #2563eb;
+    }
+
     .btn-secondary {
       display: inline-flex;
       align-items: center;
@@ -128,13 +156,18 @@
       font-size: 0.9rem;
       transition: all 0.2s ease;
     }
-    .btn-secondary:hover { background: #334155; color: #ffffff; }
+
+    .btn-secondary:hover {
+      background: #334155;
+      color: #ffffff;
+    }
 
     .url-box {
       display: flex;
       gap: 0.5rem;
       margin-bottom: 1rem;
     }
+
     .url-input {
       flex: 1;
       background: #0f1117;
@@ -163,6 +196,7 @@
       margin-bottom: 1.5rem;
       padding: 1rem;
     }
+
     #preview-sub {
       display: inline-block;
       max-width: 90%;
@@ -177,16 +211,19 @@
       gap: 1.25rem;
       margin-bottom: 1.5rem;
     }
+
     .form-group {
       display: flex;
       flex-direction: column;
       gap: 0.4rem;
     }
+
     .form-group label {
       font-size: 0.85rem;
       font-weight: 600;
       color: #cbd5e1;
     }
+
     .form-control {
       background: #0f1117;
       border: 1px solid #2d3449;
@@ -196,18 +233,22 @@
       font-size: 0.9rem;
       width: 100%;
     }
+
     .form-control:focus {
       outline: none;
       border-color: #3b82f6;
     }
+
     .range-wrap {
       display: flex;
       align-items: center;
       gap: 0.75rem;
     }
+
     .range-wrap input[type="range"] {
       flex: 1;
     }
+
     .range-val {
       font-family: monospace;
       font-size: 0.85rem;
@@ -215,11 +256,13 @@
       width: 45px;
       text-align: right;
     }
+
     .color-picker-wrap {
       display: flex;
       align-items: center;
       gap: 0.5rem;
     }
+
     .color-picker-wrap input[type="color"] {
       border: none;
       width: 36px;
@@ -235,6 +278,7 @@
       gap: 0.75rem;
       align-items: center;
     }
+
     .radio-label {
       display: flex;
       align-items: center;
@@ -253,25 +297,62 @@
       border: 1px solid #232736;
       border-radius: 8px;
     }
-    .switch-title { font-size: 0.9rem; font-weight: 600; color: #f1f5f9; }
-    .switch-desc { font-size: 0.8rem; color: #94a3b8; }
+
+    .switch-title {
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: #f1f5f9;
+    }
+
+    .switch-desc {
+      font-size: 0.8rem;
+      color: #94a3b8;
+    }
+
     .switch {
       position: relative;
       display: inline-block;
       width: 44px;
       height: 24px;
     }
-    .switch input { opacity: 0; width: 0; height: 0; }
+
+    .switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+
     .slider {
-      position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
-      background-color: #334155; transition: .3s; border-radius: 24px;
+      position: absolute;
+      cursor: pointer;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-color: #334155;
+      transition: .3s;
+      border-radius: 24px;
     }
+
     .slider:before {
-      position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px;
-      background-color: white; transition: .3s; border-radius: 50%;
+      position: absolute;
+      content: "";
+      height: 18px;
+      width: 18px;
+      left: 3px;
+      bottom: 3px;
+      background-color: white;
+      transition: .3s;
+      border-radius: 50%;
     }
-    input:checked + .slider { background-color: #3b82f6; }
-    input:checked + .slider:before { transform: translateX(20px); }
+
+    input:checked+.slider {
+      background-color: #3b82f6;
+    }
+
+    input:checked+.slider:before {
+      transform: translateX(20px);
+    }
 
     /* ログターミナル */
     .log-terminal {
@@ -288,6 +369,7 @@
       line-height: 1.5;
       margin-top: 0.75rem;
     }
+
     .progress-bar-bg {
       background: #1e2433;
       border-radius: 9999px;
@@ -295,6 +377,7 @@
       overflow: hidden;
       margin-top: 0.75rem;
     }
+
     .progress-bar-fill {
       background: linear-gradient(90deg, #3b82f6, #8b5cf6);
       height: 100%;
@@ -315,6 +398,7 @@
       line-height: 1.5;
       resize: vertical;
     }
+
     .toast {
       position: fixed;
       bottom: 2rem;
@@ -331,9 +415,14 @@
       pointer-events: none;
       z-index: 999;
     }
-    .toast.show { opacity: 1; transform: translateY(0); }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
   </style>
 </head>
+
 <body>
   <header>
     <div class="header-left">
@@ -364,7 +453,8 @@
         <button onclick="regenerateToken()" class="btn-secondary" title="URL が漏洩した場合に再発行します">🔄 再生成</button>
       </div>
       <div style="display: flex; gap: 1rem; align-items: center; margin-top: 1rem;">
-        <a href="/mic" target="_blank" class="btn-primary" style="background: linear-gradient(135deg, #3b82f6, #8b5cf6); padding: 0.875rem 1.75rem;">
+        <a href="/mic" target="_blank" class="btn-primary"
+          style="background: linear-gradient(135deg, #3b82f6, #8b5cf6); padding: 0.875rem 1.75rem;">
           🎤 マイク入力画面を開く
         </a>
         <span style="font-size: 0.85rem; color: #94a3b8;">※ マイク画面を開いて喋るだけで、OBS 側に字幕がリアルタイム配信されます</span>
@@ -418,7 +508,8 @@
           <label>文字色</label>
           <div class="color-picker-wrap">
             <input type="color" id="style-color" value="{{ style.color }}" oninput="updatePreview()">
-            <input type="text" id="style-color-hex" class="form-control" value="{{ style.color }}" oninput="syncColorInput('style-color', this.value)">
+            <input type="text" id="style-color-hex" class="form-control" value="{{ style.color }}"
+              oninput="syncColorInput('style-color', this.value)">
           </div>
         </div>
 
@@ -426,9 +517,12 @@
         <div class="form-group">
           <label>エフェクト種別</label>
           <div class="radio-group" style="margin-top: 0.4rem;">
-            <label class="radio-label"><input type="radio" name="effect" value="stroke" onchange="updatePreview()" {% if style.effect == 'stroke' %}checked{% endif %}> 単色縁取り</label>
-            <label class="radio-label"><input type="radio" name="effect" value="double" onchange="updatePreview()" {% if style.effect == 'double' %}checked{% endif %}> 二重縁取り</label>
-            <label class="radio-label"><input type="radio" name="effect" value="glow" onchange="updatePreview()" {% if style.effect == 'glow' %}checked{% endif %}> 発光 (Glow)</label>
+            <label class="radio-label"><input type="radio" name="effect" value="stroke" onchange="updatePreview()" {% if
+                style.effect=='stroke' %}checked{% endif %}> 単色縁取り</label>
+            <label class="radio-label"><input type="radio" name="effect" value="double" onchange="updatePreview()" {% if
+                style.effect=='double' %}checked{% endif %}> 二重縁取り</label>
+            <label class="radio-label"><input type="radio" name="effect" value="glow" onchange="updatePreview()" {% if
+                style.effect=='glow' %}checked{% endif %}> 発光 (Glow)</label>
           </div>
         </div>
 
@@ -437,7 +531,8 @@
           <label>縁取り・発光色</label>
           <div class="color-picker-wrap">
             <input type="color" id="style-stroke-color" value="{{ style.strokeColor }}" oninput="updatePreview()">
-            <input type="text" id="style-stroke-color-hex" class="form-control" value="{{ style.strokeColor }}" oninput="syncColorInput('style-stroke-color', this.value)">
+            <input type="text" id="style-stroke-color-hex" class="form-control" value="{{ style.strokeColor }}"
+              oninput="syncColorInput('style-stroke-color', this.value)">
           </div>
         </div>
 
@@ -445,7 +540,8 @@
         <div class="form-group">
           <label>縁取り太さ / 発光半径</label>
           <div class="range-wrap">
-            <input type="range" id="style-stroke-width" min="0" max="12" step="0.5" value="{{ style.strokeWidth }}" oninput="updatePreview()">
+            <input type="range" id="style-stroke-width" min="0" max="12" step="0.5" value="{{ style.strokeWidth }}"
+              oninput="updatePreview()">
             <span class="range-val" id="val-stroke-width">{{ style.strokeWidth }}px</span>
           </div>
         </div>
@@ -454,9 +550,9 @@
         <div class="form-group">
           <label>テキスト配置</label>
           <select id="style-align" class="form-control" onchange="updatePreview()">
-            <option value="center" {% if style.align == 'center' %}selected{% endif %}>中央揃え</option>
-            <option value="left" {% if style.align == 'left' %}selected{% endif %}>左揃え</option>
-            <option value="right" {% if style.align == 'right' %}selected{% endif %}>右揃え</option>
+            <option value="center" {% if style.align=='center' %}selected{% endif %}>中央揃え</option>
+            <option value="left" {% if style.align=='left' %}selected{% endif %}>左揃え</option>
+            <option value="right" {% if style.align=='right' %}selected{% endif %}>右揃え</option>
           </select>
         </div>
 
@@ -464,7 +560,8 @@
         <div class="form-group">
           <label>画面下部からの余白 (vh)</label>
           <div class="range-wrap">
-            <input type="range" id="style-bottom" min="0" max="30" step="1" value="{{ style.bottom }}" oninput="updatePreview()">
+            <input type="range" id="style-bottom" min="0" max="30" step="1" value="{{ style.bottom }}"
+              oninput="updatePreview()">
             <span class="range-val" id="val-bottom">{{ style.bottom }}%</span>
           </div>
         </div>
@@ -473,7 +570,8 @@
         <div class="form-group">
           <label>背景の不透明度 (0で透明)</label>
           <div class="range-wrap">
-            <input type="range" id="style-bg-opacity" min="0" max="100" step="5" value="{{ style.bgOpacity }}" oninput="updatePreview()">
+            <input type="range" id="style-bg-opacity" min="0" max="100" step="5" value="{{ style.bgOpacity }}"
+              oninput="updatePreview()">
             <span class="range-val" id="val-bg-opacity">{{ style.bgOpacity }}%</span>
           </div>
         </div>
@@ -495,7 +593,8 @@
             <div class="switch-desc">文末や文中に自然な「、」「。」を自動挿入します</div>
           </div>
           <label class="switch">
-            <input type="checkbox" id="setting-punct" {% if settings.enable_punct %}checked{% endif %} onchange="saveSettings()">
+            <input type="checkbox" id="setting-punct" {% if settings.enable_punct %}checked{% endif %}
+              onchange="saveSettings()">
             <span class="slider"></span>
           </label>
         </div>
@@ -506,7 +605,8 @@
             <div class="switch-desc">「三千円」➔「3,000円」、「十五日」➔「15日」のように漢数字を数字表記に変換します</div>
           </div>
           <label class="switch">
-            <input type="checkbox" id="setting-itn" {% if settings.enable_itn %}checked{% endif %} onchange="saveSettings()">
+            <input type="checkbox" id="setting-itn" {% if settings.enable_itn %}checked{% endif %}
+              onchange="saveSettings()">
             <span class="slider"></span>
           </label>
         </div>
@@ -521,13 +621,17 @@
       </div>
 
       <!-- Gemini API キー設定 -->
-      <div style="background: #0f1117; border: 1px solid #232736; border-radius: 8px; padding: 1rem; margin-bottom: 1.25rem;">
+      <div
+        style="background: #0f1117; border: 1px solid #232736; border-radius: 8px; padding: 1rem; margin-bottom: 1.25rem;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-          <label style="font-size: 0.85rem; font-weight: 600; color: #cbd5e1;">Google AI Studio Gemini API キー (無料)</label>
-          <a href="https://aistudio.google.com/app/apikey" target="_blank" style="font-size: 0.8rem; color: #38bdf8; text-decoration: none;">🔑 API キーを無料で取得 ↗</a>
+          <label style="font-size: 0.85rem; font-weight: 600; color: #cbd5e1;">Google AI Studio Gemini API キー
+            (無料)</label>
+          <a href="https://aistudio.google.com/app/apikey" target="_blank"
+            style="font-size: 0.8rem; color: #38bdf8; text-decoration: none;">🔑 API キーを無料で取得 ↗</a>
         </div>
         <div style="display: flex; gap: 0.5rem;">
-          <input type="password" id="gemini-key-input" class="form-control" placeholder="{{ masked_key if has_gemini_key else 'AIzaSy...' }}" style="flex: 1;">
+          <input type="password" id="gemini-key-input" class="form-control"
+            placeholder="{{ masked_key if has_gemini_key else 'AIzaSy...' }}" style="flex: 1;">
           <button onclick="saveGeminiKey()" class="btn-secondary">保存</button>
           <button onclick="testGeminiKey()" class="btn-secondary">接続テスト</button>
         </div>
@@ -540,7 +644,8 @@
       <div style="display: flex; flex-direction: column; gap: 0.75rem;">
         <div class="form-group">
           <label>YouTube URL (動画 / 再生リスト / チャンネル)</label>
-          <input type="text" id="yt-url-input" class="form-control" placeholder="https://www.youtube.com/watch?v=... またはチャンネルURL">
+          <input type="text" id="yt-url-input" class="form-control"
+            placeholder="https://www.youtube.com/watch?v=... またはチャンネルURL">
         </div>
 
         <div style="display: flex; gap: 1rem; align-items: center;">
@@ -623,7 +728,7 @@
     // -------------------------------------------------------------
     function hexToRgba(hex, alphaPercent) {
       hex = (hex || "#000000").replace("#", "");
-      if (hex.length === 3) hex = hex.split("").map(c => c+c).join("");
+      if (hex.length === 3) hex = hex.split("").map(c => c + c).join("");
       const r = parseInt(hex.substring(0, 2), 16) || 0;
       const g = parseInt(hex.substring(2, 4), 16) || 0;
       const b = parseInt(hex.substring(4, 6), 16) || 0;
@@ -865,7 +970,7 @@
             return;
           }
         }
-      } catch (e) {}
+      } catch (e) { }
 
       pollTimer = setTimeout(pollProgress, 2000);
     }
@@ -877,7 +982,7 @@
         const doc = new DOMParser().parseFromString(html, 'text/html');
         const newText = doc.getElementById('dict-textarea').value;
         document.getElementById('dict-textarea').value = newText;
-      } catch (e) {}
+      } catch (e) { }
     }
 
     // -------------------------------------------------------------
@@ -904,4 +1009,5 @@
     updatePreview();
   </script>
 </body>
+
 </html>

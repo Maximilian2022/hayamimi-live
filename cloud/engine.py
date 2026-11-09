@@ -158,7 +158,7 @@ class UserVadSession:
 
         # 完了した音声セグメントを取り出して ASR
         while not self.vad.empty():
-            segment = self.vad.front()
+            segment = self.vad.front  # プロパティ参照 (呼び出し不可)
             samples = np.array(segment.samples, dtype=np.float32)
             self.vad.pop()
 
@@ -168,7 +168,12 @@ class UserVadSession:
                     self.on_transcript(text, True)
 
     def reset(self):
-        self.vad.clear()
+        try:
+            while not self.vad.empty():
+                self.vad.pop()
+            self.vad.reset()
+        except Exception:
+            pass
 
 
 shared_punctuator = SharedPunctuator()

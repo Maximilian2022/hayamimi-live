@@ -492,6 +492,8 @@ async def websocket_mic_endpoint(websocket: WebSocket):
         while True:
             # ブラウザから送信された Float32 PCM (16kHz mono) バイナリ
             message = await websocket.receive()
+            if message.get("type") == "websocket.disconnect":
+                break
             if "bytes" in message and message["bytes"]:
                 raw_bytes = message["bytes"]
                 # 4バイト float32 配列としてデコード
@@ -499,12 +501,15 @@ async def websocket_mic_endpoint(websocket: WebSocket):
                 vad_session.process_audio_chunk(chunk)
             elif "text" in message:
                 pass
-    except WebSocketDisconnect:
+    except (WebSocketDisconnect, RuntimeError):
         logger.info("WebSocket mic disconnected: %s", uid)
     except Exception as e:
         logger.warning("WebSocket mic error (%s): %s", uid, e)
     finally:
-        vad_session.reset()
+        try:
+            vad_session.reset()
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
