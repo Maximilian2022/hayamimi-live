@@ -147,7 +147,9 @@ class UserVadSession:
             num_threads=1,
         )
         self.vad = sherpa_onnx.VoiceActivityDetector(vad_config, buffer_size_in_seconds=30.0)
-        self.is_speech = False
+        self.audio_pos = 0.0
+        self.last_partial_pos = 0.0
+        self.last_draft_text = ""
 
     def process_audio_chunk(self, chunk: np.ndarray) -> None:
         """ブラウザから届いた 16kHz float32 PCM 音声チャンクを処理する"""
@@ -155,12 +157,31 @@ class UserVadSession:
             return
 
         self.vad.accept_waveform(chunk)
+        self.audio_pos += len(chunk) / SAMPLE_RATE
 
-        # 完了した音声セグメントを取り出して ASR
+        # 1. 発話中のリアルタイム追随字幕 (ドラフト認識: 0.4秒間隔)
+        if self.vad.is_speech_detected() and (self.audio_pos - self.last_partial_pos) >= 0.40:
+            try:
+                cur_segment = self.vad.current_segment
+                cur_samples = np.array(cur_segment.samples, dtype=np.float32)
+                if len(cur_samples) > int(8.0 * SAMPLE_RATE):
+                    cur_samples = cur_samples[-int(8.0 * SAMPLE_RATE):]
+
+                if len(cur_samples) >= int(0.25 * SAMPLE_RATE):
+                    draft_text = self.asr_engine.transcribe(cur_samples, SAMPLE_RATE)
+                    if draft_text and draft_text != self.last_draft_text:
+                        self.last_draft_text = draft_text
+                        self.on_transcript(draft_text, False)
+                    self.last_partial_pos = self.audio_pos
+            except Exception as e:
+                logger.debug("Partial transcription error: %s", e)
+
+        # 2. 完了した確定音声セグメントを取り出して ASR
         while not self.vad.empty():
             segment = self.vad.front  # プロパティ参照 (呼び出し不可)
             samples = np.array(segment.samples, dtype=np.float32)
             self.vad.pop()
+            self.last_draft_text = ""
 
             if len(samples) >= int(SAMPLE_RATE * 0.2):  # 0.2秒以上の音声
                 text = self.asr_engine.transcribe(samples, SAMPLE_RATE)
@@ -172,6 +193,9 @@ class UserVadSession:
             while not self.vad.empty():
                 self.vad.pop()
             self.vad.reset()
+            self.last_draft_text = ""
+            self.last_partial_pos = 0.0
+            self.audio_pos = 0.0
         except Exception:
             pass
 

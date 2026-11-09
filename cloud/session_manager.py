@@ -26,11 +26,20 @@ DEFAULT_OVERLAY_STYLE: Dict[str, Any] = {
     "bgColor": "#000000",
     "bgOpacity": 0,      # 0 to 100%
     "radius": 8,         # px
+    # 翻訳字幕スタイル
+    "showTrans": True,
+    "transSize": 28,
+    "transColor": "#ffd166",
+    "transStrokeColor": "#000000",
+    "transStrokeWidth": 2.5,
+    "transEffect": "stroke",
 }
 
 DEFAULT_SETTINGS: Dict[str, Any] = {
     "enable_punct": True,
     "enable_itn": True,
+    "enable_trans": False,
+    "trans_target_langs": ["en"],
 }
 
 
@@ -77,6 +86,24 @@ def sanitize_style(style: dict) -> dict:
             res["radius"] = max(0, min(50, int(style["radius"])))
         except (ValueError, TypeError):
             pass
+    if "showTrans" in style:
+        res["showTrans"] = bool(style["showTrans"])
+    if "transSize" in style:
+        try:
+            res["transSize"] = max(10, min(120, int(style["transSize"])))
+        except (ValueError, TypeError):
+            pass
+    if "transColor" in style and isinstance(style["transColor"], str):
+        res["transColor"] = style["transColor"][:20]
+    if "transStrokeColor" in style and isinstance(style["transStrokeColor"], str):
+        res["transStrokeColor"] = style["transStrokeColor"][:20]
+    if "transStrokeWidth" in style:
+        try:
+            res["transStrokeWidth"] = max(0.0, min(20.0, float(style["transStrokeWidth"])))
+        except (ValueError, TypeError):
+            pass
+    if "transEffect" in style and style["transEffect"] in ("stroke", "double", "glow"):
+        res["transEffect"] = style["transEffect"]
     return res
 
 
@@ -267,6 +294,10 @@ class UserSession:
             cur["enable_punct"] = bool(settings["enable_punct"])
         if "enable_itn" in settings:
             cur["enable_itn"] = bool(settings["enable_itn"])
+        if "enable_trans" in settings:
+            cur["enable_trans"] = bool(settings["enable_trans"])
+        if "trans_target_langs" in settings and isinstance(settings["trans_target_langs"], list):
+            cur["trans_target_langs"] = [str(x) for x in settings["trans_target_langs"] if str(x).strip()]
 
         path = os.path.join(self.user_dir, "settings.json")
         try:
@@ -318,6 +349,26 @@ class UserSession:
             "user_id": self.user_id,
         }
 
+        event_str = f"event: message\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        dead_queues = []
+        for q in list(self.obs_subscribers):
+            try:
+                q.put_nowait(event_str)
+            except asyncio.QueueFull:
+                dead_queues.append(q)
+
+        for q in dead_queues:
+            self.obs_subscribers.discard(q)
+
+    async def broadcast_translation(self, lang: str, text: str, original: str = "") -> None:
+        """接続中 OBS クライアントに翻訳字幕を配信する"""
+        payload = {
+            "type": "translation",
+            "lang": lang,
+            "text": text,
+            "original": original,
+            "user_id": self.user_id,
+        }
         event_str = f"event: message\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
         dead_queues = []
         for q in list(self.obs_subscribers):

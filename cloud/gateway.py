@@ -45,6 +45,7 @@ from cloud.auth import (
 )
 from cloud.session_manager import session_manager, UserSession
 from cloud.engine import SharedAsrEngine, UserVadSession, shared_punctuator
+from cloud.translator import SUPPORTED_LANGUAGES, translate_text
 
 # ロギング設定
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -247,6 +248,7 @@ async def dashboard(request: Request):
             "settings": settings,
             "has_gemini_key": bool(gemini_key),
             "masked_key": masked_key,
+            "supported_languages": SUPPORTED_LANGUAGES,
         },
     )
 
@@ -458,6 +460,19 @@ async def websocket_mic_endpoint(websocket: WebSocket):
     # イベントループへの安全な非同期コールバック
     loop = asyncio.get_running_loop()
 
+    async def _handle_async_translation(text: str, target_langs: list, gemini_key: str):
+        for lang in target_langs:
+            try:
+                trans_text = await loop.run_in_executor(None, translate_text, text, lang, gemini_key)
+                if trans_text:
+                    await u_sess.broadcast_translation(lang, trans_text, original=text)
+                    try:
+                        await websocket.send_json({"type": "translation", "lang": lang, "text": trans_text})
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.warning("Translation dispatch error for %s: %s", lang, e)
+
     def on_transcript(raw_text: str, is_final: bool = True):
         processed = raw_text
 
@@ -469,7 +484,7 @@ async def websocket_mic_endpoint(websocket: WebSocket):
             except Exception as e:
                 logger.debug("ITN failed: %s", e)
 
-        # 2. 句読点付与 (、。)
+        # 2. 句読点付与 (、。) - 確定時のみ
         if is_final and u_sess.settings.get("enable_punct", True) and shared_punctuator:
             try:
                 processed = shared_punctuator.restore(processed)
@@ -479,12 +494,22 @@ async def websocket_mic_endpoint(websocket: WebSocket):
         # 3. ユーザー固有辞書の適用と OBS への送信
         asyncio.run_coroutine_threadsafe(u_sess.broadcast_transcript(processed, is_final), loop)
 
-        # 4. マイク画面へのフィードバック
+        # 4. マイク画面へのフィードバック (確定または途中追随)
         refined = u_sess.apply_replacements(processed)
         asyncio.run_coroutine_threadsafe(
             websocket.send_json({"type": "transcript", "text": refined, "is_final": is_final}),
             loop
         )
+
+        # 5. 確定時の多言語翻訳 (有効化されている場合)
+        if is_final and u_sess.settings.get("enable_trans", False):
+            target_langs = u_sess.settings.get("trans_target_langs", ["en"])
+            gemini_key = u_sess.get_gemini_key()
+            if target_langs:
+                asyncio.run_coroutine_threadsafe(
+                    _handle_async_translation(refined, target_langs, gemini_key),
+                    loop
+                )
 
     vad_session = UserVadSession(uid, shared_asr_engine, on_transcript)
 

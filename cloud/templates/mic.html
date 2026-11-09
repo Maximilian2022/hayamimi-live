@@ -250,6 +250,31 @@
       animation: fadeIn 0.2s ease;
     }
 
+    .feed-item.partial {
+      background: rgba(59, 130, 246, 0.12);
+      border-left: 3px solid #60a5fa;
+      color: #93c5fd;
+      font-style: italic;
+    }
+
+    .feed-item-trans {
+      font-size: 0.9rem;
+      color: #ffd166;
+      margin-top: 0.25rem;
+      display: flex;
+      gap: 0.4rem;
+      align-items: baseline;
+    }
+
+    .lang-tag {
+      background: rgba(255, 209, 102, 0.2);
+      color: #ffd166;
+      font-size: 0.72rem;
+      font-weight: 700;
+      padding: 1px 5px;
+      border-radius: 4px;
+    }
+
     @keyframes fadeIn {
       from {
         opacity: 0;
@@ -398,7 +423,9 @@
         try {
           const data = JSON.parse(event.data);
           if (data.type === 'transcript') {
-            addTranscript(data.text);
+            handleTranscript(data.text, data.is_final);
+          } else if (data.type === 'translation') {
+            handleTranslation(data.lang, data.text);
           } else if (data.type === 'error') {
             showError('サーバーエラー: ' + data.message);
           }
@@ -415,18 +442,51 @@
       };
     }
 
-    function addTranscript(text) {
+    let curPartialEl = null;
+    let lastFinalEl = null;
+
+    function handleTranscript(text, isFinal) {
       if (!text || !text.trim()) return;
       if (feedEmpty) feedEmpty.style.display = 'none';
 
-      const item = document.createElement('div');
-      item.className = 'feed-item';
-      item.textContent = text;
-      feedList.insertBefore(item, feedList.firstChild);
+      if (!isFinal) {
+        // 発話中の追随字幕
+        if (!curPartialEl) {
+          curPartialEl = document.createElement('div');
+          curPartialEl.className = 'feed-item partial';
+          feedList.insertBefore(curPartialEl, feedList.firstChild);
+        }
+        curPartialEl.textContent = '… ' + text;
+      } else {
+        // 確定字幕
+        let targetEl = curPartialEl;
+        if (targetEl) {
+          targetEl.className = 'feed-item';
+          targetEl.textContent = text;
+          curPartialEl = null;
+        } else {
+          targetEl = document.createElement('div');
+          targetEl.className = 'feed-item';
+          targetEl.textContent = text;
+          feedList.insertBefore(targetEl, feedList.firstChild);
+        }
+        lastFinalEl = targetEl;
 
-      while (feedList.children.length > 60) {
-        feedList.removeChild(feedList.lastChild);
+        while (feedList.children.length > 60) {
+          feedList.removeChild(feedList.lastChild);
+        }
       }
+    }
+
+    function handleTranslation(lang, text) {
+      if (!text || !text.trim()) return;
+      const target = lastFinalEl || feedList.firstElementChild;
+      if (!target || target === feedEmpty) return;
+
+      const transEl = document.createElement('div');
+      transEl.className = 'feed-item-trans';
+      transEl.innerHTML = `<span class="lang-tag">${lang}</span> <span>${text}</span>`;
+      target.appendChild(transEl);
     }
 
     async function toggleRecording() {

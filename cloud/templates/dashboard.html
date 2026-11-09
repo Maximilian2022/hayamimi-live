@@ -471,6 +471,7 @@
       <!-- リアルタイムプレビュー -->
       <div class="preview-container">
         <div id="preview-sub">早耳リアルタイム字幕プレビュー</div>
+        <div id="preview-trans" style="margin-top: 0.35rem;">→ [en] Live Subtitle Translation Preview</div>
       </div>
 
       <div class="form-grid">
@@ -546,6 +547,35 @@
           </div>
         </div>
 
+        <!-- 翻訳字幕 文字サイズ -->
+        <div class="form-group">
+          <label>翻訳字幕の文字サイズ</label>
+          <div class="range-wrap">
+            <input type="range" id="style-trans-size" min="14" max="64" value="{{ style.transSize or 28 }}" oninput="updatePreview()">
+            <span class="range-val" id="val-trans-size">{{ style.transSize or 28 }}px</span>
+          </div>
+        </div>
+
+        <!-- 翻訳字幕 文字色 -->
+        <div class="form-group">
+          <label>翻訳字幕の文字色</label>
+          <div class="color-picker-wrap">
+            <input type="color" id="style-trans-color" value="{{ style.transColor or '#ffd166' }}" oninput="updatePreview()">
+            <input type="text" id="style-trans-color-hex" class="form-control" value="{{ style.transColor or '#ffd166' }}"
+              oninput="syncColorInput('style-trans-color', this.value)">
+          </div>
+        </div>
+
+        <!-- 翻訳字幕 縁取り色 -->
+        <div class="form-group">
+          <label>翻訳字幕の縁取り色</label>
+          <div class="color-picker-wrap">
+            <input type="color" id="style-trans-stroke-color" value="{{ style.transStrokeColor or '#000000' }}" oninput="updatePreview()">
+            <input type="text" id="style-trans-stroke-color-hex" class="form-control" value="{{ style.transStrokeColor or '#000000' }}"
+              oninput="syncColorInput('style-trans-stroke-color', this.value)">
+          </div>
+        </div>
+
         <!-- 配置 -->
         <div class="form-group">
           <label>テキスト配置</label>
@@ -609,6 +639,59 @@
               onchange="saveSettings()">
             <span class="slider"></span>
           </label>
+        </div>
+      </div>
+    </div>
+
+    <!-- 4. リアルタイム多言語翻訳設定 (Live Translation) -->
+    <div class="card">
+      <div class="card-title">🌍 リアルタイム多言語翻訳設定 (Live Translation)</div>
+      <div class="card-desc">
+        発話確定時に指定の外国語へ自動翻訳し、OBS およびマイク画面に日本語と併記して表示します。
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 1rem;">
+        <div class="switch-wrap">
+          <div>
+            <div class="switch-title">多言語翻訳を有効化</div>
+            <div class="switch-desc">日本語の確定字幕と同時に、翻訳字幕を OBS に表示します</div>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="setting-trans" {% if settings.enable_trans %}checked{% endif %}
+              onchange="saveSettings()">
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <!-- 翻訳エンジン案内 -->
+        <div style="background: #0f1117; border: 1px solid #232736; border-radius: 8px; padding: 0.85rem 1rem; font-size: 0.85rem; display: flex; align-items: center; gap: 0.75rem;">
+          <span style="font-size: 1.25rem;">{% if has_gemini_key %}⚡{% else %}🌐{% endif %}</span>
+          <div>
+            {% if has_gemini_key %}
+            <span style="color: #34d399; font-weight: 700;">Gemini API 連携中:</span>
+            <span style="color: #cbd5e1;">登録済みの API キーを使用して高品質・文脈認識翻訳を行います。</span>
+            {% else %}
+            <span style="color: #38bdf8; font-weight: 700;">Google 翻訳 (無料):</span>
+            <span style="color: #94a3b8;">API キー未登録のため無料翻訳が動作します。下の項目から Gemini API キーを登録すると AI による高品質翻訳に自動昇格します。</span>
+            {% endif %}
+          </div>
+        </div>
+
+        <!-- 翻訳言語選択 -->
+        <div>
+          <label style="font-size: 0.85rem; font-weight: 600; color: #cbd5e1; display: block; margin-bottom: 0.5rem;">
+            翻訳先言語（複数選択可）
+          </label>
+          <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 0.5rem;">
+            {% for code, label in supported_languages.items() %}
+            <label style="display: flex; align-items: center; gap: 0.5rem; background: #0f1117; border: 1px solid #232736; padding: 0.5rem 0.75rem; border-radius: 6px; cursor: pointer; font-size: 0.85rem; color: #e2e8f0;">
+              <input type="checkbox" class="trans-lang-cb" value="{{ code }}"
+                {% if code in settings.trans_target_langs %}checked{% endif %}
+                onchange="saveSettings()">
+              <span>{{ label }}</span>
+            </label>
+            {% endfor %}
+          </div>
         </div>
       </div>
     </div>
@@ -784,9 +867,14 @@
       const bottom = parseFloat(document.getElementById('style-bottom').value);
       const bgOpacity = parseInt(document.getElementById('style-bg-opacity').value);
 
+      const transSize = parseInt(document.getElementById('style-trans-size').value);
+      const transColor = document.getElementById('style-trans-color').value;
+      const transStrokeColor = document.getElementById('style-trans-stroke-color').value;
+
       return {
         font, size, color, strokeColor, strokeWidth, effect, align, bottom, bgOpacity,
-        bgColor: "#000000", radius: 8
+        transSize, transColor, transStrokeColor, transStrokeWidth: 2.5, transEffect: effect,
+        showTrans: true, bgColor: "#000000", radius: 8
       };
     }
 
@@ -796,8 +884,11 @@
       document.getElementById('val-stroke-width').textContent = s.strokeWidth + 'px';
       document.getElementById('val-bottom').textContent = s.bottom + '%';
       document.getElementById('val-bg-opacity').textContent = s.bgOpacity + '%';
+      document.getElementById('val-trans-size').textContent = s.transSize + 'px';
       document.getElementById('style-color-hex').value = s.color;
       document.getElementById('style-stroke-color-hex').value = s.strokeColor;
+      document.getElementById('style-trans-color-hex').value = s.transColor;
+      document.getElementById('style-trans-stroke-color-hex').value = s.transStrokeColor;
 
       const p = document.getElementById('preview-sub');
       p.style.fontFamily = s.font;
@@ -805,6 +896,15 @@
       p.style.color = s.color;
       p.style.fontWeight = '800';
       p.style.textShadow = generateTextShadow(s.strokeColor, s.strokeWidth, s.effect);
+
+      const pt = document.getElementById('preview-trans');
+      if (pt) {
+        pt.style.fontFamily = s.font;
+        pt.style.fontSize = Math.min(s.transSize, 36) + 'px';
+        pt.style.color = s.transColor;
+        pt.style.fontWeight = '700';
+        pt.style.textShadow = generateTextShadow(s.transStrokeColor, 2.5, s.effect);
+      }
 
       if (s.bgOpacity > 0) {
         p.style.backgroundColor = hexToRgba('#000000', s.bgOpacity);
@@ -834,17 +934,26 @@
     }
 
     // -------------------------------------------------------------
-    // ASR オプション保存
+    // ASR & 翻訳オプション保存
     // -------------------------------------------------------------
     async function saveSettings() {
       const enable_punct = document.getElementById('setting-punct').checked;
       const enable_itn = document.getElementById('setting-itn').checked;
+      const enable_trans = document.getElementById('setting-trans').checked;
+      const trans_cbs = document.querySelectorAll('.trans-lang-cb:checked');
+      const trans_target_langs = Array.from(trans_cbs).map(cb => cb.value);
+
       try {
         await fetch('/api/settings', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ enable_punct, enable_itn })
+          body: JSON.stringify({ enable_punct, enable_itn, enable_trans, trans_target_langs })
         });
+        showToast('設定を保存しました');
+      } catch (e) {
+        alert('設定保存エラー: ' + e);
+      }
+    }
         showToast('ASR オプション設定を保存しました');
       } catch (e) {
         alert('設定保存エラー: ' + e);

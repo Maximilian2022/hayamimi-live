@@ -28,16 +28,33 @@
       display: inline-block;
       max-width: 96%;
       word-break: break-word;
-      line-height: 1.4;
-      transition: opacity 0.6s ease, transform 0.6s ease;
+      line-height: 1.35;
+      transition: opacity 0.5s ease, transform 0.5s ease;
       animation: popIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
     }
     .subtitle-box.fade-out {
       opacity: 0 !important;
       transform: translateY(8px);
     }
+    #final-line {
+      display: block;
+    }
+    #partial-line {
+      display: block;
+      opacity: 0.85;
+      font-style: normal;
+    }
+    #trans-line {
+      display: block;
+      margin-top: 0.28em;
+      opacity: 0.95;
+    }
+    .trans-item {
+      display: block;
+      line-height: 1.3;
+    }
     @keyframes popIn {
-      from { opacity: 0; transform: scale(0.96) translateY(6px); }
+      from { opacity: 0; transform: scale(0.97) translateY(4px); }
       to { opacity: 1; transform: scale(1) translateY(0); }
     }
     .error-notice {
@@ -55,7 +72,11 @@
     {% if error %}
     <div class="error-notice">{{ error }}</div>
     {% else %}
-    <div id="sub-box" class="subtitle-box" style="display: none;"></div>
+    <div id="sub-box" class="subtitle-box" style="display: none;">
+      <div id="final-line"></div>
+      <div id="partial-line" style="display: none;"></div>
+      <div id="trans-line"></div>
+    </div>
     {% endif %}
   </div>
 
@@ -63,6 +84,9 @@
   <script>
     const subContainer = document.getElementById('subtitle-container');
     const subBox = document.getElementById('sub-box');
+    const finalLine = document.getElementById('final-line');
+    const partialLine = document.getElementById('partial-line');
+    const transLine = document.getElementById('trans-line');
     const token = new URLSearchParams(window.location.search).get('token') || '';
     let currentStyle = {{ style | tojson if style else '{}' }};
     let fadeTimer = null;
@@ -127,23 +151,47 @@
       // 画面下部余白
       subContainer.style.bottom = (currentStyle.bottom != null ? currentStyle.bottom : 4.0) + 'vh';
 
-      // フォント・文字色・サイズ
-      subBox.style.fontFamily = currentStyle.font || "'Zen Kaku Gothic New', sans-serif";
-      subBox.style.fontSize = (currentStyle.size || 42) + 'px';
-      subBox.style.color = currentStyle.color || '#ffffff';
-      subBox.style.fontWeight = '800';
-
-      // 縁取り / エフェクト
+      // メイン字幕フォント・文字色・サイズ
+      const baseFont = currentStyle.font || "'Zen Kaku Gothic New', sans-serif";
+      const baseSize = currentStyle.size || 42;
+      const baseColor = currentStyle.color || '#ffffff';
       const strokeColor = currentStyle.strokeColor || '#000000';
       const strokeWidth = parseFloat(currentStyle.strokeWidth != null ? currentStyle.strokeWidth : 3.0);
       const effect = currentStyle.effect || 'stroke';
-      subBox.style.textShadow = generateTextShadow(strokeColor, strokeWidth, effect);
+      const mainShadow = generateTextShadow(strokeColor, strokeWidth, effect);
+
+      finalLine.style.fontFamily = baseFont;
+      finalLine.style.fontSize = baseSize + 'px';
+      finalLine.style.color = baseColor;
+      finalLine.style.fontWeight = '800';
+      finalLine.style.textShadow = mainShadow;
+
+      // 追随・ドラフト字幕スタイル
+      partialLine.style.fontFamily = baseFont;
+      partialLine.style.fontSize = Math.round(baseSize * 0.92) + 'px';
+      partialLine.style.color = baseColor;
+      partialLine.style.fontWeight = '700';
+      partialLine.style.textShadow = mainShadow;
+
+      // 翻訳字幕スタイル
+      const transSize = currentStyle.transSize || Math.round(baseSize * 0.72);
+      const transColor = currentStyle.transColor || '#ffd166';
+      const transStrokeColor = currentStyle.transStrokeColor || '#000000';
+      const transStrokeWidth = parseFloat(currentStyle.transStrokeWidth != null ? currentStyle.transStrokeWidth : 2.5);
+      const transEffect = currentStyle.transEffect || 'stroke';
+
+      transLine.style.fontFamily = baseFont;
+      transLine.style.fontSize = transSize + 'px';
+      transLine.style.color = transColor;
+      transLine.style.fontWeight = '700';
+      transLine.style.textShadow = generateTextShadow(transStrokeColor, transStrokeWidth, transEffect);
+      transLine.style.display = (currentStyle.showTrans !== false) ? 'block' : 'none';
 
       // 背景・角丸
       const bgOpacity = parseInt(currentStyle.bgOpacity != null ? currentStyle.bgOpacity : 0);
       if (bgOpacity > 0) {
         subBox.style.backgroundColor = hexToRgba(currentStyle.bgColor || '#000000', bgOpacity);
-        subBox.style.padding = '10px 24px';
+        subBox.style.padding = '12px 26px';
         subBox.style.backdropFilter = 'blur(6px)';
         subBox.style.border = '1px solid rgba(255, 255, 255, 0.12)';
       } else {
@@ -158,6 +206,47 @@
     // 初期スタイル適用
     applyStyle(currentStyle);
 
+    function resetFadeTimer() {
+      if (fadeTimer) {
+        clearTimeout(fadeTimer);
+      }
+      subBox.classList.remove('fade-out');
+      // 8 秒後にフェードアウト
+      fadeTimer = setTimeout(() => {
+        subBox.classList.add('fade-out');
+        setTimeout(() => {
+          if (subBox.classList.contains('fade-out')) {
+            subBox.style.display = 'none';
+          }
+        }, 500);
+      }, 8000);
+    }
+
+    function showPartial(text) {
+      resetFadeTimer();
+      partialLine.textContent = text;
+      partialLine.style.display = 'block';
+      subBox.style.display = 'inline-block';
+    }
+
+    function showFinal(text) {
+      resetFadeTimer();
+      finalLine.textContent = text;
+      partialLine.textContent = '';
+      partialLine.style.display = 'none';
+      transLine.innerHTML = ''; // 新しい翻訳を待機
+      subBox.style.display = 'inline-block';
+    }
+
+    function showTranslation(lang, text) {
+      if (currentStyle.showTrans === false) return;
+      const item = document.createElement('div');
+      item.className = 'trans-item';
+      item.textContent = `→ [${lang}] ${text}`;
+      transLine.appendChild(item);
+      resetFadeTimer();
+    }
+
     function connectSSE() {
       const sseUrl = `/events?token=${encodeURIComponent(token)}`;
       const es = new EventSource(sseUrl);
@@ -167,8 +256,20 @@
           const data = JSON.parse(event.data);
           if (data.type === 'style' && data.style) {
             applyStyle(data.style);
+          } else if (data.type === 'asr_partial') {
+            if (data.text && data.text.trim()) {
+              showPartial(data.text);
+            }
+          } else if (data.type === 'asr_final') {
+            if (data.text && data.text.trim()) {
+              showFinal(data.text);
+            }
+          } else if (data.type === 'translation') {
+            if (data.text && data.text.trim()) {
+              showTranslation(data.lang, data.text);
+            }
           } else if (data.text && data.text.trim()) {
-            showSubtitle(data.text);
+            showFinal(data.text);
           }
         } catch (e) {}
       };
@@ -177,25 +278,6 @@
         es.close();
         setTimeout(connectSSE, 3000);
       };
-    }
-
-    function showSubtitle(text) {
-      if (fadeTimer) {
-        clearTimeout(fadeTimer);
-      }
-      subBox.textContent = text;
-      subBox.style.display = 'inline-block';
-      subBox.classList.remove('fade-out');
-
-      // 7 秒後にフェードアウト
-      fadeTimer = setTimeout(() => {
-        subBox.classList.add('fade-out');
-        setTimeout(() => {
-          if (subBox.classList.contains('fade-out')) {
-            subBox.style.display = 'none';
-          }
-        }, 600);
-      }, 7000);
     }
 
     connectSSE();
