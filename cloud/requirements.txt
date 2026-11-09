@@ -7,7 +7,7 @@ python-multipart>=0.0.9
 
 # ASR & Audio dependencies
 numpy==2.4.6
-scipy>=1.11.0
+scipy>=1.18.1
 soundfile==0.14.0
 sherpa-onnx==1.13.6
 onnxruntime==1.29.0
