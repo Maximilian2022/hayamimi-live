@@ -26,7 +26,7 @@ tokenizers==0.23.3
 # falls through silently if this is not installed, so it's listed here as an
 # extra rather than a hard dependency; comment it out if LGPL is a concern for
 # your distribution.
-kiwipiepy==0.23.2
+kiwipiepy==0.24.1
 opencc-python-reimplemented==0.1.7
 
 # Speaker Profile Builder dependencies (tools/profile_builder/)
