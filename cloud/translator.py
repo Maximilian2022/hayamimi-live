@@ -1,23 +1,34 @@
 """
 cloud/translator.py
-クラウド向けリアルタイム翻訳モジュール
-- Gemini API (ユーザー登録キー): 最高品質・文脈認識・固有名詞対応
-- Google Translate (Web API): キー未登録でも即時・無料で動作するフォールバック
+Standalone 完全準拠ローカル CTranslate2 翻訳エンジン
+- 英語 (ja->en): FuguMT (mojicast-fugumt-ja-en-ct2) int8 (高速・高品質)
+- 多言語 (ja->zh/ko/es/...): M2M-100 418M (mojicast-m2m100-ct2) int8
+Google 翻訳や外部 Web API を一切使わず、サーバーローカル推論で完結します。
 """
 
-import json
 import logging
+import os
 import re
-import urllib.parse
-import urllib.request
-from typing import Dict, List, Optional
+import sys
+import threading
+from typing import Dict, Optional
+
+# scripts をインポートパスに追加
+_SCRIPTS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts")
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+
+from cloud.config import MODELS_DIR
 
 logger = logging.getLogger("hayamimi.cloud.translator")
 
+FUGUMT_DIR = os.path.join(MODELS_DIR, "mojicast-fugumt-ja-en-ct2")
+M2M_DIR = os.path.join(MODELS_DIR, "mojicast-m2m100-ct2")
+
 SUPPORTED_LANGUAGES: Dict[str, str] = {
-    "en": "英語 (English)",
-    "zh-CN": "中国語 簡体字 (Simplified Chinese)",
-    "zh-TW": "中国語 繁体字 (Traditional Chinese)",
+    "en": "英語 (English - FuguMT/M2M-100)",
+    "zh": "中国語 簡体字 (Chinese)",
+    "zh-tw": "中国語 繁体字 (Traditional Chinese)",
     "ko": "韓国語 (Korean)",
     "es": "スペイン語 (Spanish)",
     "fr": "フランス語 (French)",
@@ -37,67 +48,100 @@ def digits_consistent(src: str, out: str) -> bool:
     return all(run in out_runs for run in src_runs)
 
 
-def translate_with_gemini(text: str, target_lang: str, api_key: str) -> str:
-    """Gemini API (gemini-2.5-flash) を使った高精度コンテキスト翻訳"""
-    if not text or not api_key:
-        return text
+def safe_translate(translator, text: str) -> str:
+    """1 行翻訳。数字が壊れた場合は原文にフォールバック"""
     try:
-        from google import genai
-        client = genai.Client(api_key=api_key)
-        lang_name = SUPPORTED_LANGUAGES.get(target_lang, target_lang)
-        prompt = (
-            f"You are a professional real-time subtitle translator. "
-            f"Translate the following Japanese speech transcript into {lang_name} naturally and concisely. "
-            f"Output ONLY the translated line, with NO quotes, explanations, or commentary.\n\n"
-            f"Japanese: {text}\n"
-            f"Translation:"
-        )
-        resp = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
-        )
-        res_text = resp.text.strip() if resp.text else text
-        # 余計な改行やプレフィックスがあれば除去
-        res_text = re.sub(r"^(Translation:|訳:)\s*", "", res_text, flags=re.IGNORECASE).strip()
-        if not digits_consistent(text, res_text):
-            logger.warning("Gemini translation mangled digits: '%s' -> '%s'", text, res_text)
-        return res_text
+        out = translator.translate(text)
+        if out != text and not digits_consistent(text, out):
+            logger.warning("Translation mangled digits: '%s' -> '%s', falling back to source", text, out)
+            return text
+        return out
     except Exception as e:
-        logger.warning("Gemini translation error for %s (%s), falling back to Google: %s", target_lang, text, e)
-        return translate_with_google(text, target_lang)
-
-
-def translate_with_google(text: str, target_lang: str) -> str:
-    """Google 翻訳 (Web API) による無料フォールバック翻訳"""
-    if not text:
+        logger.warning("Translation error for '%s': %s", text, e)
         return text
-    try:
-        g_lang = target_lang
-        if target_lang == "zh-CN":
-            g_lang = "zh-CN"
-        elif target_lang == "zh-TW":
-            g_lang = "zh-TW"
 
-        encoded = urllib.parse.quote(text)
-        url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=ja&tl={g_lang}&dt=t&q={encoded}"
-        req = urllib.request.Request(
-            url,
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        )
-        with urllib.request.urlopen(req, timeout=3.5) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            if data and data[0]:
-                out = "".join(item[0] for item in data[0] if item and item[0])
-                return out.strip()
-    except Exception as e:
-        logger.warning("Google translation failed for '%s' (%s): %s", text, target_lang, e)
-    return text
+
+def translate_by_sentence(translator, text: str) -> str:
+    """句読点で文ごとに分割してローカル翻訳し、結合する"""
+    sentences = [s for s in re.split(r"(?<=[。！？!?])\s*", text) if s.strip()]
+    if not sentences:
+        return text
+    out = []
+    for s in sentences:
+        res = safe_translate(translator, s)
+        out.append(res)
+    return " ".join(out)
+
+
+class LocalTranslatorPool:
+    """共有ローカル翻訳モデルプール (スレッドセーフ・遅延共有ロード)
+    全ユーザーで 1 つの FuguMT / M2M-100 インスタンスを共有し、メモリ消費を最適化します。
+    """
+
+    def __init__(self, models_dir: str = MODELS_DIR):
+        self.models_dir = models_dir
+        self._translators: Dict[str, object] = {}
+        self._lock = threading.Lock()
+
+    def get_translator(self, target_lang: str):
+        lang = target_lang.lower().strip()
+        # 言語コード正規化 (zh-cn -> zh)
+        if lang in ("zh-cn", "cn"):
+            lang = "zh"
+        elif lang in ("zh-tw", "tw", "zh-hk", "hk"):
+            lang = "zh-tw"
+
+        if lang in self._translators:
+            return self._translators[lang]
+
+        with self._lock:
+            if lang in self._translators:
+                return self._translators[lang]
+
+            # 1. 英語専用 FuguMT (最優先)
+            if lang == "en":
+                if os.path.isdir(FUGUMT_DIR):
+                    try:
+                        logger.info("Loading local FuguMT ja->en translator from %s...", FUGUMT_DIR)
+                        from translate_ja_en import TranslatorJaEn
+                        tr = TranslatorJaEn(model_dir=FUGUMT_DIR, device="cpu", compute_type="int8")
+                        self._translators[lang] = tr
+                        logger.info("✔ Local FuguMT ja->en loaded successfully.")
+                        return tr
+                    except Exception as e:
+                        logger.error("Failed to load FuguMT: %s", e)
+                else:
+                    logger.warning("FuguMT model directory not found: %s", FUGUMT_DIR)
+
+            # 2. 多言語 M2M-100
+            if os.path.isdir(M2M_DIR):
+                try:
+                    logger.info("Loading local M2M-100 ja->%s translator from %s...", lang, M2M_DIR)
+                    from translate_m2m import TranslatorM2M
+                    tr = TranslatorM2M(target_lang=lang, model_dir=M2M_DIR, device="cpu", compute_type="int8")
+                    self._translators[lang] = tr
+                    logger.info("✔ Local M2M-100 ja->%s loaded successfully.", lang)
+                    return tr
+                except Exception as e:
+                    logger.error("Failed to load M2M-100 for %s: %s", lang, e)
+            else:
+                logger.warning("M2M-100 model directory not found: %s", M2M_DIR)
+
+        return None
+
+    def translate(self, text: str, target_lang: str) -> str:
+        if not text or not text.strip():
+            return ""
+        tr = self.get_translator(target_lang)
+        if tr is None:
+            return text
+        return translate_by_sentence(tr, text)
+
+
+# グローバル共有翻訳プール
+local_translator_pool = LocalTranslatorPool()
 
 
 def translate_text(text: str, target_lang: str, api_key: str = "") -> str:
-    """翻訳のエントリポイント"""
-    if not text or not text.strip():
-        return ""
-    if api_key:
-        return translate_with_gemini(text, target_lang, api_key)
-    return translate_with_google(text, target_lang)
+    """翻訳のエントリポイント (完全ローカル推論)"""
+    return local_translator_pool.translate(text, target_lang)

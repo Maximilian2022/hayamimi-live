@@ -11,9 +11,13 @@ mkdir -p "$MODELS_DIR" "/app/data"
 
 # ReazonSpeech または Silero VAD が未ダウンロードの場合、自動取得
 if [ ! -d "$REAZON_DIR" ] || [ ! -f "$VAD_FILE" ]; then
-    echo "[entrypoint] 必要なモデルファイル (ReazonSpeech & Silero VAD) をダウンロード中..."
-    python scripts/download_models.py --minimal
+    echo "[entrypoint] 必要なモデルファイル (ReazonSpeech, Silero VAD, 翻訳モデル) をダウンロード中..."
+    python scripts/download_models.py --minimal --translators
     echo "[entrypoint] モデル準備完了。"
+elif [ ! -d "$MODELS_DIR/mojicast-fugumt-ja-en-ct2" ] || [ ! -d "$MODELS_DIR/mojicast-m2m100-ct2" ]; then
+    echo "[entrypoint] ローカル翻訳モデル (FuguMT & M2M-100) を追加ダウンロード中..."
+    python scripts/download_models.py --translators
+    echo "[entrypoint] 翻訳モデル準備完了。"
 else
     echo "[entrypoint] 既存モデルを確認: $REAZON_DIR"
 fi
