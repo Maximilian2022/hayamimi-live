@@ -9,7 +9,7 @@ python-multipart>=0.0.9
 numpy==2.4.6
 scipy>=1.11.0
 soundfile==0.14.0
-sherpa-onnx==1.13.6
+sherpa-onnx==2.0.1
 onnxruntime==1.29.0
 sentencepiece==0.2.2
 huggingface_hub==1.28.0
