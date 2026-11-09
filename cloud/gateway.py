@@ -88,7 +88,9 @@ async def login_page(request: Request, error: str = ""):
     user = get_current_user(request)
     if user:
         return RedirectResponse(url="/", status_code=302)
-    return templates.TemplateResponse("login.html", {"request": request, "error": error})
+    return templates.TemplateResponse(
+        request=request, name="login.html", context={"error": error}
+    )
 
 
 @app.get("/login/discord")
@@ -165,9 +167,9 @@ async def dashboard(request: Request):
     dict_text = u_sess.get_replacements_raw()
 
     return templates.TemplateResponse(
-        "dashboard.html",
-        {
-            "request": request,
+        request=request,
+        name="dashboard.html",
+        context={
             "user": user,
             "obs_url": obs_url,
             "dictionary_text": dict_text,
@@ -212,7 +214,9 @@ async def mic_page(request: Request):
     user = get_current_user(request)
     if not user:
         return RedirectResponse(url="/login", status_code=302)
-    return templates.TemplateResponse("mic.html", {"request": request, "user": user})
+    return templates.TemplateResponse(
+        request=request, name="mic.html", context={"user": user}
+    )
 
 
 @app.websocket("/ws/mic")
@@ -276,11 +280,14 @@ async def overlay_page(request: Request, token: str = ""):
     u_sess = session_manager.get_user_by_obs_token(token)
     if not u_sess:
         return templates.TemplateResponse(
-            "overlay.html",
-            {"request": request, "error": "無効な OBS トークンです。ダッシュボードから正しい URL を取得してください。"},
+            request=request,
+            name="overlay.html",
+            context={"error": "無効な OBS トークンです。ダッシュボードから正しい URL を取得してください。"},
             status_code=403,
         )
-    return templates.TemplateResponse("overlay.html", {"request": request, "token": token, "error": None})
+    return templates.TemplateResponse(
+        request=request, name="overlay.html", context={"token": token, "error": None}
+    )
 
 
 @app.get("/events")
