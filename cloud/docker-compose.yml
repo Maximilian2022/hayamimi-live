@@ -14,18 +14,19 @@ services:
       - hayamimi_models:/app/models
     mem_limit: 750m
     mem_reservation: 400m
-    networks:
-      - default
-      - tunnel_net
+
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: hayamimi_tunnel
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      - hayamimi-cloud
 
 volumes:
   hayamimi_data:
     name: hayamimi_cloud_data
   hayamimi_models:
     name: hayamimi_cloud_models
-
-networks:
-  default:
-  tunnel_net:
-    name: event-tts-bot_bot_network
-    external: true
