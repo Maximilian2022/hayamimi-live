@@ -4,6 +4,7 @@ cloud/engine.py
 1 つの ReazonSpeech モデルをメモリ上で共有し、ユーザーごとの独立した VAD で並行発話を処理します。
 """
 
+import glob
 import logging
 import os
 import sys
@@ -23,6 +24,11 @@ VAD_MODEL_PATH = os.path.join(MODELS_DIR, "silero_vad.onnx")
 REAZON_DIR = os.path.join(MODELS_DIR, "sherpa-onnx-zipformer-ja-en-reazonspeech-2025-01-17")
 
 
+def _find(model_dir: str, pattern: str) -> str:
+    hits = glob.glob(os.path.join(model_dir, pattern))
+    return hits[0] if hits else ""
+
+
 class SharedAsrEngine:
     """ReazonSpeech モデルを共有するスレッドセーフな ASR エンジン"""
 
@@ -34,22 +40,19 @@ class SharedAsrEngine:
         self._init_recognizer()
 
     def _init_recognizer(self):
-        encoder_path = os.path.join(REAZON_DIR, "encoder-epoch-99-avg-1.int8.onnx")
-        decoder_path = os.path.join(REAZON_DIR, "decoder-epoch-99-avg-1.onnx")
-        joiner_path = os.path.join(REAZON_DIR, "joiner-epoch-99-avg-1.int8.onnx")
+        encoder_path = _find(REAZON_DIR, "encoder-*.int8.onnx") or _find(REAZON_DIR, "encoder-*.onnx")
+        decoder_path = _find(REAZON_DIR, "decoder-*.int8.onnx") or _find(REAZON_DIR, "decoder-*.onnx")
+        joiner_path = _find(REAZON_DIR, "joiner-*.int8.onnx") or _find(REAZON_DIR, "joiner-*.onnx")
         tokens_path = os.path.join(REAZON_DIR, "tokens.txt")
 
-        # フォールバック (非 int8)
-        if not os.path.isfile(encoder_path):
-            encoder_path = os.path.join(REAZON_DIR, "encoder-epoch-99-avg-1.onnx")
-        if not os.path.isfile(joiner_path):
-            joiner_path = os.path.join(REAZON_DIR, "joiner-epoch-99-avg-1.onnx")
-
-        if not all(os.path.isfile(p) for p in [encoder_path, decoder_path, joiner_path, tokens_path]):
+        if not (encoder_path and decoder_path and joiner_path and os.path.isfile(tokens_path)):
             logger.error("ReazonSpeech model files missing in %s", REAZON_DIR)
             raise FileNotFoundError(f"ReazonSpeech model files missing in {REAZON_DIR}")
 
         logger.info("Loading shared ReazonSpeech model (threads=%d)...", self.threads)
+        logger.info("  encoder: %s", os.path.basename(encoder_path))
+        logger.info("  decoder: %s", os.path.basename(decoder_path))
+        logger.info("  joiner:  %s", os.path.basename(joiner_path))
         t0 = time.perf_counter()
         self.recognizer = sherpa_onnx.OfflineRecognizer.from_transducer(
             encoder=encoder_path,
@@ -57,8 +60,9 @@ class SharedAsrEngine:
             joiner=joiner_path,
             tokens=tokens_path,
             num_threads=self.threads,
-            model_type="zipformer2",
-            decoding_method="greedy_search",
+            model_type="zipformer",
+            decoding_method="modified_beam_search",
+            modeling_unit="cjkchar",
         )
         t_load = time.perf_counter() - t0
         logger.info("✔ Shared ReazonSpeech model loaded successfully in %.2fs", t_load)
