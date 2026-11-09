@@ -589,6 +589,35 @@
     }
     .btn-bg-mode.active { background: var(--shu); }
 
+    /* デザインモード切り替えピル */
+    .mode-toggle-group {
+      display: flex; gap: 8px; margin-bottom: 16px; background: rgba(0,0,0,0.25);
+      padding: 4px; border-radius: 8px; border: 1px solid var(--line);
+    }
+    .mode-btn {
+      flex: 1; padding: 8px 12px; border: none; background: transparent; color: var(--paper-dim);
+      font-weight: 600; font-size: 0.82rem; border-radius: 6px; cursor: pointer;
+      transition: all 0.2s ease; text-align: center;
+    }
+    .mode-btn.active {
+      background: var(--shu); color: #fff; box-shadow: 0 0 10px var(--shu-glow);
+    }
+    /* 個別カスタマイズ用サブタブ */
+    .subtabs-container {
+      display: flex; gap: 6px; margin-bottom: 14px; border-bottom: 1px solid var(--line); padding-bottom: 8px;
+    }
+    .subtab-btn {
+      padding: 6px 12px; border: 1px solid transparent; background: rgba(255,255,255,0.04);
+      color: var(--paper-dim); font-size: 0.78rem; font-weight: 600; border-radius: 6px;
+      cursor: pointer; transition: all 0.2s;
+    }
+    .subtab-btn.active {
+      background: rgba(224, 79, 47, 0.15); border-color: var(--shu); color: var(--paper); font-weight: 700;
+    }
+    .subpanel { display: none; }
+    .subpanel.active { display: block; animation: fadeIn 0.2s ease; }
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
     .save-alert {
       position: fixed;
       bottom: 24px;
@@ -648,7 +677,7 @@
       <span style="font-size: 0.8rem; font-weight: 700; color: #fff;">{{ user.global_name or user.username }}</span>
     </div>
 
-    <a href="/" class="link-obs" title="ダッシュボード・辞書管理を開く">⚙ ダッシュボード ↗</a>
+    <a href="/dashboard" class="link-obs" title="詳細設定・YouTube辞書育成を開く">⚙ 詳細設定・辞書 ↗</a>
     <a href="/overlay?token={{ obs_token }}" target="_blank" class="link-obs" title="OBS用字幕画面を開く">OBSオーバーレイ ↗</a>
     <a href="/logout" class="link-obs" style="border-color: rgba(239, 68, 68, 0.4); color: #f87171;" title="ログアウト">🚪 ログアウト</a>
   </div>
@@ -893,56 +922,210 @@
           OBS 字幕デザイン設定 <span class="tag">SUBTITLE STYLING</span>
         </div>
 
-        <!-- フォント選択 -->
+        <!-- デザインモード選択 (全体一括 vs 個別詳細) -->
         <div class="form-group">
-          <label for="style-font">字幕フォント (Google Fonts 20種):</label>
-          <select id="style-font" onchange="updatePreview()">
-            <optgroup label="🇯🇵 日本語 定番">
-              <option value="'Zen Kaku Gothic New', sans-serif" selected>Zen Kaku Gothic New (洗練モダン角ゴシック)</option>
-              <option value="'M PLUS Rounded 1c', sans-serif">M PLUS Rounded 1c (丸ゴシック・VTuber大人気)</option>
-              <option value="'Dela Gothic One', sans-serif">Dela Gothic One (極太インパクトタイトル風)</option>
-              <option value="'Hachi Maru Pop', sans-serif">Hachi Maru Pop (手書き可愛いポップ系)</option>
-              <option value="'DotGothic16', sans-serif">DotGothic16 (レトロゲームピクセル風)</option>
-              <option value="'Reggae One', sans-serif">Reggae One (バラエティ・リアクション風)</option>
-              <option value="'Rampart One', sans-serif">Rampart One (3Dアウトライン立体ブロック風)</option>
-              <option value="'Kiwi Maru', serif">Kiwi Maru (丸明朝・レトロ可愛い)</option>
-              <option value="'Yuji Boku', serif">Yuji Boku (毛筆・和風筆文字)</option>
-              <option value="'Shippori Mincho B1', serif">Shippori Mincho B1 (上品・和風明朝体)</option>
-            </optgroup>
-            <optgroup label="🇺🇸 欧文・海外風">
-              <option value="'Montserrat', sans-serif">Montserrat (洗練欧文モダン)</option>
-              <option value="'Bungee', cursive">Bungee (アーケードゲーム極太)</option>
-              <option value="'Fredoka', sans-serif">Fredoka (丸みのある可愛いポップ)</option>
-              <option value="'Oswald', sans-serif">Oswald (映画字幕風)</option>
-              <option value="'Righteous', cursive">Righteous (サイバーレトロ)</option>
-            </optgroup>
-          </select>
+          <label>デザイン設定モード:</label>
+          <div class="mode-toggle-group">
+            <button type="button" class="mode-btn active" id="btn-mode-unified" onclick="setDesignMode('unified')">
+              ⚪ 全体一括設定 (シンプル)
+            </button>
+            <button type="button" class="mode-btn" id="btn-mode-split" onclick="setDesignMode('split')">
+              🔘 メイン / 翻訳個別設定 (アドバンス)
+            </button>
+          </div>
+          <div class="desc" id="mode-desc" style="font-size: 0.78rem; color: var(--paper-dim);">全体で統一されたフォント・色・サイズを一括設定します。</div>
         </div>
 
-        <div class="form-row">
-          <label for="style-size" style="font-size: 0.85rem;">文字サイズ: <span id="val-size">42</span>px</label>
-          <input type="range" id="style-size" min="20" max="90" value="42" oninput="updatePreview()" style="flex: 1; max-width: 250px;">
+        <!-- ================= A. 全体一括設定パネル ================= -->
+        <div id="panel-unified">
+          <div class="form-group">
+            <label for="style-font">字幕フォント (Google Fonts 20種):</label>
+            <select id="style-font" onchange="updatePreview()">
+              <optgroup label="🇯🇵 日本語 定番">
+                <option value="'Zen Kaku Gothic New', sans-serif" selected>Zen Kaku Gothic New (洗練モダン角ゴシック)</option>
+                <option value="'M PLUS Rounded 1c', sans-serif">M PLUS Rounded 1c (丸ゴシック・VTuber大人気)</option>
+                <option value="'Dela Gothic One', sans-serif">Dela Gothic One (極太インパクトタイトル風)</option>
+                <option value="'Hachi Maru Pop', sans-serif">Hachi Maru Pop (手書き可愛いポップ系)</option>
+                <option value="'DotGothic16', sans-serif">DotGothic16 (レトロゲームピクセル風)</option>
+                <option value="'Reggae One', sans-serif">Reggae One (バラエティ・リアクション風)</option>
+                <option value="'Rampart One', sans-serif">Rampart One (3Dアウトライン立体ブロック風)</option>
+                <option value="'Kiwi Maru', serif">Kiwi Maru (丸明朝・レトロ可愛い)</option>
+                <option value="'Yuji Boku', serif">Yuji Boku (毛筆・和風筆文字)</option>
+                <option value="'Shippori Mincho B1', serif">Shippori Mincho B1 (上品・和風明朝体)</option>
+              </optgroup>
+              <optgroup label="🇺🇸 欧文・海外風">
+                <option value="'Montserrat', sans-serif">Montserrat (洗練欧文モダン)</option>
+                <option value="'Bungee', cursive">Bungee (アーケードゲーム極太)</option>
+                <option value="'Fredoka', sans-serif">Fredoka (丸みのある可愛いポップ)</option>
+                <option value="'Oswald', sans-serif">Oswald (映画字幕風)</option>
+                <option value="'Righteous', cursive">Righteous (サイバーレトロ)</option>
+              </optgroup>
+            </select>
+          </div>
+
+          <div class="form-row">
+            <label for="style-size" style="font-size: 0.85rem;">文字サイズ: <span id="val-size">42</span>px</label>
+            <input type="range" id="style-size" min="20" max="90" value="42" oninput="updatePreview()" style="flex: 1; max-width: 250px;">
+          </div>
+
+          <div class="form-row">
+            <label for="style-color" style="font-size: 0.85rem;">文字色:</label>
+            <input type="color" id="style-color" value="#ffffff" oninput="updatePreview()">
+          </div>
+
+          <div class="form-row">
+            <label for="style-effect" style="font-size: 0.85rem;">エフェクト演出:</label>
+            <select id="style-effect" onchange="updatePreview()" style="max-width: 250px;">
+              <option value="stroke" selected>通常縁取り（クッキリ強調）</option>
+              <option value="double">二重縁取り（テレビテロップ風）</option>
+              <option value="glow">ネオン発光（サイバー・光る文字）</option>
+            </select>
+          </div>
+
+          <div class="form-row">
+            <label for="style-stroke-color" style="font-size: 0.85rem;">外枠 / 発光色:</label>
+            <input type="color" id="style-stroke-color" value="#000000" oninput="updatePreview()">
+          </div>
+          <div class="form-row">
+            <label for="style-stroke-width" style="font-size: 0.85rem;">枠の太さ / 発光量: <span id="val-stroke">3</span>px</label>
+            <input type="range" id="style-stroke-width" min="0" max="8" value="3" oninput="updatePreview()" style="flex: 1; max-width: 250px;">
+          </div>
         </div>
 
-        <div class="form-row">
-          <label for="style-color" style="font-size: 0.85rem;">文字色:</label>
-          <input type="color" id="style-color" value="#ffffff" oninput="updatePreview()">
+        <!-- ================= B. 個別詳細設定パネル ================= -->
+        <div id="panel-split" style="display: none;">
+          <!-- サブタブ切り替え -->
+          <div class="subtabs-container">
+            <button type="button" class="subtab-btn active" id="subtab-btn-main" onclick="switchSubtab('main')">
+              🎙️ メイン字幕 (自分の声)
+            </button>
+            <button type="button" class="subtab-btn" id="subtab-btn-trans" onclick="switchSubtab('trans')">
+              🌐 翻訳字幕 (共通)
+            </button>
+            <button type="button" class="subtab-btn" id="subtab-btn-langs" onclick="switchSubtab('langs')">
+              🎨 翻訳言語別カラー
+            </button>
+          </div>
+
+          <!-- B-1. メイン字幕タブ -->
+          <div id="subpanel-main" class="subpanel active">
+            <div class="form-group">
+              <label for="style-main-font">メイン字幕フォント:</label>
+              <select id="style-main-font" onchange="updatePreview()">
+                <optgroup label="🇯🇵 日本語・定番フォント">
+                  <option value="'Zen Kaku Gothic New', sans-serif">Zen Kaku Gothic New (洗練角ゴシック)</option>
+                  <option value="'M PLUS Rounded 1c', sans-serif" selected>M PLUS Rounded 1c (丸ゴシック・大人気)</option>
+                  <option value="'Dela Gothic One', sans-serif">Dela Gothic One (極太タイトル風)</option>
+                  <option value="'Hachi Maru Pop', sans-serif">Hachi Maru Pop (手書き可愛い丸文字)</option>
+                  <option value="'DotGothic16', sans-serif">DotGothic16 (レトロゲーム風ドット)</option>
+                  <option value="'Reggae One', sans-serif">Reggae One (躍動バラエティ風)</option>
+                  <option value="'Rampart One', sans-serif">Rampart One (3D立体ブロック風)</option>
+                  <option value="'Kiwi Maru', serif">Kiwi Maru (丸明朝・レトロ可愛い)</option>
+                  <option value="'Yuji Boku', serif">Yuji Boku (毛筆・和風筆文字)</option>
+                  <option value="'Shippori Mincho B1', serif">Shippori Mincho B1 (上品和風明朝)</option>
+                </optgroup>
+              </select>
+            </div>
+            <div class="form-row">
+              <label for="style-main-size" style="font-size: 0.85rem;">文字サイズ: <span id="val-main-size">44</span>px</label>
+              <input type="range" id="style-main-size" min="20" max="90" value="44" oninput="updatePreview()" style="flex: 1; max-width: 250px;">
+            </div>
+            <div class="form-row">
+              <label for="style-main-color" style="font-size: 0.85rem;">文字色:</label>
+              <input type="color" id="style-main-color" value="#ffffff" oninput="updatePreview()">
+            </div>
+            <div class="form-row">
+              <label for="style-main-effect" style="font-size: 0.85rem;">エフェクト演出:</label>
+              <select id="style-main-effect" onchange="updatePreview()" style="max-width: 250px;">
+                <option value="stroke" selected>通常縁取り</option>
+                <option value="double">二重縁取り (テレビ風)</option>
+                <option value="glow">ネオン発光 (サイバー)</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label for="style-main-stroke-color" style="font-size: 0.85rem;">外枠 / 発光色:</label>
+              <input type="color" id="style-main-stroke-color" value="#000000" oninput="updatePreview()">
+            </div>
+            <div class="form-row">
+              <label for="style-main-stroke-width" style="font-size: 0.85rem;">枠の太さ / 発光量: <span id="val-main-stroke">4</span>px</label>
+              <input type="range" id="style-main-stroke-width" min="0" max="8" value="4" oninput="updatePreview()" style="flex: 1; max-width: 250px;">
+            </div>
+          </div>
+
+          <!-- B-2. 翻訳字幕 (共通) タブ -->
+          <div id="subpanel-trans" class="subpanel">
+            <div class="form-group">
+              <label for="style-trans-font">翻訳字幕フォント:</label>
+              <select id="style-trans-font" onchange="updatePreview()">
+                <optgroup label="🇺🇸 欧文特化フォント">
+                  <option value="'Montserrat', sans-serif" selected>Montserrat (洗練欧文モダン)</option>
+                  <option value="'Bungee', cursive">Bungee (アーケードゲーム極太)</option>
+                  <option value="'Fredoka', sans-serif">Fredoka (丸みのある可愛いポップ)</option>
+                  <option value="'Oswald', sans-serif">Oswald (映画字幕風)</option>
+                  <option value="'Righteous', cursive">Righteous (サイバーレトロ)</option>
+                </optgroup>
+                <optgroup label="🇯🇵 日本語・多言語共通フォント">
+                  <option value="'Zen Kaku Gothic New', sans-serif">Zen Kaku Gothic New (万能角ゴシック)</option>
+                  <option value="'M PLUS Rounded 1c', sans-serif">M PLUS Rounded 1c (丸ゴシック)</option>
+                  <option value="'DotGothic16', sans-serif">DotGothic16 (ドット風)</option>
+                </optgroup>
+              </select>
+            </div>
+            <div class="form-row">
+              <label for="style-trans-size" style="font-size: 0.85rem;">翻訳文字サイズ: <span id="val-trans-size">32</span>px</label>
+              <input type="range" id="style-trans-size" min="16" max="70" value="32" oninput="updatePreview()" style="flex: 1; max-width: 250px;">
+            </div>
+            <div class="form-row">
+              <label for="style-trans-color" style="font-size: 0.85rem;">翻訳文字色:</label>
+              <input type="color" id="style-trans-color" value="#ffd166" oninput="updatePreview()">
+            </div>
+            <div class="form-row">
+              <label for="style-trans-effect" style="font-size: 0.85rem;">エフェクト演出:</label>
+              <select id="style-trans-effect" onchange="updatePreview()" style="max-width: 250px;">
+                <option value="stroke" selected>通常縁取り</option>
+                <option value="double">二重縁取り</option>
+                <option value="glow">ネオン発光</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label for="style-trans-stroke-color" style="font-size: 0.85rem;">外枠 / 発光色:</label>
+              <input type="color" id="style-trans-stroke-color" value="#000000" oninput="updatePreview()">
+            </div>
+            <div class="form-row">
+              <label for="style-trans-stroke-width" style="font-size: 0.85rem;">枠の太さ: <span id="val-trans-stroke">2.5</span>px</label>
+              <input type="range" id="style-trans-stroke-width" min="0" max="6" step="0.5" value="2.5" oninput="updatePreview()" style="flex: 1; max-width: 250px;">
+            </div>
+          </div>
+
+          <!-- B-3. 翻訳言語別カラー設定タブ -->
+          <div id="subpanel-langs" class="subpanel">
+            <div class="desc" style="font-size: 0.78rem; color: var(--paper-dim); margin-bottom: 12px;">言語ごとに字幕文字色を個別指定できます（空欄や共通色へのリセットも可能）。</div>
+            <div class="form-row">
+              <label for="style-lang-en" style="font-size: 0.85rem;">🇺🇸 英語 (en):</label>
+              <input type="color" id="style-lang-en" value="#70d6ff" oninput="updatePreview()">
+            </div>
+            <div class="form-row">
+              <label for="style-lang-zh" style="font-size: 0.85rem;">🇨🇳 中国語・簡体字 (zh):</label>
+              <input type="color" id="style-lang-zh" value="#ff9770" oninput="updatePreview()">
+            </div>
+            <div class="form-row">
+              <label for="style-lang-zhtw" style="font-size: 0.85rem;">🇹🇼 台湾語・繁体字 (zh-tw):</label>
+              <input type="color" id="style-lang-zhtw" value="#ff9770" oninput="updatePreview()">
+            </div>
+            <div class="form-row">
+              <label for="style-lang-ko" style="font-size: 0.85rem;">🇰🇷 韓国語 (ko):</label>
+              <input type="color" id="style-lang-ko" value="#a8dadc" oninput="updatePreview()">
+            </div>
+            <div class="form-row">
+              <label for="style-lang-es" style="font-size: 0.85rem;">🇪🇸 スペイン語 (es):</label>
+              <input type="color" id="style-lang-es" value="#ffd166" oninput="updatePreview()">
+            </div>
+          </div>
         </div>
 
-        <div class="form-row">
-          <label for="style-effect" style="font-size: 0.85rem;">エフェクト演出:</label>
-          <select id="style-effect" onchange="updatePreview()" style="max-width: 250px;">
-            <option value="stroke" selected>通常縁取り（クッキリ強調）</option>
-            <option value="double">二重縁取り（テレビテロップ風）</option>
-            <option value="glow">ネオン発光（サイバー・光る文字）</option>
-          </select>
-        </div>
+        <hr style="border: 0; border-top: 1px solid var(--line); margin: 16px 0;">
 
-        <div class="form-row">
-          <label for="style-stroke-color" style="font-size: 0.85rem;">縁取り色:</label>
-          <input type="color" id="style-stroke-color" value="#000000" oninput="updatePreview()">
-        </div>
-
+        <!-- 共通配置・背景設定 -->
         <div class="form-row">
           <label for="style-align" style="font-size: 0.85rem;">字幕の配置:</label>
           <select id="style-align" onchange="updatePreview()" style="max-width: 250px;">
@@ -952,12 +1135,32 @@
           </select>
         </div>
 
+        <div class="form-row">
+          <label for="style-bottom" style="font-size: 0.85rem;">画面下部からの余白: <span id="val-bottom">4</span>vh</label>
+          <input type="range" id="style-bottom" min="0" max="30" value="4" oninput="updatePreview()" style="flex: 1; max-width: 250px;">
+        </div>
+
+        <div class="form-row">
+          <label for="style-bg-color" style="font-size: 0.85rem;">背景プレート色:</label>
+          <input type="color" id="style-bg-color" value="#000000" oninput="updatePreview()">
+        </div>
+
+        <div class="form-row">
+          <label for="style-bg-opacity" style="font-size: 0.85rem;">背景の不透明度: <span id="val-opacity">0</span>% (0%で透明)</label>
+          <input type="range" id="style-bg-opacity" min="0" max="100" value="0" oninput="updatePreview()" style="flex: 1; max-width: 250px;">
+        </div>
+
+        <div class="form-row">
+          <label for="style-radius" style="font-size: 0.85rem;">背景の角丸: <span id="val-radius">8</span>px</label>
+          <input type="range" id="style-radius" min="0" max="30" value="8" oninput="updatePreview()" style="flex: 1; max-width: 250px;">
+        </div>
+
         <!-- リアルタイム字幕プレビュー枠 -->
-        <div class="form-group" style="margin-top: 0.8rem;">
+        <div class="form-group" style="margin-top: 1rem;">
           <div style="display: flex; justify-content: space-between; align-items: center;">
             <label style="font-size: 0.8rem;">リアルタイムプレビュー (OBSでの見え方):</label>
           </div>
-          <div class="preview-box-container" id="preview-box">
+          <div class="preview-box-container" id="preview-box" style="padding: 1rem; border-radius: 8px;">
             <div class="preview-bg-switch">
               <button class="btn-bg-mode active" onclick="setPreviewBg('#000000', this)">黒背景</button>
               <button class="btn-bg-mode" onclick="setPreviewBg('#00ff00', this)">Green</button>
@@ -1044,51 +1247,261 @@
     btn.classList.add("active");
   }
 
+  // スタイル設定管理 (Standalone 互換 mode/split/langOverrides)
+  let currentStyle = Object.assign({
+    mode: "unified",
+    font: "'Zen Kaku Gothic New', sans-serif",
+    size: 42,
+    color: "#ffffff",
+    effect: "stroke",
+    strokeColor: "#000000",
+    strokeWidth: 3.0,
+    align: "center",
+    bottom: 4,
+    bgColor: "#000000",
+    bgOpacity: 0,
+    radius: 8,
+    showTrans: true,
+    main: {
+      font: "'M PLUS Rounded 1c', sans-serif",
+      size: 44,
+      color: "#ffffff",
+      effect: "stroke",
+      strokeColor: "#000000",
+      strokeWidth: 4.0,
+    },
+    trans: {
+      font: "'Montserrat', sans-serif",
+      size: 32,
+      color: "#ffd166",
+      effect: "stroke",
+      strokeColor: "#000000",
+      strokeWidth: 2.5,
+    },
+    langOverrides: {
+      en: { color: "#70d6ff" },
+      zh: { color: "#ff9770" },
+      "zh-tw": { color: "#ff9770" },
+      ko: { color: "#a8dadc" },
+      es: { color: "#ffd166" },
+    }
+  }, initialStyle || {});
+
+  function setDesignMode(mode) {
+    currentStyle.mode = mode;
+    const isSplit = mode === "split";
+    document.getElementById("btn-mode-unified").classList.toggle("active", !isSplit);
+    document.getElementById("btn-mode-split").classList.toggle("active", isSplit);
+    document.getElementById("panel-unified").style.display = isSplit ? "none" : "block";
+    document.getElementById("panel-split").style.display = isSplit ? "block" : "none";
+    document.getElementById("mode-desc").textContent = isSplit
+      ? "メイン字幕、翻訳字幕、言語ごとのカラーをそれぞれ個別にカスタマイズします。"
+      : "全体で統一されたフォント・色・サイズを一括設定します。";
+    updatePreview();
+  }
+
+  function switchSubtab(tabName) {
+    document.querySelectorAll(".subtab-btn").forEach(b => b.classList.remove("active"));
+    document.querySelectorAll(".subpanel").forEach(p => p.classList.remove("active"));
+    const btn = document.getElementById("subtab-btn-" + tabName);
+    const panel = document.getElementById("subpanel-" + tabName);
+    if (btn) btn.classList.add("active");
+    if (panel) panel.classList.add("active");
+  }
+
+  function hexToRgba(hex, alphaPercent) {
+    hex = (hex || "#000000").replace("#", "");
+    if (hex.length === 3) hex = hex.split("").map(c => c+c).join("");
+    const r = parseInt(hex.substring(0, 2), 16) || 0;
+    const g = parseInt(hex.substring(2, 4), 16) || 0;
+    const b = parseInt(hex.substring(4, 6), 16) || 0;
+    return `rgba(${r}, ${g}, ${b}, ${(alphaPercent || 0) / 100})`;
+  }
+
+  function generateTextShadow(color, width, effect) {
+    if (width <= 0) return "none";
+    if (effect === "glow") {
+      return `0 0 ${width * 2}px ${color}, 0 0 ${width * 4}px ${color}, 0 0 ${width * 7}px ${color}`;
+    }
+    if (effect === "double") {
+      let s = [];
+      for (let x = -width; x <= width; x++) {
+        for (let y = -width; y <= width; y++) {
+          if (x !== 0 || y !== 0) s.push(`${x}px ${y}px 0 #000000`);
+        }
+      }
+      const w2 = width + 2;
+      for (let x = -w2; x <= w2; x += 2) {
+        for (let y = -w2; y <= w2; y += 2) {
+          s.push(`${x}px ${y}px 0 ${color}`);
+        }
+      }
+      s.push(`0 0 ${w2 * 2}px ${color}`);
+      return s.join(", ");
+    }
+    let s = [];
+    for (let x = -width; x <= width; x++) {
+      for (let y = -width; y <= width; y++) {
+        if (x !== 0 || y !== 0) s.push(`${x}px ${y}px 0 ${color}`);
+      }
+    }
+    s.push(`0 0 ${width * 2}px ${color}`);
+    return s.join(", ");
+  }
+
+  function applyStyleToInputs() {
+    setDesignMode(currentStyle.mode || "unified");
+
+    // 一括パネル
+    document.getElementById("style-font").value = currentStyle.font || "'Zen Kaku Gothic New', sans-serif";
+    document.getElementById("style-size").value = currentStyle.size || 42;
+    document.getElementById("val-size").textContent = currentStyle.size || 42;
+    document.getElementById("style-color").value = currentStyle.color || "#ffffff";
+    document.getElementById("style-effect").value = currentStyle.effect || "stroke";
+    document.getElementById("style-stroke-color").value = currentStyle.strokeColor || "#000000";
+    document.getElementById("style-stroke-width").value = currentStyle.strokeWidth != null ? currentStyle.strokeWidth : 3;
+    document.getElementById("val-stroke").textContent = document.getElementById("style-stroke-width").value;
+
+    // 個別メイン
+    const m = currentStyle.main || {};
+    if (document.getElementById("style-main-font")) {
+      document.getElementById("style-main-font").value = m.font || currentStyle.font || "'M PLUS Rounded 1c', sans-serif";
+      document.getElementById("style-main-size").value = m.size || 44;
+      document.getElementById("val-main-size").textContent = m.size || 44;
+      document.getElementById("style-main-color").value = m.color || "#ffffff";
+      document.getElementById("style-main-effect").value = m.effect || "stroke";
+      document.getElementById("style-main-stroke-color").value = m.strokeColor || "#000000";
+      document.getElementById("style-main-stroke-width").value = m.strokeWidth != null ? m.strokeWidth : 4;
+      document.getElementById("val-main-stroke").textContent = document.getElementById("style-main-stroke-width").value;
+    }
+
+    // 個別翻訳
+    const t = currentStyle.trans || {};
+    if (document.getElementById("style-trans-font")) {
+      document.getElementById("style-trans-font").value = t.font || "'Montserrat', sans-serif";
+      document.getElementById("style-trans-size").value = t.size || 32;
+      document.getElementById("val-trans-size").textContent = t.size || 32;
+      document.getElementById("style-trans-color").value = t.color || "#ffd166";
+      document.getElementById("style-trans-effect").value = t.effect || "stroke";
+      document.getElementById("style-trans-stroke-color").value = t.strokeColor || "#000000";
+      document.getElementById("style-trans-stroke-width").value = t.strokeWidth != null ? t.strokeWidth : 2.5;
+      document.getElementById("val-trans-stroke").textContent = document.getElementById("style-trans-stroke-width").value;
+    }
+
+    // 言語別カラー
+    const lo = currentStyle.langOverrides || {};
+    if (lo["en"] && document.getElementById("style-lang-en")) document.getElementById("style-lang-en").value = lo["en"].color || "#70d6ff";
+    if (lo["zh"] && document.getElementById("style-lang-zh")) document.getElementById("style-lang-zh").value = lo["zh"].color || "#ff9770";
+    if (lo["zh-tw"] && document.getElementById("style-lang-zhtw")) document.getElementById("style-lang-zhtw").value = lo["zh-tw"].color || "#ff9770";
+    if (lo["ko"] && document.getElementById("style-lang-ko")) document.getElementById("style-lang-ko").value = lo["ko"].color || "#a8dadc";
+    if (lo["es"] && document.getElementById("style-lang-es")) document.getElementById("style-lang-es").value = lo["es"].color || "#ffd166";
+
+    // 共通配置・背景
+    document.getElementById("style-align").value = currentStyle.align || "center";
+    document.getElementById("style-bottom").value = currentStyle.bottom != null ? currentStyle.bottom : 4;
+    document.getElementById("val-bottom").textContent = currentStyle.bottom || 4;
+    document.getElementById("style-bg-color").value = currentStyle.bgColor || "#000000";
+    document.getElementById("style-bg-opacity").value = currentStyle.bgOpacity != null ? currentStyle.bgOpacity : 0;
+    document.getElementById("val-opacity").textContent = currentStyle.bgOpacity || 0;
+    document.getElementById("style-radius").value = currentStyle.radius != null ? currentStyle.radius : 8;
+    document.getElementById("val-radius").textContent = currentStyle.radius || 8;
+  }
+
   // スタイルプレビュー更新 & 自動保存
   let _styleSaveTimer = null;
   function updatePreview() {
-    const font = document.getElementById("style-font").value;
-    const size = document.getElementById("style-size").value;
-    const color = document.getElementById("style-color").value;
-    const effect = document.getElementById("style-effect").value;
-    const strokeColor = document.getElementById("style-stroke-color").value;
-    const align = document.getElementById("style-align").value;
+    // フォーム値の収集
+    currentStyle.font = document.getElementById("style-font").value;
+    currentStyle.size = parseInt(document.getElementById("style-size").value);
+    currentStyle.color = document.getElementById("style-color").value;
+    currentStyle.effect = document.getElementById("style-effect").value;
+    currentStyle.strokeColor = document.getElementById("style-stroke-color").value;
+    currentStyle.strokeWidth = parseFloat(document.getElementById("style-stroke-width").value);
 
-    document.getElementById("val-size").textContent = size;
-
-    const pText = document.getElementById("preview-text");
-    pText.style.fontFamily = font;
-    pText.style.fontSize = (size * 0.75) + "px"; // プレビュー用にスケーリング
-    pText.style.color = color;
-    pText.style.textAlign = align;
-
-    if (effect === "stroke") {
-      pText.style.textShadow = `
-        -2px -2px 0 ${strokeColor}, 2px -2px 0 ${strokeColor},
-        -2px 2px 0 ${strokeColor}, 2px 2px 0 ${strokeColor},
-        0 2px 4px rgba(0,0,0,0.8)
-      `;
-    } else if (effect === "double") {
-      pText.style.textShadow = `
-        -2px -2px 0 ${strokeColor}, 2px -2px 0 ${strokeColor},
-        -2px 2px 0 ${strokeColor}, 2px 2px 0 ${strokeColor},
-        -4px -4px 0 #fff, 4px -4px 0 #fff,
-        -4px 4px 0 #fff, 4px 4px 0 #fff
-      `;
-    } else if (effect === "glow") {
-      pText.style.textShadow = `0 0 8px ${color}, 0 0 16px ${color}, 0 0 24px ${color}`;
+    if (!currentStyle.main) currentStyle.main = {};
+    if (document.getElementById("style-main-font")) {
+      currentStyle.main.font = document.getElementById("style-main-font").value;
+      currentStyle.main.size = parseInt(document.getElementById("style-main-size").value);
+      currentStyle.main.color = document.getElementById("style-main-color").value;
+      currentStyle.main.effect = document.getElementById("style-main-effect").value;
+      currentStyle.main.strokeColor = document.getElementById("style-main-stroke-color").value;
+      currentStyle.main.strokeWidth = parseFloat(document.getElementById("style-main-stroke-width").value);
     }
 
-    // デバウンス保存
+    if (!currentStyle.trans) currentStyle.trans = {};
+    if (document.getElementById("style-trans-font")) {
+      currentStyle.trans.font = document.getElementById("style-trans-font").value;
+      currentStyle.trans.size = parseInt(document.getElementById("style-trans-size").value);
+      currentStyle.trans.color = document.getElementById("style-trans-color").value;
+      currentStyle.trans.effect = document.getElementById("style-trans-effect").value;
+      currentStyle.trans.strokeColor = document.getElementById("style-trans-stroke-color").value;
+      currentStyle.trans.strokeWidth = parseFloat(document.getElementById("style-trans-stroke-width").value);
+    }
+
+    if (!currentStyle.langOverrides) currentStyle.langOverrides = {};
+    if (document.getElementById("style-lang-en")) currentStyle.langOverrides["en"] = { color: document.getElementById("style-lang-en").value };
+    if (document.getElementById("style-lang-zh")) currentStyle.langOverrides["zh"] = { color: document.getElementById("style-lang-zh").value };
+    if (document.getElementById("style-lang-zhtw")) currentStyle.langOverrides["zh-tw"] = { color: document.getElementById("style-lang-zhtw").value };
+    if (document.getElementById("style-lang-ko")) currentStyle.langOverrides["ko"] = { color: document.getElementById("style-lang-ko").value };
+    if (document.getElementById("style-lang-es")) currentStyle.langOverrides["es"] = { color: document.getElementById("style-lang-es").value };
+
+    currentStyle.align = document.getElementById("style-align").value;
+    currentStyle.bottom = parseFloat(document.getElementById("style-bottom").value);
+    currentStyle.bgColor = document.getElementById("style-bg-color").value;
+    currentStyle.bgOpacity = parseInt(document.getElementById("style-bg-opacity").value);
+    currentStyle.radius = parseInt(document.getElementById("style-radius").value);
+
+    // ラベル更新
+    document.getElementById("val-size").textContent = currentStyle.size;
+    document.getElementById("val-stroke").textContent = currentStyle.strokeWidth;
+    if (document.getElementById("val-main-size")) document.getElementById("val-main-size").textContent = currentStyle.main.size;
+    if (document.getElementById("val-main-stroke")) document.getElementById("val-main-stroke").textContent = currentStyle.main.strokeWidth;
+    if (document.getElementById("val-trans-size")) document.getElementById("val-trans-size").textContent = currentStyle.trans.size;
+    if (document.getElementById("val-trans-stroke")) document.getElementById("val-trans-stroke").textContent = currentStyle.trans.strokeWidth;
+    document.getElementById("val-bottom").textContent = currentStyle.bottom;
+    document.getElementById("val-opacity").textContent = currentStyle.bgOpacity;
+    document.getElementById("val-radius").textContent = currentStyle.radius;
+
+    // プレビュー描画
+    const box = document.getElementById("preview-box");
+    const pText = document.getElementById("preview-text");
+    const pTrans = document.getElementById("preview-trans");
+
+    const isSplit = currentStyle.mode === "split";
+    const mainCfg = isSplit && currentStyle.main ? currentStyle.main : currentStyle;
+    const transCfg = isSplit && currentStyle.trans ? currentStyle.trans : currentStyle;
+
+    box.style.textAlign = currentStyle.align;
+    box.style.backgroundColor = hexToRgba(currentStyle.bgColor, currentStyle.bgOpacity);
+    box.style.borderRadius = currentStyle.radius + "px";
+
+    // メイン字幕プレビュー
+    pText.style.fontFamily = mainCfg.font || currentStyle.font;
+    pText.style.fontSize = Math.min(28, (mainCfg.size || 42) * 0.72) + "px";
+    pText.style.color = mainCfg.color || currentStyle.color;
+    pText.style.textShadow = generateTextShadow(mainCfg.strokeColor, mainCfg.strokeWidth, mainCfg.effect);
+
+    // 翻訳字幕プレビュー
+    const tFont = (isSplit && transCfg.font) ? transCfg.font : (currentStyle.font || mainCfg.font);
+    const tSize = (isSplit && transCfg.size) ? transCfg.size : ((mainCfg.size || 42) * 0.75);
+    const tColor = (isSplit && transCfg.color) ? transCfg.color : "#ffd166";
+    const tStroke = (isSplit && transCfg.strokeColor) ? transCfg.strokeColor : "#000000";
+    const tWidth = (isSplit && transCfg.strokeWidth != null) ? transCfg.strokeWidth : 2.5;
+    const tEffect = (isSplit && transCfg.effect) ? transCfg.effect : "stroke";
+
+    pTrans.style.fontFamily = tFont;
+    pTrans.style.fontSize = Math.min(22, tSize * 0.72) + "px";
+    pTrans.style.color = tColor;
+    pTrans.style.textShadow = generateTextShadow(tStroke, tWidth, tEffect);
+
+    // デバウンス保存 (/overlay-style)
     if (_styleSaveTimer) clearTimeout(_styleSaveTimer);
     _styleSaveTimer = setTimeout(async () => {
       try {
         await fetch("/overlay-style", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            font, size: parseInt(size), color, effect, strokeColor, align
-          })
+          body: JSON.stringify(currentStyle)
         });
         showAlert("スタイルを保存し、OBSに即時反映しました！");
       } catch (e) {
@@ -1337,6 +1750,10 @@
         pLive.innerHTML = 'マイクを開始すると、ここに話した内容が即座に表示されます<span class="caret"></span>';
         pLive.classList.add("idle");
         appendFinalTranscript(data.text);
+        if (data.latency_ms != null) {
+          const latVal = document.getElementById("lat-val");
+          if (latVal) latVal.textContent = Math.round(data.latency_ms);
+        }
       } else {
         pLive.classList.remove("idle");
         pLive.innerHTML = escapeHtml(data.text) + '<span class="caret"></span>';
@@ -1396,17 +1813,7 @@
         if (chk && chk.checked) item.classList.add("active");
       });
     }
-    if (initialStyle) {
-      if (initialStyle.font) document.getElementById("style-font").value = initialStyle.font;
-      if (initialStyle.size) {
-        document.getElementById("style-size").value = initialStyle.size;
-        document.getElementById("val-size").textContent = initialStyle.size;
-      }
-      if (initialStyle.color) document.getElementById("style-color").value = initialStyle.color;
-      if (initialStyle.effect) document.getElementById("style-effect").value = initialStyle.effect;
-      if (initialStyle.strokeColor) document.getElementById("style-stroke-color").value = initialStyle.strokeColor;
-      if (initialStyle.align) document.getElementById("style-align").value = initialStyle.align;
-    }
+    applyStyleToInputs();
     updatePreview();
   });
 </script>

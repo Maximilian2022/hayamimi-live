@@ -15,6 +15,7 @@ from cloud.config import DATA_DIR
 logger = logging.getLogger("hayamimi.cloud.session")
 
 DEFAULT_OVERLAY_STYLE: Dict[str, Any] = {
+    "mode": "unified",   # "unified" (全体一括) or "split" (メイン/翻訳個別)
     "font": "'Zen Kaku Gothic New', sans-serif",
     "size": 42,
     "color": "#ffffff",
@@ -26,9 +27,35 @@ DEFAULT_OVERLAY_STYLE: Dict[str, Any] = {
     "bgColor": "#000000",
     "bgOpacity": 0,      # 0 to 100%
     "radius": 8,         # px
-    # 翻訳字幕スタイル
     "showTrans": True,
-    "transSize": 28,
+    # 個別設定 (split) 時のメイン字幕
+    "main": {
+        "font": "'Zen Kaku Gothic New', sans-serif",
+        "size": 42,
+        "color": "#ffffff",
+        "strokeColor": "#000000",
+        "strokeWidth": 3.0,
+        "effect": "stroke",
+    },
+    # 個別設定 (split) 時の翻訳字幕（共通）
+    "trans": {
+        "font": "'Zen Kaku Gothic New', sans-serif",
+        "size": 32,
+        "color": "#ffd166",
+        "strokeColor": "#000000",
+        "strokeWidth": 2.5,
+        "effect": "stroke",
+    },
+    # 言語別オーバーライド（オプション）
+    "langOverrides": {
+        "en": {"color": "#70d6ff"},
+        "zh": {"color": "#ff9770"},
+        "zh-tw": {"color": "#ff9770"},
+        "ko": {"color": "#a8dadc"},
+        "es": {"color": "#ffd166"},
+    },
+    # 旧互換フラットキー
+    "transSize": 32,
     "transColor": "#ffd166",
     "transStrokeColor": "#000000",
     "transStrokeWidth": 2.5,
@@ -46,66 +73,92 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
 
 
 def sanitize_style(style: dict) -> dict:
-    """スタイル辞書のバリデーションとクランプ"""
-    res = dict(DEFAULT_OVERLAY_STYLE)
+    """スタイル辞書のバリデーションとクランプ (Standalone 互換 mode/split/langOverrides 対応)"""
+    import copy
+    res = copy.deepcopy(DEFAULT_OVERLAY_STYLE)
     if not isinstance(style, dict):
         return res
+
+    def _clamp_num(val, low, high, default):
+        try:
+            num = float(val)
+            return max(low, min(high, num))
+        except (ValueError, TypeError):
+            return default
+
+    if "mode" in style and style["mode"] in ("unified", "split"):
+        res["mode"] = style["mode"]
 
     if "font" in style and isinstance(style["font"], str):
         res["font"] = style["font"][:100]
     if "size" in style:
-        try:
-            res["size"] = max(12, min(160, int(style["size"])))
-        except (ValueError, TypeError):
-            pass
+        res["size"] = int(_clamp_num(style["size"], 8, 200, 42))
     if "color" in style and isinstance(style["color"], str):
         res["color"] = style["color"][:20]
     if "strokeColor" in style and isinstance(style["strokeColor"], str):
         res["strokeColor"] = style["strokeColor"][:20]
     if "strokeWidth" in style:
-        try:
-            res["strokeWidth"] = max(0.0, min(20.0, float(style["strokeWidth"])))
-        except (ValueError, TypeError):
-            pass
+        res["strokeWidth"] = round(_clamp_num(style["strokeWidth"], 0.0, 30.0, 3.0), 1)
     if "effect" in style and style["effect"] in ("stroke", "double", "glow"):
         res["effect"] = style["effect"]
     if "align" in style and style["align"] in ("left", "center", "right"):
         res["align"] = style["align"]
     if "bottom" in style:
-        try:
-            res["bottom"] = max(0.0, min(50.0, float(style["bottom"])))
-        except (ValueError, TypeError):
-            pass
+        res["bottom"] = round(_clamp_num(style["bottom"], 0.0, 100.0, 4.0), 1)
     if "bgColor" in style and isinstance(style["bgColor"], str):
         res["bgColor"] = style["bgColor"][:20]
     if "bgOpacity" in style:
-        try:
-            res["bgOpacity"] = max(0, min(100, int(style["bgOpacity"])))
-        except (ValueError, TypeError):
-            pass
+        res["bgOpacity"] = int(_clamp_num(style["bgOpacity"], 0, 100, 0))
     if "radius" in style:
-        try:
-            res["radius"] = max(0, min(50, int(style["radius"])))
-        except (ValueError, TypeError):
-            pass
+        res["radius"] = int(_clamp_num(style["radius"], 0, 50, 8))
     if "showTrans" in style:
         res["showTrans"] = bool(style["showTrans"])
-    if "transSize" in style:
-        try:
-            res["transSize"] = max(10, min(120, int(style["transSize"])))
-        except (ValueError, TypeError):
-            pass
-    if "transColor" in style and isinstance(style["transColor"], str):
-        res["transColor"] = style["transColor"][:20]
-    if "transStrokeColor" in style and isinstance(style["transStrokeColor"], str):
-        res["transStrokeColor"] = style["transStrokeColor"][:20]
-    if "transStrokeWidth" in style:
-        try:
-            res["transStrokeWidth"] = max(0.0, min(20.0, float(style["transStrokeWidth"])))
-        except (ValueError, TypeError):
-            pass
-    if "transEffect" in style and style["transEffect"] in ("stroke", "double", "glow"):
-        res["transEffect"] = style["transEffect"]
+
+    # main / trans 個別辞書のサニタイズ
+    for sub in ("main", "trans"):
+        if sub in style and isinstance(style[sub], dict):
+            src_sub = style[sub]
+            dst_sub = res[sub]
+            if "font" in src_sub and isinstance(src_sub["font"], str):
+                dst_sub["font"] = src_sub["font"][:100]
+            if "size" in src_sub:
+                dst_sub["size"] = int(_clamp_num(src_sub["size"], 8, 200, 42 if sub == "main" else 32))
+            if "color" in src_sub and isinstance(src_sub["color"], str):
+                dst_sub["color"] = src_sub["color"][:20]
+            if "strokeColor" in src_sub and isinstance(src_sub["strokeColor"], str):
+                dst_sub["strokeColor"] = src_sub["strokeColor"][:20]
+            if "strokeWidth" in src_sub:
+                dst_sub["strokeWidth"] = round(_clamp_num(src_sub["strokeWidth"], 0.0, 30.0, 3.0 if sub == "main" else 2.5), 1)
+            if "effect" in src_sub and src_sub["effect"] in ("stroke", "double", "glow"):
+                dst_sub["effect"] = src_sub["effect"]
+
+    # langOverrides のサニタイズ
+    if "langOverrides" in style and isinstance(style["langOverrides"], dict):
+        for lcode, lovr in style["langOverrides"].items():
+            if isinstance(lovr, dict):
+                if lcode not in res["langOverrides"]:
+                    res["langOverrides"][lcode] = {}
+                if "color" in lovr and isinstance(lovr["color"], str):
+                    res["langOverrides"][lcode]["color"] = lovr["color"][:20]
+                if "font" in lovr and isinstance(lovr["font"], str):
+                    res["langOverrides"][lcode]["font"] = lovr["font"][:100]
+                if "size" in lovr:
+                    res["langOverrides"][lcode]["size"] = int(_clamp_num(lovr["size"], 8, 200, 32))
+                if "strokeColor" in lovr and isinstance(lovr["strokeColor"], str):
+                    res["langOverrides"][lcode]["strokeColor"] = lovr["strokeColor"][:20]
+                if "strokeWidth" in lovr:
+                    res["langOverrides"][lcode]["strokeWidth"] = round(_clamp_num(lovr["strokeWidth"], 0.0, 30.0, 2.5), 1)
+                if "effect" in lovr and lovr["effect"] in ("stroke", "double", "glow"):
+                    res["langOverrides"][lcode]["effect"] = lovr["effect"]
+
+    # 旧互換キーとの同期 (trans -> transColor 等)
+    t = res["trans"]
+    res["transSize"] = t["size"]
+    res["transColor"] = t["color"]
+    res["transStrokeColor"] = t["strokeColor"]
+    res["transStrokeWidth"] = t["strokeWidth"]
+    res["transEffect"] = t["effect"]
+
     return res
 
 

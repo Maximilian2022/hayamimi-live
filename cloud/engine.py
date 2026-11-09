@@ -198,7 +198,7 @@ class UserVadSession:
         self,
         user_id: str,
         asr_engine: SharedAsrEngine,
-        on_transcript: Callable[[str, bool, bool], None],
+        on_transcript: Callable[[str, bool, bool, float], None],
         model_choice: str = "haas",
     ):
         self.user_id = user_id
@@ -245,16 +245,19 @@ class UserVadSession:
                     cur_samples = cur_samples[-int(8.0 * SAMPLE_RATE):]
 
                 if len(cur_samples) >= int(0.25 * SAMPLE_RATE):
+                    t_draft = time.perf_counter()
                     draft_text, _ = self.asr_engine.transcribe(cur_samples, SAMPLE_RATE, model=self.model_choice)
+                    draft_ms = (time.perf_counter() - t_draft) * 1000
                     if draft_text and draft_text != self.last_draft_text:
                         self.last_draft_text = draft_text
-                        self.on_transcript(draft_text, False, False)
+                        self.on_transcript(draft_text, False, False, draft_ms)
                     self.last_partial_pos = self.audio_pos
             except Exception as e:
                 logger.debug("Partial transcription error: %s", e)
 
         # 2. 完了した確定音声セグメントを取り出して ASR
         while not self.vad.empty():
+            t0 = time.perf_counter()
             segment = self.vad.front  # プロパティ参照 (呼び出し不可)
             samples = np.array(segment.samples, dtype=np.float32)
             self.vad.pop()
@@ -262,8 +265,9 @@ class UserVadSession:
 
             if len(samples) >= int(SAMPLE_RATE * 0.2):  # 0.2秒以上の音声
                 text, has_punct = self.asr_engine.transcribe(samples, SAMPLE_RATE, model=self.model_choice)
+                latency_ms = (time.perf_counter() - t0) * 1000
                 if text:
-                    self.on_transcript(text, True, has_punct)
+                    self.on_transcript(text, True, has_punct, latency_ms)
 
     def reset(self):
         try:

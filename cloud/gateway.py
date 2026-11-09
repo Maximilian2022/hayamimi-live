@@ -216,11 +216,11 @@ def _run_youtube_grow_worker(user_id: str, url: str, max_videos: int, gemini_key
 
 
 # ---------------------------------------------------------------------------
-# ダッシュボード & 設定
+# ダッシュボード & 設定 (/dashboard)
 # ---------------------------------------------------------------------------
 
-@app.get("/", response_class=HTMLResponse)
-async def dashboard(request: Request):
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard_page(request: Request):
     user = get_current_user(request)
     if not user:
         return RedirectResponse(url="/login", status_code=302)
@@ -251,6 +251,32 @@ async def dashboard(request: Request):
             "supported_languages": SUPPORTED_LANGUAGES,
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# Top (/) および /mic: Web MIC & STUDIO 画面
+# ---------------------------------------------------------------------------
+
+@app.get("/", response_class=HTMLResponse)
+@app.get("/mic", response_class=HTMLResponse)
+async def mic_top_page(request: Request):
+    user = get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
+    u_sess = session_manager.get_or_create_user(user["id"])
+    return templates.TemplateResponse(
+        request=request,
+        name="mic.html",
+        context={
+            "user": user,
+            "obs_token": u_sess.obs_token,
+            "obs_url": f"{BASE_URL}/overlay?token={u_sess.obs_token}",
+            "settings": u_sess.settings,
+            "style": u_sess.style,
+            "replacements": u_sess.replacements,
+        },
+    )
+
 
 
 @app.post("/api/dictionary")
@@ -536,26 +562,6 @@ async def get_youtube_grow_status(request: Request):
 # Web マイク入力画面 & WebSocket 音声受信
 # ---------------------------------------------------------------------------
 
-@app.get("/mic", response_class=HTMLResponse)
-async def mic_page(request: Request):
-    user = get_current_user(request)
-    if not user:
-        return RedirectResponse(url="/login", status_code=302)
-    u_sess = session_manager.get_or_create_user(user["id"])
-    return templates.TemplateResponse(
-        request=request,
-        name="mic.html",
-        context={
-            "user": user,
-            "obs_token": u_sess.obs_token,
-            "obs_url": f"{BASE_URL}/overlay?token={u_sess.obs_token}",
-            "settings": u_sess.settings,
-            "style": u_sess.style,
-            "replacements": u_sess.replacements,
-        },
-    )
-
-
 @app.websocket("/ws/mic")
 @app.websocket("/ingest")
 async def websocket_mic_endpoint(websocket: WebSocket):
@@ -600,7 +606,7 @@ async def websocket_mic_endpoint(websocket: WebSocket):
             except Exception as e:
                 logger.warning("Translation dispatch error for %s: %s", lang, e)
 
-    def on_transcript(raw_text: str, is_final: bool = True, has_punct: bool = False):
+    def on_transcript(raw_text: str, is_final: bool = True, has_punct: bool = False, latency_ms: float = 0.0):
         processed = raw_text
 
         # 1. ITN (数値・日付・単位の正規化)
@@ -621,12 +627,30 @@ async def websocket_mic_endpoint(websocket: WebSocket):
         # 3. ユーザー固有辞書の適用と OBS への送信
         asyncio.run_coroutine_threadsafe(u_sess.broadcast_transcript(processed, is_final), loop)
 
-        # 4. マイク画面へのフィードバック (確定または途中追随)
+        # 4. マイク画面へのフィードバック (確定または途中追随、応答ms通知)
         refined = u_sess.apply_replacements(processed)
+        resp_data = {
+            "type": "transcript",
+            "text": refined,
+            "is_final": is_final,
+        }
+        if is_final and latency_ms > 0:
+            resp_data["latency_ms"] = round(latency_ms, 1)
+
         asyncio.run_coroutine_threadsafe(
-            websocket.send_json({"type": "transcript", "text": refined, "is_final": is_final}),
+            websocket.send_json(resp_data),
             loop
         )
+
+        # 5. 確定時の多言語翻訳 (有効化されている場合)
+        if is_final and u_sess.settings.get("enable_trans", False):
+            target_langs = u_sess.settings.get("trans_target_langs", ["en"])
+            gemini_key = u_sess.get_gemini_key()
+            if target_langs:
+                asyncio.run_coroutine_threadsafe(
+                    _handle_async_translation(refined, target_langs, gemini_key),
+                    loop
+                )
 
         # 5. 確定時の多言語翻訳 (有効化されている場合)
         if is_final and u_sess.settings.get("enable_trans", False):
