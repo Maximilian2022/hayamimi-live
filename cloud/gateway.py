@@ -7,13 +7,22 @@ FastAPI + WebSocket + SSE によるリアルタイム音声認識 & OBS 字幕�
 import asyncio
 import json
 import logging
+import math
 import os
+import queue
 import struct
 import sys
 import threading
 import time
+import uuid
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Optional, List
+
+try:
+    from scipy.signal import resample_poly
+    HAS_SCIPY = True
+except ImportError:
+    HAS_SCIPY = False
 
 # tools / scripts をインポートパスに追加
 _ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -578,6 +587,74 @@ async def get_youtube_grow_status(request: Request):
 
 
 # ---------------------------------------------------------------------------
+# 音声変換ヘルパー (外部ストリーミング / Discord Bot 等)
+# ---------------------------------------------------------------------------
+
+def _convert_stream_audio_chunk(
+    raw_bytes: bytes,
+    sample_rate: int = 48000,
+    channels: int = 2,
+    audio_format: str = "s16le",
+) -> np.ndarray:
+    """
+    外部ストリーム (Discord Bot 等) から届いたバイナリ音声を 16kHz mono float32 に変換する。
+    - audio_format: "s16le" (16bit Signed Int PCM) または "f32le" (32bit Float PCM)
+    - channels: 1 (Mono) または 2 (Interleaved Stereo)
+    - sample_rate: 入力サンプリングレート (例: 48000, 44100, 16000)
+    """
+    if not raw_bytes:
+        return np.empty(0, dtype=np.float32)
+
+    # 1. バイト列から numpy 配列に変換
+    if audio_format == "s16le":
+        n_bytes = len(raw_bytes) - (len(raw_bytes) % 2)
+        if n_bytes == 0:
+            return np.empty(0, dtype=np.float32)
+        samples = np.frombuffer(raw_bytes[:n_bytes], dtype=np.int16).astype(np.float32) / 32768.0
+    elif audio_format == "f32le":
+        n_bytes = len(raw_bytes) - (len(raw_bytes) % 4)
+        if n_bytes == 0:
+            return np.empty(0, dtype=np.float32)
+        samples = np.frombuffer(raw_bytes[:n_bytes], dtype=np.float32)
+    else:
+        raise ValueError(f"Unsupported audio format: {audio_format}")
+
+    # 2. チャンネル変換 (Stereo -> Mono)
+    if channels == 2:
+        n_samples = len(samples) - (len(samples) % 2)
+        if n_samples == 0:
+            return np.empty(0, dtype=np.float32)
+        stereo = samples[:n_samples].reshape(-1, 2)
+        mono = stereo.mean(axis=1).astype(np.float32)
+    elif channels == 1:
+        mono = samples
+    else:
+        n_samples = len(samples) - (len(samples) % channels)
+        if n_samples == 0:
+            return np.empty(0, dtype=np.float32)
+        multi = samples[:n_samples].reshape(-1, channels)
+        mono = multi.mean(axis=1).astype(np.float32)
+
+    # 3. サンプリングレート変換 (-> 16000Hz)
+    if sample_rate == 16000 or len(mono) == 0:
+        return mono
+
+    if HAS_SCIPY:
+        gcd = math.gcd(sample_rate, 16000)
+        up = 16000 // gcd
+        down = sample_rate // gcd
+        return resample_poly(mono, up, down).astype(np.float32)
+    else:
+        duration = len(mono) / sample_rate
+        target_len = int(round(duration * 16000))
+        if target_len == 0:
+            return np.empty(0, dtype=np.float32)
+        x_orig = np.linspace(0, duration, len(mono), endpoint=False)
+        x_target = np.linspace(0, duration, target_len, endpoint=False)
+        return np.interp(x_target, x_orig, mono).astype(np.float32)
+
+
+# ---------------------------------------------------------------------------
 # Web マイク入力画面 & WebSocket 音声受信
 # ---------------------------------------------------------------------------
 
@@ -801,6 +878,229 @@ async def websocket_mic_endpoint(websocket: WebSocket):
             vad_session.reset()
         except Exception:
             pass
+
+
+# ---------------------------------------------------------------------------
+# 外部連携用 WebSocket 音声ストリーミング ASR & 翻訳 API (Discord Bot 等)
+# ---------------------------------------------------------------------------
+
+@app.websocket("/ws/stream")
+async def websocket_stream_endpoint(
+    websocket: WebSocket,
+    sample_rate: int = 48000,
+    channels: int = 2,
+    format: str = "s16le",
+    model: str = "reazon",
+    trans_langs: str = "",
+    gemini_key: str = "",
+    draft: bool = False,
+    token: str = "",
+):
+    """
+    外部アプリケーション (Discord Bot 等) 向けの汎用 WebSocket 音声ストリーミング ASR & 翻訳 API。
+    - 接続確立後、生の PCM バイナリチャンクを連続送信するだけでリアルタイム文字起こし & 翻訳を実行。
+    - 48kHz Stereo 等の音声は自動で 16kHz Mono にリアルタイムリサンプリング。
+    - Silero VAD による発話区間検出と確定テキスト・翻訳テキストの JSON 返却。
+    """
+    await websocket.accept()
+
+    if shared_asr_engine is None:
+        await websocket.send_json({"type": "error", "message": "ASR engine is not initialized"})
+        await websocket.close(code=1011, reason="ASR engine not ready")
+        return
+
+    # パラメータ検証 & 正規化
+    valid_models = {"reazon", "haas"}
+    model_choice = model.lower() if model.lower() in valid_models else "reazon"
+    format_choice = format.lower() if format.lower() in {"s16le", "f32le"} else "s16le"
+    ch_choice = channels if channels in {1, 2} else 2
+
+    # OBS トークンが渡された場合は該当ユーザーの置換辞書・Gemini キーを自動適用
+    u_sess: Optional[UserSession] = None
+    if token:
+        u_sess = session_manager.get_user_by_obs_token(token)
+
+    session_id = f"stream_{uuid.uuid4().hex[:8]}"
+    logger.info(
+        "WebSocket stream connected: session=%s, sr=%d, ch=%d, fmt=%s, model=%s, token_user=%s",
+        session_id, sample_rate, ch_choice, format_choice, model_choice, u_sess.user_id if u_sess else "none",
+    )
+
+    target_langs = [l.strip().lower() for l in trans_langs.split(",") if l.strip()]
+    resolved_gemini_key = gemini_key or (u_sess.get_gemini_key() if u_sess else "")
+
+    # 接続準備完了を通知
+    await websocket.send_json({
+        "type": "ready",
+        "session_id": session_id,
+        "sample_rate": sample_rate,
+        "channels": ch_choice,
+        "format": format_choice,
+        "model": model_choice,
+        "trans_langs": target_langs,
+    })
+
+    loop = asyncio.get_running_loop()
+    utterance_counter = 0
+
+    async def _handle_stream_translation(text: str, langs: list, key: str, seq: int):
+        for lang in langs:
+            try:
+                trans_text = await loop.run_in_executor(None, translate_text, text, lang, key)
+                if trans_text:
+                    try:
+                        await websocket.send_json({
+                            "type": "translation",
+                            "lang": lang,
+                            "text": trans_text,
+                            "seq": seq,
+                            "original": text,
+                        })
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.warning("Stream translation error for %s: %s", lang, e)
+
+    def on_transcript(
+        raw_text: str,
+        is_final: bool = True,
+        has_punct: bool = False,
+        latency_ms: float = 0.0,
+        client_ts: Optional[float] = None,
+    ):
+        nonlocal utterance_counter
+        # ドラフト通知が無効な場合は中間追随を抑制
+        if not draft and not is_final:
+            return
+
+        t_post_start = time.perf_counter()
+        processed = raw_text
+
+        # 1. ITN (数値・日付等の正規化)
+        try:
+            import itn_cjk
+            processed = itn_cjk.convert(processed, "ja")
+        except Exception:
+            pass
+
+        # 2. 句読点付与 (確定時かつ自前句読点がない場合)
+        if is_final and not has_punct and shared_punctuator:
+            try:
+                processed = shared_punctuator.restore(processed)
+            except Exception:
+                pass
+
+        # 3. ユーザー固有辞書の適用 (トークン連携時)
+        if u_sess:
+            processed = u_sess.apply_replacements(processed)
+
+        post_ms = (time.perf_counter() - t_post_start) * 1000
+        server_total_ms = latency_ms + post_ms
+
+        curr_seq = None
+        if is_final:
+            utterance_counter += 1
+            curr_seq = utterance_counter
+
+        resp_data = {
+            "type": "transcript",
+            "text": processed,
+            "is_final": is_final,
+        }
+        if is_final:
+            resp_data["seq"] = curr_seq
+            if server_total_ms > 0:
+                resp_data["latency_ms"] = round(server_total_ms, 1)
+                resp_data["asr_ms"] = round(latency_ms, 1)
+        if client_ts is not None:
+            resp_data["client_ts"] = client_ts
+
+        asyncio.run_coroutine_threadsafe(websocket.send_json(resp_data), loop)
+
+        # 4. 確定時の多言語翻訳
+        if is_final and target_langs and resolved_gemini_key:
+            asyncio.run_coroutine_threadsafe(
+                _handle_stream_translation(processed, target_langs, resolved_gemini_key, curr_seq),
+                loop,
+            )
+
+    vad_session = UserVadSession(
+        session_id,
+        shared_asr_engine,
+        on_transcript,
+        model_choice=model_choice,
+    )
+
+    audio_queue: queue.Queue = queue.Queue(maxsize=200)
+    worker_running = True
+
+    def audio_worker():
+        while worker_running:
+            try:
+                item = audio_queue.get(timeout=0.1)
+                if item is None:
+                    break
+                chunk, c_ts = item
+                vad_session.process_audio_chunk(chunk, client_ts=c_ts)
+                audio_queue.task_done()
+            except queue.Empty:
+                continue
+            except Exception as ex:
+                logger.warning("Stream audio worker exception (%s): %s", session_id, ex)
+
+    worker_thread = threading.Thread(
+        target=audio_worker,
+        name=f"StreamWorker-{session_id}",
+        daemon=True,
+    )
+    worker_thread.start()
+
+    try:
+        while True:
+            message = await websocket.receive()
+            if message.get("type") == "websocket.disconnect":
+                break
+
+            if "bytes" in message and message["bytes"]:
+                raw_data = message["bytes"]
+                try:
+                    audio_16k = _convert_stream_audio_chunk(
+                        raw_data,
+                        sample_rate=sample_rate,
+                        channels=ch_choice,
+                        audio_format=format_choice,
+                    )
+                    if len(audio_16k) > 0:
+                        audio_queue.put_nowait((audio_16k, None))
+                except queue.Full:
+                    logger.warning("Stream audio queue full (%s), dropping chunk", session_id)
+                except Exception as ex:
+                    logger.warning("Stream chunk conversion failed (%s): %s", session_id, ex)
+            elif "text" in message and message["text"]:
+                try:
+                    t_data = json.loads(message["text"])
+                    if t_data.get("type") == "ping":
+                        await websocket.send_json({"type": "pong", "ts": t_data.get("ts")})
+                    elif t_data.get("type") == "reset":
+                        vad_session.reset()
+                except Exception:
+                    pass
+    except (WebSocketDisconnect, RuntimeError):
+        logger.info("WebSocket stream disconnected: %s", session_id)
+    except Exception as e:
+        logger.warning("WebSocket stream error (%s): %s", session_id, e)
+    finally:
+        worker_running = False
+        try:
+            audio_queue.put_nowait(None)
+        except Exception:
+            pass
+        worker_thread.join(timeout=1.0)
+        try:
+            vad_session.reset()
+        except Exception:
+            pass
+        logger.info("WebSocket stream terminated: %s", session_id)
 
 
 # ---------------------------------------------------------------------------
