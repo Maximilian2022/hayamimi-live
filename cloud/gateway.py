@@ -1018,7 +1018,7 @@ async def websocket_stream_endpoint(
         asyncio.run_coroutine_threadsafe(websocket.send_json(resp_data), loop)
 
         # 4. 確定時の多言語翻訳
-        if is_final and target_langs and resolved_gemini_key:
+        if is_final and target_langs:
             asyncio.run_coroutine_threadsafe(
                 _handle_stream_translation(processed, target_langs, resolved_gemini_key, curr_seq),
                 loop,
