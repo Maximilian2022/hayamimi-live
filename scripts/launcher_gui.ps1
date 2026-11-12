@@ -1,6 +1,70 @@
-﻿$script:AppVersion = "2.3.0"
-$repoRoot = Split-Path -Parent $PSScriptRoot
-$versionTxtFile = Join-Path $repoRoot "version.txt"
+﻿# =============================================================================
+# Hayamimi Live (早耳 Live) ランチャー GUI
+# =============================================================================
+
+# --- 1. スクリプトディレクトリ ($ScriptDir) およびリポジトリルート ($ProjectRoot) の高精度動的解決 ---
+# Smart App Control (SAC) 対策で [scriptblock]::Create 実行された場合、$PSScriptRoot は NULL になる。
+# そのため、コマンドライン引数、カレントディレクトリ、version.txt の実在確認を多段で判定する。
+$ScriptDir = $null
+$ProjectRoot = $null
+
+# 判定 1: $PSScriptRoot が有効で親に version.txt がある場合 (-File 実行)
+if ($PSScriptRoot -and (Test-Path $PSScriptRoot)) {
+    $candRoot = Split-Path -Parent $PSScriptRoot
+    if (Test-Path (Join-Path $candRoot "version.txt")) {
+        $ScriptDir = $PSScriptRoot
+        $ProjectRoot = $candRoot
+    }
+}
+
+# 判定 2: $MyInvocation.MyCommand.Path
+if (-not $ProjectRoot -and $MyInvocation.MyCommand.Path -and (Test-Path $MyInvocation.MyCommand.Path)) {
+    $candScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+    $candRoot = Split-Path -Parent $candScriptDir
+    if (Test-Path (Join-Path $candRoot "version.txt")) {
+        $ScriptDir = $candScriptDir
+        $ProjectRoot = $candRoot
+    }
+}
+
+# 判定 3: コマンドライン文字列からの抽出 (start.bat / start.vbs の ReadAllText 実行時)
+if (-not $ProjectRoot) {
+    try {
+        $cmdLine = [System.Environment]::CommandLine
+        if ($cmdLine -match "['""]?([^'""]+?[\\/]scripts[\\/]launcher_gui\.ps1)['""]?") {
+            $matchedFile = $matches[1]
+            if (Test-Path $matchedFile) {
+                $ScriptDir = Split-Path -Parent $matchedFile
+                $ProjectRoot = Split-Path -Parent $ScriptDir
+            }
+        }
+    } catch {}
+}
+
+# 判定 4: カレントディレクトリがリポジトリルートの場合 (start.bat の cd /d %~dp0 直後)
+if (-not $ProjectRoot) {
+    $cwd = (Get-Location).Path
+    if (Test-Path (Join-Path $cwd "version.txt")) {
+        $ProjectRoot = $cwd
+        $ScriptDir = Join-Path $cwd "scripts"
+    } elseif (Test-Path (Join-Path $cwd "scripts\launcher_gui.ps1")) {
+        $ProjectRoot = $cwd
+        $ScriptDir = Join-Path $cwd "scripts"
+    } elseif ((Split-Path -Leaf $cwd) -eq "scripts" -and (Test-Path (Join-Path (Split-Path -Parent $cwd) "version.txt"))) {
+        $ScriptDir = $cwd
+        $ProjectRoot = Split-Path -Parent $cwd
+    }
+}
+
+# 最終フォールバック
+if (-not $ProjectRoot) {
+    $ProjectRoot = (Get-Location).Path
+    $ScriptDir = Join-Path $ProjectRoot "scripts"
+}
+
+# バージョン番号の解決 (version.txt 優先、フォールバック 2.4.3)
+$script:AppVersion = "2.4.3"
+$versionTxtFile = Join-Path $ProjectRoot "version.txt"
 if (Test-Path $versionTxtFile) {
     try {
         $readVer = (Get-Content -Path $versionTxtFile -Raw -Encoding UTF8).Trim()
@@ -13,10 +77,10 @@ $script:VersionCheckUrl = "https://raw.githubusercontent.com/Maximilian2022/haya
 # --- 既存ユーザーの Git Remote URL 自動更新 (hayamimi -> hayamimi-live) ---
 try {
     # カレントディレクトリに依存しないよう、リポジトリルートを明示する (-C)
-    if (Test-Path (Join-Path $repoRoot ".git")) {
-        $currentOrigin = (git -C "$repoRoot" remote get-url origin 2>$null)
+    if (Test-Path (Join-Path $ProjectRoot ".git")) {
+        $currentOrigin = (git -C "$ProjectRoot" remote get-url origin 2>$null)
         if ($currentOrigin -and $currentOrigin -match "Maximilian2022/hayamimi(\.git)?$") {
-            git -C "$repoRoot" remote set-url origin "https://github.com/Maximilian2022/hayamimi-live.git" 2>$null
+            git -C "$ProjectRoot" remote set-url origin "https://github.com/Maximilian2022/hayamimi-live.git" 2>$null
             $script:OriginMigrated = "$currentOrigin -> hayamimi-live"
         }
     }
@@ -55,16 +119,6 @@ $env:PYTHONDONTWRITEBYTECODE = "1"
 # Python 出力の UTF-8 固定 (Windows CP932 / Shift-JIS 日本語ログ文字化け完全防止)
 $env:PYTHONIOENCODING = "utf-8"
 $env:PYTHONUTF8 = "1"
-
-# 1. パスの動的解決 (他環境での実行に対応)
-$ScriptDir = $PSScriptRoot
-if (-not $ScriptDir -and $MyInvocation.MyCommand.Path) {
-    $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-}
-if (-not $ScriptDir) {
-    $ScriptDir = (Get-Location).Path
-}
-$ProjectRoot = Split-Path -Parent $ScriptDir
 
 # logs フォルダの自動作成
 $LogsDir = Join-Path $ProjectRoot "logs"
