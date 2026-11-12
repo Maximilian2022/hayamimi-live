@@ -199,3 +199,4 @@ class HayamimiSink(voice_recv.AudioSink):
             self.ws_queue.put_nowait(data.pcm)
 ```
 このように、`data.pcm` をそのまま `/ws/stream` の WebSocket に流し込むだけで、Bot 側の CPU 負荷をほとんどかけずに文字起こしと翻訳テキストを取得できます。
+

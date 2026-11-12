@@ -1017,6 +1017,10 @@ async def websocket_stream_endpoint(
         if client_ts is not None:
             resp_data["client_ts"] = client_ts
 
+        logger.info(
+            "Stream transcript sent (%s, seq=%s, final=%s, %dms): '%s'",
+            session_id, curr_seq, is_final, round(server_total_ms), processed,
+        )
         asyncio.run_coroutine_threadsafe(websocket.send_json(resp_data), loop)
 
         # 4. 確定時の多言語翻訳
@@ -1036,6 +1040,8 @@ async def websocket_stream_endpoint(
 
     audio_queue: queue.Queue = queue.Queue(maxsize=200)
     worker_running = True
+    total_received_bytes = 0
+    total_received_chunks = 0
 
     def audio_worker():
         while worker_running:
@@ -1066,6 +1072,16 @@ async def websocket_stream_endpoint(
 
             if "bytes" in message and message["bytes"]:
                 raw_data = message["bytes"]
+                total_received_bytes += len(raw_data)
+                total_received_chunks += 1
+                if total_received_chunks == 1:
+                    logger.info("First audio chunk received for %s: %d bytes", session_id, len(raw_data))
+                elif total_received_chunks % 250 == 0:
+                    logger.info(
+                        "Stream alive (%s): %d chunks received (%0.1f MB)",
+                        session_id, total_received_chunks, total_received_bytes / (1024 * 1024),
+                    )
+
                 try:
                     audio_16k = _convert_stream_audio_chunk(
                         raw_data,
@@ -1103,7 +1119,10 @@ async def websocket_stream_endpoint(
             vad_session.reset()
         except Exception:
             pass
-        logger.info("WebSocket stream terminated: %s", session_id)
+        logger.info(
+            "WebSocket stream terminated: %s (chunks=%d, bytes=%d, transcripts=%d)",
+            session_id, total_received_chunks, total_received_bytes, utterance_counter,
+        )
 
 
 # ---------------------------------------------------------------------------
