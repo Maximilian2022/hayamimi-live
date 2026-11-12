@@ -126,3 +126,4 @@ end
 function script_description()
     return "早耳 (Hayamimi Live) と OBS のマイクミュート状態を自動連動させます。\nOBS 側でマイクがミュートされた時、早耳の文字起こしを自動休止します。\n\n※Standalone版で使用する場合は、サーバーURLを http://127.0.0.1:8833 に設定してください。"
 end
+
