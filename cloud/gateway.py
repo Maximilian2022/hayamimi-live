@@ -944,9 +944,11 @@ async def websocket_stream_endpoint(
     utterance_counter = 0
 
     async def _handle_stream_translation(text: str, langs: list, key: str, seq: int):
+        logger.info("Stream translation start for seq=%d, text='%s', langs=%s", seq, text, langs)
         for lang in langs:
             try:
                 trans_text = await loop.run_in_executor(None, translate_text, text, lang, key)
+                logger.info("Stream translation got for seq=%d, lang=%s: '%s'", seq, lang, trans_text)
                 if trans_text:
                     try:
                         await websocket.send_json({
@@ -956,8 +958,8 @@ async def websocket_stream_endpoint(
                             "seq": seq,
                             "original": text,
                         })
-                    except Exception:
-                        pass
+                    except Exception as we:
+                        logger.warning("Stream websocket send_json failed: %s", we)
             except Exception as e:
                 logger.warning("Stream translation error for %s: %s", lang, e)
 
@@ -1019,6 +1021,7 @@ async def websocket_stream_endpoint(
 
         # 4. 確定時の多言語翻訳
         if is_final and target_langs:
+            logger.info("Dispatching stream translation for seq=%d, langs=%s", curr_seq, target_langs)
             asyncio.run_coroutine_threadsafe(
                 _handle_stream_translation(processed, target_langs, resolved_gemini_key, curr_seq),
                 loop,
