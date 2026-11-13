@@ -57,7 +57,7 @@ from cloud.auth import (
 )
 from cloud.session_manager import session_manager, UserSession
 from cloud.engine import SharedAsrEngine, UserVadSession, shared_punctuator
-from cloud.translator import SUPPORTED_LANGUAGES, translate_text
+from cloud.translator import SUPPORTED_LANGUAGES, translate_text, translate_bidirectional
 
 # ロギング設定
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -88,6 +88,7 @@ async def lifespan(app: FastAPI):
                     shared_punctuator.restore("テスト")
                 from cloud.translator import local_translator_pool
                 local_translator_pool.translate("テスト", "en")
+                local_translator_pool.get_m2m_translator("ja")
                 logger.info("✔ All core models warmed up successfully.")
             except Exception as _we:
                 logger.warning("Model warmup warning: %s", _we)
@@ -1182,6 +1183,53 @@ async def download_obs_lua(token: str = ""):
         media_type="text/x-lua",
         headers={"Content-Disposition": 'attachment; filename="hayamimi_mute.lua"'},
     )
+
+
+# ---------------------------------------------------------------------------
+# 外部連携用 テキスト双方向翻訳 API (完全ローカル推論)
+# ---------------------------------------------------------------------------
+
+@app.post("/api/translate")
+async def handle_translate_api(request: Request):
+    """
+    外部プロジェクト (Discord Bot 等) 向けのテキスト双方向翻訳 API (FuguMT / M2M-100 ローカル推論)。
+    - 日本語テキスト -> target_langs で指定された言語 (複数可、未指定時は ['en']) へ翻訳。
+    - 他言語テキスト -> 自動で日本語 ('ja') へ翻訳。
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    text = body.get("text", "")
+    if not isinstance(text, str) or not text.strip():
+        raise HTTPException(status_code=400, detail="Field 'text' is required and must be a non-empty string")
+
+    raw_targets = body.get("target_langs")
+    target_langs: Optional[List[str]] = None
+    if isinstance(raw_targets, list):
+        target_langs = [str(x).strip() for x in raw_targets if str(x).strip()]
+    elif isinstance(raw_targets, str) and raw_targets.strip():
+        target_langs = [x.strip() for x in raw_targets.split(",") if x.strip()]
+
+    source_lang = body.get("source_lang")
+    if source_lang is not None:
+        source_lang = str(source_lang).strip() or None
+
+    t0 = time.perf_counter()
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, translate_bidirectional, text, target_langs, source_lang)
+    elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
+    result["latency_ms"] = elapsed_ms
+
+    logger.info(
+        "API translate (%s -> %s, %sms): '%s'",
+        result.get("source_lang"),
+        list(result.get("translations", {}).keys()),
+        elapsed_ms,
+        text[:40],
+    )
+    return result
 
 
 # ---------------------------------------------------------------------------

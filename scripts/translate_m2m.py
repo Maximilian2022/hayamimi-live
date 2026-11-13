@@ -208,6 +208,7 @@ class TranslatorM2M:
         self.compute_type = compute_type
         self.intra_threads = intra_threads
         self._target_token = f"__{base_lang}__"
+        self._vocab = _load_vocab(model_dir)
         self._beam_size = BEAM_SIZE_BY_TARGET.get(target_lang, DEFAULT_BEAM_SIZE)
 
         # Imported lazily so vocabulary-only helpers (is_supported_target)
@@ -244,7 +245,7 @@ class TranslatorM2M:
                         raise
             self._translator = _translator_cache[cache_key]
 
-    def translate(self, text: str) -> str:
+    def translate(self, text: str, source_lang: str | None = None) -> str:
         """Translate a single line of Japanese text to self.target_lang.
 
         Returns the original text unchanged (never raises, never blanks
@@ -266,7 +267,19 @@ class TranslatorM2M:
                 if not pieces:
                     return text
 
-                source_tokens = [SOURCE_LANG_TOKEN] + pieces + [EOS_TOKEN]
+                src_token = SOURCE_LANG_TOKEN
+                if source_lang:
+                    norm_src = source_lang.lower().strip()
+                    if norm_src in CHINESE_VARIANTS:
+                        norm_src = "zh"
+                    elif norm_src in LANG_ALIASES:
+                        norm_src = LANG_ALIASES[norm_src]
+                    candidate = f"__{norm_src}__"
+                    if candidate in self._vocab:
+                        src_token = candidate
+                    elif "__en__" in self._vocab:
+                        src_token = "__en__"
+                source_tokens = [src_token] + pieces + [EOS_TOKEN]
 
                 # Cap decode length relative to the source length. Without this,
                 # a degenerate hypothesis can run all the way to a large fixed

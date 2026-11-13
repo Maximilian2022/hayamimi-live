@@ -200,3 +200,111 @@ class HayamimiSink(voice_recv.AudioSink):
 ```
 このように、`data.pcm` をそのまま `/ws/stream` の WebSocket に流し込むだけで、Bot 側の CPU 負荷をほとんどかけずに文字起こしと翻訳テキストを取得できます。
 
+
+---
+
+## 7. テキスト双方向翻訳 API (`POST /api/translate`)
+
+音声認識を介さず、テキスト（チャットメッセージ等）だけを直接送信して翻訳結果を取得できる REST API です。
+サーバー内蔵の完全ローカル翻訳モデル（英語: FuguMT / 多言語: M2M-100）のみを使用し、外部 API や API キーは一切不要です。
+
+### 基本情報
+- **エンドポイント**:
+  - ローカル LAN 接続: `http://192.168.11.244:8833/api/translate`
+  - クラウド経由 (FQDN): `https://hayamimi.kit-a.net/api/translate`
+- **メソッド**: `POST`
+- **Content-Type**: `application/json`
+
+### 自動ルーティング仕様
+- **日本語のテキスト**が送信された場合 ➔ `target_langs` で指定された言語（複数可、未指定時は `["en"]`）へ翻訳して返却します。
+- **他言語のテキスト**（英語・韓国語・中国語・スペイン語・フランス語など）が送信された場合 ➔ 自動で言語判定し、**日本語 (`ja`)** へ翻訳して返却します。
+
+### リクエストパラメータ (JSON Body)
+
+| フィールド | 型 | 必須 | デフォルト | 説明 |
+| :--- | :--- | :---: | :--- | :--- |
+| `text` | string | **必須** | - | 翻訳したい元のテキスト |
+| `target_langs` | array \| string | 任意 | `["en"]` | 入力が日本語の場合の翻訳先言語リスト（例: `["en", "ko"]` または `"en,ko"`） |
+| `source_lang` | string | 任意 | 自動判定 | 入力言語を明示指定したい場合のみ指定（例: `"en"`, `"ko"`, `"ja"`） |
+
+#### 対応主要言語コード (`target_langs`)
+- `en`: 英語
+- `ko`: 韓国語
+- `zh`: 中国語（簡体字）
+- `zh-tw`: 中国語（繁体字）
+- `es`: スペイン語
+- `fr`: フランス語
+- `de`: ドイツ語
+- `pt`: ポルトガル語
+- `vi`: ベトナム語
+- `id`: インドネシア語
+
+### リクエスト & レスポンス例
+
+#### パターン A: 日本語 ➔ 複数言語（英語・韓国語）
+```json
+POST /api/translate
+{
+  "text": "本日はよろしくお願いします。",
+  "target_langs": ["en", "ko"]
+}
+```
+**レスポンス:**
+```json
+{
+  "ok": true,
+  "source_lang": "ja",
+  "original": "本日はよろしくお願いします。",
+  "translations": {
+    "en": "Thank you for having me today.",
+    "ko": "오늘도 잘 부탁드립니다."
+  },
+  "latency_ms": 145.2
+}
+```
+
+#### パターン B: 他言語（英語・韓国語など） ➔ 自動で日本語へ
+```json
+POST /api/translate
+{
+  "text": "Hello everyone, nice to meet you today!"
+}
+```
+**レスポンス:**
+```json
+{
+  "ok": true,
+  "source_lang": "en",
+  "original": "Hello everyone, nice to meet you today!",
+  "translations": {
+    "ja": "こんにちはみなさん、今日はお会いできてよかったです!"
+  },
+  "latency_ms": 182.5
+}
+```
+
+### Python (`aiohttp`) 実装サンプル
+
+```python
+import aiohttp
+
+TRANSLATE_URL = "http://192.168.11.244:8833/api/translate"
+
+async def translate_message(text: str, target_langs: list[str] | None = None) -> dict:
+    payload = {"text": text}
+    if target_langs:
+        payload["target_langs"] = target_langs
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(TRANSLATE_URL, json=payload, timeout=10.0) as resp:
+            resp.raise_for_status()
+            return await resp.json()
+
+# 使用例 1 (日本語 -> 英語・韓国語)
+# res = await translate_message("お疲れ様です！", ["en", "ko"])
+# print(res["translations"])  # {'en': '...', 'ko': '...'}
+
+# 使用例 2 (他言語 -> 自動で日本語)
+# res = await translate_message("Good morning everyone!")
+# print(res["translations"]["ja"])
+```
