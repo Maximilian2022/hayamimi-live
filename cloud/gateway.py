@@ -945,11 +945,11 @@ async def websocket_stream_endpoint(
     utterance_counter = 0
 
     async def _handle_stream_translation(text: str, langs: list, key: str, seq: int):
-        logger.info("Stream translation start for seq=%d, text='%s', langs=%s", seq, text, langs)
+        logger.debug("Stream translation start for seq=%d, text='%s', langs=%s", seq, text, langs)
         for lang in langs:
             try:
                 trans_text = await loop.run_in_executor(None, translate_text, text, lang, key)
-                logger.info("Stream translation got for seq=%d, lang=%s: '%s'", seq, lang, trans_text)
+                logger.debug("Stream translation got for seq=%d, lang=%s: '%s'", seq, lang, trans_text)
                 if trans_text:
                     try:
                         await websocket.send_json({
@@ -1018,7 +1018,7 @@ async def websocket_stream_endpoint(
         if client_ts is not None:
             resp_data["client_ts"] = client_ts
 
-        logger.info(
+        logger.debug(
             "Stream transcript sent (%s, seq=%s, final=%s, %dms): '%s'",
             session_id, curr_seq, is_final, round(server_total_ms), processed,
         )
@@ -1026,7 +1026,7 @@ async def websocket_stream_endpoint(
 
         # 4. 確定時の多言語翻訳
         if is_final and target_langs:
-            logger.info("Dispatching stream translation for seq=%d, langs=%s", curr_seq, target_langs)
+            logger.debug("Dispatching stream translation for seq=%d, langs=%s", curr_seq, target_langs)
             asyncio.run_coroutine_threadsafe(
                 _handle_stream_translation(processed, target_langs, resolved_gemini_key, curr_seq),
                 loop,
@@ -1076,9 +1076,9 @@ async def websocket_stream_endpoint(
                 total_received_bytes += len(raw_data)
                 total_received_chunks += 1
                 if total_received_chunks == 1:
-                    logger.info("First audio chunk received for %s: %d bytes", session_id, len(raw_data))
+                    logger.debug("First audio chunk received for %s: %d bytes", session_id, len(raw_data))
                 elif total_received_chunks % 250 == 0:
-                    logger.info(
+                    logger.debug(
                         "Stream alive (%s): %d chunks received (%0.1f MB)",
                         session_id, total_received_chunks, total_received_bytes / (1024 * 1024),
                     )

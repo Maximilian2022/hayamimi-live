@@ -62,8 +62,8 @@ if (-not $ProjectRoot) {
     $ScriptDir = Join-Path $ProjectRoot "scripts"
 }
 
-# バージョン番号の解決 (version.txt 優先、フォールバック 2.4.3)
-$script:AppVersion = "2.4.3"
+# バージョン番号の解決 (version.txt 優先、フォールバック 2.4.16)
+$script:AppVersion = "2.4.16"
 $versionTxtFile = Join-Path $ProjectRoot "version.txt"
 if (Test-Path $versionTxtFile) {
     try {
@@ -547,24 +547,50 @@ function Test-CloudSyncPath {
     return $false
 }
 
-# --- 案1: OneDrive モデル永続ピン留め保護 (+p -u: 完全ポータブル) ---
+# --- 案1: OneDrive モデル・仮想環境永続ピン留め保護 (+p -u: 完全ポータブル) ---
+$script:IsRepairingVenv = $false
+
+function Protect-OneDriveDirectory {
+    param(
+        [string]$TargetDir,
+        [string]$Label = ""
+    )
+    try {
+        if (-not $TargetDir -or -not (Test-Path $TargetDir)) { return $false }
+        if (Test-CloudSyncPath $ProjectRoot) {
+            $null = cmd.exe /c "attrib.exe +p -u `"$TargetDir`" /s /d" 2>&1
+            if ($Label) {
+                Write-AppLog "✔ OneDrive クラウド保護: $Label をローカル永続保持に設定しました (attrib +p -u)" "INFO"
+            }
+            return $true
+        }
+    } catch {
+        Write-AppLog "モデル・仮想環境保護属性の適用中に警告が発生しました ($Label): $_" "WARN"
+    }
+    return $false
+}
+
 function Protect-ModelFiles {
     <#
     .SYNOPSIS
         OneDrive のファイルオンデマンドによるモデル消失 (0バイトスタブ化) を防ぐため、
         models フォルダに「常にこのデバイスに保持する (+p -u)」属性を付与します。
     #>
-    try {
-        $modelsDir = Join-Path $ProjectRoot "models"
-        if (-not (Test-Path $modelsDir)) { return }
+    $modelsDir = Join-Path $ProjectRoot "models"
+    Protect-OneDriveDirectory -TargetDir $modelsDir -Label "models フォルダ" | Out-Null
+}
 
-        $isCloud = Test-CloudSyncPath $ProjectRoot
-        if ($isCloud) {
-            $null = cmd.exe /c "attrib.exe +p -u `"$modelsDir`" /s /d" 2>&1
-            Write-AppLog "✔ OneDrive クラウド保護: models フォルダをローカル永続保持に設定しました (attrib +p -u)" "INFO"
+function Protect-VenvFiles {
+    param([switch]$IncludeGpu)
+    $venvDir = Join-Path $ProjectRoot ".venv"
+    if (Test-Path $venvDir) {
+        Protect-OneDriveDirectory -TargetDir $venvDir -Label ".venv フォルダ" | Out-Null
+    }
+    if ($IncludeGpu) {
+        $gpuVenvDir = Join-Path $ProjectRoot ".venv_gpu"
+        if (Test-Path $gpuVenvDir) {
+            Protect-OneDriveDirectory -TargetDir $gpuVenvDir -Label ".venv_gpu フォルダ" | Out-Null
         }
-    } catch {
-        Write-AppLog "モデル保護属性の適用中に警告が発生しました: $_" "WARN"
     }
 }
 
@@ -631,7 +657,10 @@ function Ensure-ModelsIntegrity {
         AIモデルの実体存在・ファイルサイズを検証し、OneDrive による0バイト化や欠落を検知した場合は
         自動で再取得 (自己修復) を行い、ローカル永続保持属性 (+p) を付与します。
     #>
-    param([bool]$SilentIfReady = $false)
+    param(
+        [bool]$SilentIfReady = $false,
+        [bool]$SkipVenvRepair = $false
+    )
     try {
         $modelsDir = Join-Path $ProjectRoot "models"
         if (-not (Test-Path $modelsDir)) {
@@ -650,6 +679,16 @@ function Ensure-ModelsIntegrity {
         Write-AppLog "⚠ AIモデルの欠落またはオンライン未水和 (0バイト) を検知しました。自動修復を開始します..." "WARN"
         Set-UIState "モデル自己修復中..." $brushOrange $false $false
 
+        # モデル取得に使う .venv (huggingface_hub / httpx 等) が壊れている場合は先に自己修復する
+        if (-not $SkipVenvRepair -and -not $script:IsRepairingVenv) {
+            $venvOk = Ensure-PythonVenvUpToDate
+            if (-not $venvOk) {
+                Write-AppLog "Python 仮想環境の修復に失敗したため、モデル自己修復を中止しました。" "WARN"
+                Set-UIState "停止中" $brushGray $true $false
+                return $false
+            }
+        }
+
         $venvPython = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
         $dlScript = Join-Path $ProjectRoot "scripts\download_models.py"
 
@@ -658,24 +697,39 @@ function Ensure-ModelsIntegrity {
         }
 
         if ($venvPython -and (Test-Path $dlScript)) {
-            $pinfoDl = [System.Diagnostics.ProcessStartInfo]::new()
-            $pinfoDl.FileName = $venvPython
-            $pinfoDl.Arguments = "-B `"$dlScript`" --minimal --translators --punct-4class"
-            $pinfoDl.WorkingDirectory = $ProjectRoot
-            $pinfoDl.RedirectStandardOutput = $true
-            $pinfoDl.RedirectStandardError = $true
-            $pinfoDl.UseShellExecute = $false
-            $pinfoDl.CreateNoWindow = $true
-            $pinfoDl.Environment["PYTHONDONTWRITEBYTECODE"] = "1"
-            $procDl = [System.Diagnostics.Process]::Start($pinfoDl)
-            Wait-ProcessWithUiPump -Proc $procDl -LogPrefix "[モデル自己修復]"
+            for ($attempt = 0; $attempt -lt 2; $attempt++) {
+                $pinfoDl = [System.Diagnostics.ProcessStartInfo]::new()
+                $pinfoDl.FileName = $venvPython
+                $pinfoDl.Arguments = "-B `"$dlScript`" --minimal --translators --punct-4class"
+                $pinfoDl.WorkingDirectory = $ProjectRoot
+                $pinfoDl.RedirectStandardOutput = $true
+                $pinfoDl.RedirectStandardError = $true
+                $pinfoDl.UseShellExecute = $false
+                $pinfoDl.CreateNoWindow = $true
+                $pinfoDl.Environment["PYTHONDONTWRITEBYTECODE"] = "1"
+                $procDl = [System.Diagnostics.Process]::Start($pinfoDl)
+                Wait-ProcessWithUiPump -Proc $procDl -LogPrefix "[モデル自己修復]"
 
-            if ($procDl.ExitCode -eq 0) {
-                Protect-ModelFiles
-                Write-AppLog "✔ AIモデルの自己修復が完了しました！" "INFO"
-                Set-UIState "停止中" $brushGray $true $false
-                return $true
-            } else {
+                if ($procDl.ExitCode -eq 0) {
+                    Protect-ModelFiles
+                    Write-AppLog "✔ AIモデルの自己修復が完了しました！" "INFO"
+                    Set-UIState "停止中" $brushGray $true $false
+                    return $true
+                }
+
+                # 1回目の失敗時: .venv 側の破損 (httpx/huggingface_hub 欠落等) なら強制修復して1回だけリトライ
+                if ($attempt -eq 0 -and -not $SkipVenvRepair -and -not $script:IsRepairingVenv) {
+                    $health = Get-PythonVenvHealth
+                    if (-not $health.healthy) {
+                        Write-AppLog "⚠ モデル取得中に Python 仮想環境の不整合を検知しました。強制修復して再試行します..." "WARN"
+                        $repaired = Ensure-PythonVenvUpToDate -ForceRepair $true
+                        if ($repaired) {
+                            $venvPython = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
+                            continue
+                        }
+                    }
+                }
+
                 Write-AppLog "❌ AIモデルの自己修復が完了しませんでした (終了コード: $($procDl.ExitCode))。" "WARN"
                 Set-UIState "停止中" $brushGray $true $false
                 return $false
@@ -765,7 +819,7 @@ function Update-ContainerLogFile {
 [xml]$xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Hayamimi Live ランチャー (GUI v2.3.0)"
+        Title="Hayamimi Live ランチャー (GUI v2.4.16)"
         Height="780" Width="780"
         MinHeight="680" MinWidth="720"
         WindowStartupLocation="CenterScreen"
@@ -843,7 +897,7 @@ function Update-ContainerLogFile {
                         <TextBlock x:Name="GpuBadge" Text="⚡ GPU: 検出中..." FontSize="11" Foreground="#10B981" FontWeight="SemiBold"/>
                     </Border>
                     <Border Background="#1E1B4B" CornerRadius="12" Padding="10,5" Margin="0,0,8,0" BorderBrush="#4338CA" BorderThickness="1">
-                        <TextBlock x:Name="VersionBadge" Text="GUI v2.3.0" FontSize="11" Foreground="#A5B4FC" FontWeight="Bold" FontFamily="{StaticResource MonoFont}"/>
+                        <TextBlock x:Name="VersionBadge" Text="GUI v2.4.16" FontSize="11" Foreground="#A5B4FC" FontWeight="Bold" FontFamily="{StaticResource MonoFont}"/>
                     </Border>
                     <Border Background="#141B2D" CornerRadius="12" Padding="10,5" BorderBrush="#253350" BorderThickness="1">
                         <TextBlock x:Name="RuntimeBadge" Text="Python venv" FontSize="11" Foreground="#38BDF8" FontWeight="SemiBold"/>
@@ -2006,22 +2060,236 @@ function Get-PythonVenvVersion {
     return $null
 }
 
-# Python 3.14 環境の最新性確認・自動再構築関数 (3.11 等の旧環境は自動で 3.14 で作り直す)
-function Ensure-PythonVenvUpToDate {
-    $venvPython = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
+function Get-RequirementsHash {
+    $reqFile = Join-Path $ProjectRoot "requirements.txt"
+    if (-not (Test-Path $reqFile)) { return $null }
+    try {
+        $h = Get-FileHash -Path $reqFile -Algorithm SHA256 -ErrorAction Stop
+        return $h.Hash.Substring(0, 16)
+    } catch {
+        return $null
+    }
+}
+
+function Write-RequirementsHashMarker {
+    $hash = Get-RequirementsHash
+    $venvDir = Join-Path $ProjectRoot ".venv"
+    if ($hash -and (Test-Path $venvDir)) {
+        try {
+            $marker = Join-Path $venvDir ".hayamimi_req_hash"
+            [System.IO.File]::WriteAllText($marker, $hash, [System.Text.UTF8Encoding]::new($false))
+        } catch {}
+    }
+}
+
+# .venv の構造・依存パッケージ健全性を包括診断する (破損/コード入れ替え後の不整合検知)
+function Get-PythonVenvHealth {
+    $venvDir = Join-Path $ProjectRoot ".venv"
+    $venvPython = Join-Path $venvDir "Scripts\python.exe"
     if (-not (Test-Path $venvPython)) {
-        return (Invoke-SetupPythonVenv)
+        return @{ exists = $false; healthy = $false; needRecreate = $true; needSync = $false; forceReinstall = $false; missing = @(); version = $null; reason = "missing_python" }
     }
 
-    $curVer = Get-PythonVenvVersion
-    if ($curVer -and ($curVer -ne "3.14")) {
-        Write-AppLog "=========================================="
-        Write-AppLog "【環境更新】旧バージョン (Python $curVer) の仮想環境を検出しました。" "WARN"
-        Write-AppLog "hayamimi を最新の Python 3.14 実行環境へ自動アップグレードするため、仮想環境 (.venv) を再構築します..." "INFO"
-        Set-UIState "Python 3.14更新中..." $brushOrange $false $false
-        return (Invoke-SetupPythonVenv -ForceRecreate $true)
+    # 1. pyvenv.cfg のベース Python パス切れチェック (別 PC からのコピー等)
+    $pyvenvCfg = Join-Path $venvDir "pyvenv.cfg"
+    if (Test-Path $pyvenvCfg) {
+        try {
+            $cfgLines = Get-Content -Path $pyvenvCfg -Encoding UTF8 -ErrorAction SilentlyContinue
+            foreach ($line in $cfgLines) {
+                if ($line -match '^\s*home\s*=\s*(.+)$') {
+                    $baseHome = $matches[1].Trim()
+                    if ($baseHome -and -not (Test-Path $baseHome)) {
+                        return @{ exists = $true; healthy = $false; needRecreate = $true; needSync = $false; forceReinstall = $false; missing = @(); version = $null; reason = "broken_base_python" }
+                    }
+                    break
+                }
+            }
+        } catch {}
     }
-    return $true
+
+    # 2. 孤立した distutils-precedence.pth の自己掃除 (_distutils_hack 欠落による毎起動エラー抑止)
+    $sitePkgs = Join-Path $venvDir "Lib\site-packages"
+    $distPth = Join-Path $sitePkgs "distutils-precedence.pth"
+    $distHack = Join-Path $sitePkgs "_distutils_hack"
+    $hadBrokenDistPth = $false
+    if ((Test-Path $distPth) -and -not (Test-Path $distHack)) {
+        $hadBrokenDistPth = $true
+        try { Remove-Item -LiteralPath $distPth -Force -ErrorAction SilentlyContinue } catch {}
+    }
+
+    # 3. 1回の Python 起動でバージョン + 必須パッケージ群を一括診断
+    $probePy = "import sys, json, importlib; mods=['huggingface_hub','httpx','tokenizers','sherpa_onnx','onnxruntime','ctranslate2','sentencepiece','numpy','scipy','soundfile','psutil','imageio_ffmpeg','sudachipy']; missing=[];`nfor m in mods:`n    try: importlib.import_module(m)`n    except Exception: missing.append(m)`nprint(json.dumps({'version': f'{sys.version_info.major}.{sys.version_info.minor}', 'missing': missing}))"
+    $probeJson = $null
+    try {
+        $pinfo = [System.Diagnostics.ProcessStartInfo]::new()
+        $pinfo.FileName = $venvPython
+        $pinfo.Arguments = "-B -c `"$($probePy.Replace('"', '\"'))`""
+        $pinfo.WorkingDirectory = $ProjectRoot
+        $pinfo.RedirectStandardOutput = $true
+        $pinfo.RedirectStandardError = $true
+        $pinfo.UseShellExecute = $false
+        $pinfo.CreateNoWindow = $true
+        $pinfo.Environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        $proc = [System.Diagnostics.Process]::Start($pinfo)
+        $outStr = $proc.StandardOutput.ReadToEnd()
+        $proc.WaitForExit(15000) | Out-Null
+        if ($proc.ExitCode -eq 0 -and $outStr) {
+            $jsonLine = ($outStr -split "`r?`n" | Where-Object { $_.Trim().StartsWith("{") } | Select-Object -Last 1)
+            if ($jsonLine) {
+                $probeJson = $jsonLine | ConvertFrom-Json
+            }
+        }
+    } catch {}
+
+    if (-not $probeJson -or -not $probeJson.version) {
+        return @{ exists = $true; healthy = $false; needRecreate = $true; needSync = $false; forceReinstall = $false; missing = @(); version = $null; reason = "python_exec_failed" }
+    }
+
+    $ver = "$($probeJson.version)"
+    if ($ver -ne "3.14") {
+        return @{ exists = $true; healthy = $false; needRecreate = $true; needSync = $false; forceReinstall = $false; missing = @(); version = $ver; reason = "wrong_python_version" }
+    }
+
+    $missingMods = @($probeJson.missing | Where-Object { $_ })
+    if ($missingMods.Count -gt 0) {
+        return @{ exists = $true; healthy = $false; needRecreate = $false; needSync = $true; forceReinstall = $true; missing = $missingMods; version = $ver; reason = "missing_modules" }
+    }
+
+    if ($hadBrokenDistPth) {
+        return @{ exists = $true; healthy = $false; needRecreate = $false; needSync = $true; forceReinstall = $true; missing = @(); version = $ver; reason = "broken_site_packages" }
+    }
+
+    # 4. requirements.txt 変更検知 (コード更新・入れ替え後の依存差分追従)
+    $reqHash = Get-RequirementsHash
+    $markerFile = Join-Path $venvDir ".hayamimi_req_hash"
+    if ($reqHash) {
+        $savedHash = $null
+        if (Test-Path $markerFile) {
+            try { $savedHash = (Get-Content -Path $markerFile -Raw -Encoding UTF8 -ErrorAction SilentlyContinue).Trim() } catch {}
+        }
+        if ($savedHash -ne $reqHash) {
+            return @{ exists = $true; healthy = $true; needRecreate = $false; needSync = $true; forceReinstall = $false; missing = @(); version = $ver; reason = "requirements_updated" }
+        }
+    }
+
+    return @{ exists = $true; healthy = $true; needRecreate = $false; needSync = $false; forceReinstall = $false; missing = @(); version = $ver; reason = "ok" }
+}
+
+function Sync-PythonVenvRequirements {
+    param([bool]$ForceReinstall = $false)
+
+    $venvPython = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
+    $reqFile = Join-Path $ProjectRoot "requirements.txt"
+    if (-not (Test-Path $venvPython) -or -not (Test-Path $reqFile)) { return $false }
+
+    $uvCmd = Get-SafeUvCommand
+    $syncOk = $false
+    if ($uvCmd) {
+        try {
+            $pinfoPip = [System.Diagnostics.ProcessStartInfo]::new()
+            $pinfoPip.FileName = $uvCmd
+            $reinstallFlag = if ($ForceReinstall) { "--reinstall " } else { "" }
+            $pinfoPip.Arguments = "pip install ${reinstallFlag}-r `"$reqFile`" --python `"$venvPython`""
+            $pinfoPip.WorkingDirectory = $ProjectRoot
+            $pinfoPip.RedirectStandardOutput = $true
+            $pinfoPip.RedirectStandardError = $true
+            $pinfoPip.UseShellExecute = $false
+            $pinfoPip.CreateNoWindow = $true
+            $pinfoPip.Environment["PYTHONDONTWRITEBYTECODE"] = "1"
+            $procPip = [System.Diagnostics.Process]::Start($pinfoPip)
+            Wait-ProcessWithUiPump -Proc $procPip -LogPrefix "[環境修復]"
+            if ($procPip.ExitCode -eq 0) { $syncOk = $true }
+        } catch {
+            Write-AppLog "uv による修復が制限されたため、標準 pip に切り替えます: $_" "WARN"
+            $uvCmd = $null
+        }
+    }
+    if (-not $syncOk) {
+        try {
+            Unblock-File -LiteralPath $venvPython -ErrorAction SilentlyContinue
+            $pinfoPipSys = [System.Diagnostics.ProcessStartInfo]::new()
+            $pinfoPipSys.FileName = $venvPython
+            $forceFlag = if ($ForceReinstall) { "--force-reinstall " } else { "" }
+            $pinfoPipSys.Arguments = "-B -m pip install ${forceFlag}-r `"$reqFile`""
+            $pinfoPipSys.WorkingDirectory = $ProjectRoot
+            $pinfoPipSys.RedirectStandardOutput = $true
+            $pinfoPipSys.RedirectStandardError = $true
+            $pinfoPipSys.UseShellExecute = $false
+            $pinfoPipSys.CreateNoWindow = $true
+            $pinfoPipSys.Environment["PYTHONDONTWRITEBYTECODE"] = "1"
+            $procPipSys = [System.Diagnostics.Process]::Start($pinfoPipSys)
+            Wait-ProcessWithUiPump -Proc $procPipSys -LogPrefix "[環境修復]"
+            if ($procPipSys.ExitCode -eq 0) { $syncOk = $true }
+        } catch {
+            Write-AppLog "pip による依存修復に失敗しました: $_" "WARN"
+        }
+    }
+    if ($syncOk) {
+        Unblock-ProjectFiles -RootDir $ProjectRoot
+        Protect-VenvFiles
+        Write-RequirementsHashMarker
+    }
+    return $syncOk
+}
+
+# Python 3.14 環境の最新性・健全性確認 & 自動修復関数
+function Ensure-PythonVenvUpToDate {
+    param([bool]$ForceRepair = $false)
+
+    if ($script:IsRepairingVenv) { return $true }
+    $script:IsRepairingVenv = $true
+    try {
+        $venvPython = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
+        if (-not (Test-Path $venvPython)) {
+            return (Invoke-SetupPythonVenv)
+        }
+
+        $health = Get-PythonVenvHealth
+        if ($health.needRecreate) {
+            Write-AppLog "=========================================="
+            if ($health.reason -eq "wrong_python_version") {
+                Write-AppLog "【環境更新】旧バージョン (Python $($health.version)) の仮想環境を検出しました。" "WARN"
+                Write-AppLog "hayamimi を最新の Python 3.14 実行環境へ自動アップグレードするため、仮想環境 (.venv) を再構築します..." "INFO"
+                Set-UIState "Python 3.14更新中..." $brushOrange $false $false
+            } else {
+                Write-AppLog "【自己修復】Python 仮想環境 (.venv) の破損を検出しました (理由: $($health.reason))。" "WARN"
+                Write-AppLog "仮想環境 (.venv) をクリーン再構築して復旧します..." "INFO"
+                Set-UIState "Python環境修復中..." $brushOrange $false $false
+            }
+            return (Invoke-SetupPythonVenv -ForceRecreate $true)
+        }
+
+        if ($ForceRepair -or $health.needSync) {
+            $doReinstall = ($ForceRepair -or $health.forceReinstall)
+            Write-AppLog "=========================================="
+            if ($health.missing -and $health.missing.Count -gt 0) {
+                Write-AppLog "【自己修復】仮想環境 (.venv) で不足・破損パッケージを検出しました: $($health.missing -join ', ')" "WARN"
+            } elseif ($health.reason -eq "requirements_updated") {
+                Write-AppLog "【環境同期】コード更新に伴う依存パッケージ (requirements.txt) の同期を実行します..." "INFO"
+            } else {
+                Write-AppLog "【自己修復】仮想環境 (.venv) の依存パッケージを再同期します..." "WARN"
+            }
+            Set-UIState "依存パッケージ修復中..." $brushOrange $false $false
+
+            $synced = Sync-PythonVenvRequirements -ForceReinstall $doReinstall
+            if ($synced) {
+                $recheck = Get-PythonVenvHealth
+                if (-not $recheck.needRecreate -and (-not $recheck.missing -or $recheck.missing.Count -eq 0)) {
+                    Write-AppLog "✔ 仮想環境 (.venv) の依存パッケージ修復が完了しました！" "INFO"
+                    Set-UIState "停止中" $brushGray $true $false
+                    return $true
+                }
+            }
+
+            # 差分/再インストール修復でも直らない重度破損時は .venv を作り直す
+            Write-AppLog "⚠ 差分修復で解消しなかったため、仮想環境 (.venv) をクリーン再構築します..." "WARN"
+            return (Invoke-SetupPythonVenv -ForceRecreate $true)
+        }
+
+        return $true
+    } finally {
+        $script:IsRepairingVenv = $false
+    }
 }
 
 # GPU 仮想環境 (.venv_gpu) 健全性診断関数
@@ -2190,6 +2458,7 @@ function Invoke-SetupGpuVenv {
     } catch {}
 
     Unblock-ProjectFiles -RootDir $ProjectRoot
+    Protect-VenvFiles -IncludeGpu
     Write-AppLog "✔ GPU (CUDA) 仮想環境のセットアップがすべて完了しました！" "INFO"
     Write-AppLog "==========================================" "INFO"
     Set-UIState "停止中" $brushGray $true $false
@@ -2405,11 +2674,13 @@ function Invoke-SetupPythonVenv {
             return $false
         }
         Unblock-ProjectFiles -RootDir $ProjectRoot
+        Protect-VenvFiles
+        Write-RequirementsHashMarker
         Write-AppLog "✔ 依存パッケージのインストールが完了しました！" "INFO"
     }
 
     # 4. AIモデルの実体検証 & セルフヒーリング
-    Ensure-ModelsIntegrity | Out-Null
+    Ensure-ModelsIntegrity -SkipVenvRepair $true | Out-Null
 
     Write-AppLog "✔ Python venv 環境のセットアップがすべて完了しました！" "INFO"
     Write-AppLog "=========================================="
@@ -4693,6 +4964,19 @@ Write-AppLog "Pythonログ:     $script:PythonLogFile"
 Write-AppLog "コンテナログ:   $ContainerLogFile"
 
 if ($script:CurrentEngineMode -eq "Venv") {
+    if (Test-CloudSyncPath $ProjectRoot) {
+        Write-AppLog "⚠ OneDrive 等のクラウド同期フォルダ配下で実行されています。仮想環境 (.venv) のファイル欠損や同期ロックを防ぐため、不調時は C:\hayamimi や %LOCALAPPDATA%\hayamimi への配置を推奨します。" "WARN"
+        Protect-VenvFiles -IncludeGpu
+    }
+    $parentCheckDir = Split-Path -Parent $ProjectRoot
+    if ($parentCheckDir -and (Split-Path -Parent $parentCheckDir)) {
+        $hasLeftoverScripts = Test-Path (Join-Path $parentCheckDir "scripts\download_models.py")
+        $hasLeftoverVenv = Test-Path (Join-Path $parentCheckDir ".venv\Scripts\python.exe")
+        $hasLeftoverModels = Test-Path (Join-Path $parentCheckDir "models\silero_vad.onnx")
+        if ($hasLeftoverScripts -or $hasLeftoverVenv -or $hasLeftoverModels) {
+            Write-AppLog "⚠ 親フォルダ ($parentCheckDir) に旧版アップデートの誤配置等による残骸 (.venv / models / scripts) を検出しました。現在の動作フォルダは '$ProjectRoot' です。不要であれば整理してください。" "WARN"
+        }
+    }
     $venvPython = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
     if (Test-Path $venvPython) {
         Write-AppLog "✔ Python 仮想環境 (.venv) 検出: 準備完了"
@@ -4885,7 +5169,9 @@ $depInstallWatchTimer.Add_Tick({
             $script:ProcDepInstall = $null
             if ($exitCode -eq 0) {
                 Unblock-ProjectFiles -RootDir $ProjectRoot
-                Write-AppLog "✔ imageio-ffmpeg の自動配備が完了しました (YouTube取得・ffmpeg対応)" "INFO"
+                Protect-VenvFiles
+                Write-RequirementsHashMarker
+                Write-AppLog "✔ 依存パッケージ (imageio-ffmpeg / httpx 等) の自動同期が完了しました" "INFO"
             }
         }
     } catch {
@@ -4902,24 +5188,29 @@ $depCheckTimer.Add_Tick({
         # 起動直後にスクリプト・実行ファイル群の Zone.Identifier (Mark of the Web) を安全解除
         Unblock-ProjectFiles -RootDir $ProjectRoot
 
-        if ($script:CurrentEngineMode -eq "Venv") {
+        if ($script:CurrentEngineMode -eq "Venv" -and -not $script:IsRepairingVenv) {
             $venvPython = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
             if (Test-Path $venvPython) {
-                # imageio_ffmpeg の有無をクイックチェック
+                # 必須依存モジュール (imageio_ffmpeg / huggingface_hub / httpx) の有無をクイックチェック
                 $pinfoCheck = [System.Diagnostics.ProcessStartInfo]::new()
                 $pinfoCheck.FileName = $venvPython
-                $pinfoCheck.Arguments = "-B -c `"import imageio_ffmpeg`""
+                $pinfoCheck.Arguments = "-B -c `"import imageio_ffmpeg, huggingface_hub, httpx`""
                 $pinfoCheck.CreateNoWindow = $true
                 $pinfoCheck.UseShellExecute = $false
                 $procCheck = [System.Diagnostics.Process]::Start($pinfoCheck)
                 $procCheck.WaitForExit(3000) | Out-Null
                 if ($procCheck.HasExited -and $procCheck.ExitCode -ne 0) {
-                    Write-AppLog "未適用の外部依存パッケージ (imageio-ffmpeg) を自動検出しました。仮想環境を同期中..." "INFO"
+                    $reqFile = Join-Path $ProjectRoot "requirements.txt"
+                    Write-AppLog "未適用または欠損した依存パッケージ (imageio-ffmpeg / httpx 等) を検出しました。仮想環境を同期中..." "INFO"
                     # スマートアプリコントロール (SAC) による未署名 uv.exe ブロック警告を回避するため、
                     # 既に起動確認済みの公式 Python (pip) を直接使用してバックグラウンド導入する
                     $pinfoInstall = [System.Diagnostics.ProcessStartInfo]::new()
                     $pinfoInstall.FileName = $venvPython
-                    $pinfoInstall.Arguments = "-B -m pip install imageio-ffmpeg>=0.5.1"
+                    if (Test-Path $reqFile) {
+                        $pinfoInstall.Arguments = "-B -m pip install -r `"$reqFile`""
+                    } else {
+                        $pinfoInstall.Arguments = "-B -m pip install imageio-ffmpeg>=0.5.1 httpx huggingface_hub"
+                    }
                     $pinfoInstall.WorkingDirectory = $ProjectRoot
                     $pinfoInstall.CreateNoWindow = $true
                     $pinfoInstall.UseShellExecute = $false

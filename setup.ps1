@@ -1,4 +1,4 @@
-﻿[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
 
 # --- スマートアプリコントロール (SAC) 対策: 動的 C# コンパイル (Add-Type -TypeDefinition) を排除 ---
@@ -98,8 +98,8 @@ End If
 }
 
 $RepoZipUrl = "https://github.com/Maximilian2022/hayamimi-live/archive/refs/heads/main.zip"
-# 既定のインストール先 (マイドキュメント\hayamimi: 完全ポータブル & 削除が容易)
-$DefaultInstallPath = [System.IO.Path]::Combine([System.Environment]::GetFolderPath('MyDocuments'), "hayamimi")
+# 既定のインストール先 (AppData\Local\hayamimi: OneDrive 同期干渉や保護フォルダー制限のない安全なローカル領域)
+$DefaultInstallPath = [System.IO.Path]::Combine([System.Environment]::GetFolderPath('LocalApplicationData'), "hayamimi")
 
 # XAML 定義
 [xml]$xaml = @"
@@ -834,19 +834,43 @@ $stepTimer.Add_Tick({
                 if (-not (Test-Path $logsDir)) { New-Item -ItemType Directory -Path $logsDir -Force | Out-Null }
 
                 # スマートアプリコントロール (SAC) & SmartScreen 対策:
-                # 配置された全ファイルから Zone.Identifier (Mark of the Web) を一括除去し、.ps1 の UTF-8 BOM を保証
+                # 配置されたスクリプト・バイナリから Zone.Identifier (Mark of the Web) を除去し、.ps1 の UTF-8 BOM を保証
+                # (.venv / .venv_gpu / models / .git の数万ファイル走査をスキップして高速更新)
                 Write-SetupLog "セキュリティブロック解除 (Unblock-File) を適用しています..."
                 try {
-                    Get-ChildItem -Path $script:targetDir -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
+                    Get-ChildItem -LiteralPath $script:targetDir -File -ErrorAction SilentlyContinue | ForEach-Object {
                         try { Unblock-File -LiteralPath $_.FullName -ErrorAction SilentlyContinue } catch {}
                     }
-                    Get-ChildItem -Path $script:targetDir -Recurse -Filter "*.ps1" -File -ErrorAction SilentlyContinue | ForEach-Object {
-                        try {
-                            $b = [System.IO.File]::ReadAllBytes($_.FullName)
-                            if ($b.Length -ge 3 -and ($b[0] -ne 239 -or $b[1] -ne 187 -or $b[2] -ne 191)) {
-                                [System.IO.File]::WriteAllBytes($_.FullName, ([byte[]]@(239, 187, 191) + $b))
+                    foreach ($sub in @("scripts", "tools", "cloud", "extension")) {
+                        $subPath = Join-Path $script:targetDir $sub
+                        if (Test-Path $subPath) {
+                            Get-ChildItem -LiteralPath $subPath -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
+                                try { Unblock-File -LiteralPath $_.FullName -ErrorAction SilentlyContinue } catch {}
                             }
-                        } catch {}
+                        }
+                    }
+                    foreach ($psTarget in @(
+                        (Join-Path $script:targetDir "setup.ps1"),
+                        (Join-Path $script:targetDir "scripts\launcher_gui.ps1"),
+                        (Join-Path $script:targetDir "scripts\desktop_overlay.ps1")
+                    )) {
+                        if (Test-Path $psTarget) {
+                            try {
+                                $b = [System.IO.File]::ReadAllBytes($psTarget)
+                                if ($b.Length -ge 3 -and ($b[0] -ne 239 -or $b[1] -ne 187 -or $b[2] -ne 191)) {
+                                    [System.IO.File]::WriteAllBytes($psTarget, ([byte[]]@(239, 187, 191) + $b))
+                                }
+                            } catch {}
+                        }
+                    }
+                    if ($script:targetDir -match "(?i)OneDrive|Dropbox|Google Drive|iCloudDrive") {
+                        Write-SetupLog "⚠ クラウド同期フォルダ ($script:targetDir) への配置を検出しました。保護属性 (+p -u) を適用します..."
+                        foreach ($pName in @("models", ".venv", ".venv_gpu")) {
+                            $pDir = Join-Path $script:targetDir $pName
+                            if (Test-Path $pDir) {
+                                $null = cmd.exe /c "attrib.exe +p -u `"$pDir`" /s /d" 2>&1
+                            }
+                        }
                     }
                 } catch {}
 
@@ -973,6 +997,13 @@ $btnClose.Add_Click({
 
 Write-SetupLog "セットアップウィザードが起動しました。"
 Write-SetupLog "保存先フォルダを確認して「インストール開始」をクリックしてください。"
+try {
+    $legacyDocsDir = [System.IO.Path]::Combine([System.Environment]::GetFolderPath('MyDocuments'), "hayamimi")
+    if (($legacyDocsDir -ne $DefaultInstallPath) -and (Test-Path (Join-Path $legacyDocsDir "start.bat"))) {
+        Write-SetupLog "ℹ 既存の導入先を検出しました: $legacyDocsDir"
+        Write-SetupLog "  モデルや設定を残してコードだけ最新化したい場合は「参照...」でこのフォルダを指定して実行できます。"
+    }
+} catch {}
 
 # ウィンドウ表示
 $window.ShowDialog() | Out-Null
