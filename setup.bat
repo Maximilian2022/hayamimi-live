@@ -8,10 +8,44 @@ echo   Hayamimi Live (Early Hearing Live) - Setup Launcher
 echo ===================================================
 echo.
 
-:: 1. Check PowerShell Runtime (prefer pwsh if available, fallback to powershell)
-set "PS_CMD=powershell"
-where pwsh >nul 2>&1
-if %errorlevel% equ 0 set "PS_CMD=pwsh"
+:: 1. Resolve PowerShell 7 (pwsh.exe) - install automatically via winget if missing
+set "PWSH_EXE="
+for /f "delims=" %%P in ('where pwsh 2^>nul') do (
+    if not defined PWSH_EXE set "PWSH_EXE=%%P"
+)
+if not defined PWSH_EXE if exist "%ProgramFiles%\PowerShell\7\pwsh.exe" set "PWSH_EXE=%ProgramFiles%\PowerShell\7\pwsh.exe"
+if not defined PWSH_EXE if exist "%LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.exe" set "PWSH_EXE=%LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.exe"
+if not defined PWSH_EXE if exist "%ProgramFiles(x86)%\PowerShell\7\pwsh.exe" set "PWSH_EXE=%ProgramFiles(x86)%\PowerShell\7\pwsh.exe"
+
+if not defined PWSH_EXE (
+    echo [*] PowerShell 7 ^(pwsh^) was not found. Installing via winget...
+    set "WINGET_EXE=winget"
+    where winget >nul 2>&1
+    if errorlevel 1 (
+        if exist "%LOCALAPPDATA%\Microsoft\WindowsApps\winget.exe" (
+            set "WINGET_EXE=%LOCALAPPDATA%\Microsoft\WindowsApps\winget.exe"
+        ) else (
+            set "WINGET_EXE="
+        )
+    )
+    if defined WINGET_EXE (
+        "%WINGET_EXE%" install --id Microsoft.PowerShell -e --source winget --accept-package-agreements --accept-source-agreements
+        for /f "delims=" %%P in ('where pwsh 2^>nul') do (
+            if not defined PWSH_EXE set "PWSH_EXE=%%P"
+        )
+        if not defined PWSH_EXE if exist "%ProgramFiles%\PowerShell\7\pwsh.exe" set "PWSH_EXE=%ProgramFiles%\PowerShell\7\pwsh.exe"
+        if not defined PWSH_EXE if exist "%LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.exe" set "PWSH_EXE=%LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.exe"
+        if not defined PWSH_EXE if exist "%ProgramFiles(x86)%\PowerShell\7\pwsh.exe" set "PWSH_EXE=%ProgramFiles(x86)%\PowerShell\7\pwsh.exe"
+    )
+)
+
+if not defined PWSH_EXE (
+    echo [ERROR] PowerShell 7 ^(pwsh.exe^) is required and could not be installed automatically.
+    echo Please install PowerShell 7 from Microsoft Store or https://aka.ms/powershell-release?tag=stable
+    echo.
+    pause
+    exit /b 1
+)
 
 :: 2. Check local setup.ps1 or download from GitHub
 set "SETUP_SCRIPT=%~dp0setup.ps1"
@@ -24,7 +58,7 @@ echo [*] Downloading setup script from GitHub...
 echo     URL: %GITHUB_RAW_URL%
 echo.
 
-%PS_CMD% -NoProfile -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile($env:GITHUB_RAW_URL, $env:SETUP_SCRIPT)"
+"%PWSH_EXE%" -NoProfile -Command "Invoke-WebRequest -Uri $env:GITHUB_RAW_URL -OutFile $env:SETUP_SCRIPT"
 
 if not exist "%SETUP_SCRIPT%" (
     echo [ERROR] Failed to download setup.ps1 from GitHub.
@@ -36,12 +70,9 @@ if not exist "%SETUP_SCRIPT%" (
 )
 
 :run_setup
-:: Unblock all local files (remove Mark of the Web / Zone.Identifier for Smart App Control & SmartScreen)
-:: and ensure UTF-8 with BOM on .ps1 files so Windows PowerShell 5.1 parses Japanese characters cleanly
-%PS_CMD% -NoProfile -ExecutionPolicy Bypass -Command "try { Get-ChildItem -LiteralPath '%~dp0' -Recurse -File -ErrorAction SilentlyContinue | Unblock-File -ErrorAction SilentlyContinue } catch {}; if (Test-Path $env:SETUP_SCRIPT) { try { Unblock-File -LiteralPath $env:SETUP_SCRIPT -ErrorAction SilentlyContinue } catch {}; $b=[System.IO.File]::ReadAllBytes($env:SETUP_SCRIPT); if ($b.Length -lt 3 -or $b[0] -ne 239 -or $b[1] -ne 187 -or $b[2] -ne 191) { [System.IO.File]::WriteAllBytes($env:SETUP_SCRIPT, [byte[]]@(239, 187, 191) + $b) } }"
-
-echo [*] Launching hayamimi setup GUI...
-%PS_CMD% -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%SETUP_SCRIPT%"
+echo [*] Launching hayamimi setup GUI ^(PowerShell 7^)...
+"%PWSH_EXE%" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command "try { Unblock-File -LiteralPath $env:SETUP_SCRIPT -ErrorAction SilentlyContinue } catch {}"
+"%PWSH_EXE%" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%SETUP_SCRIPT%"
 
 :: Clean up temp file if downloaded
 if exist "%TEMP%\hayamimi_setup.ps1" (

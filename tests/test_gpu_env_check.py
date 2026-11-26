@@ -52,15 +52,15 @@ def test_probe_not_installed(tmp_path, monkeypatch):
 
 
 def test_probe_incompatible_python(tmp_path, monkeypatch):
-    """Python 3.14 等の PyTorch CUDA 未対応バージョンが検出された場合 incompatible_python となること"""
+    """Python 3.11 以下のサポート終了バージョンが検出された場合 incompatible_python となること"""
     fake_py = tmp_path / "python.exe"
     fake_py.write_text("#!/bin/sh\n")
     monkeypatch.setattr("scripts.check_gpu_env.get_gpu_python_path", lambda: str(fake_py))
 
     fake_output = {
-        "python_version": "3.14.0",
-        "python_major_minor": "3.14",
-        "torch_version": "2.4.0",
+        "python_version": "3.11.9",
+        "python_major_minor": "3.11",
+        "torch_version": "2.11.0+cu128",
         "cuda_available": True,
         "directml_detected": False,
         "faster_whisper": True,
@@ -166,6 +166,8 @@ def test_probe_ready_success(tmp_path, monkeypatch):
     monkeypatch.setattr("scripts.check_gpu_env.get_gpu_venv_dir", lambda: str(tmp_path))
 
     fake_output = {
+        "python_version": "3.14.10",
+        "python_major_minor": "3.14",
         "torch_version": "2.11.0+cu128",
         "cuda_available": True,
         "device_name": "NVIDIA GeForce RTX 5090",

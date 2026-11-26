@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # Hayamimi Live (早耳 Live) ランチャー GUI
 # =============================================================================
 
@@ -62,8 +62,53 @@ if (-not $ProjectRoot) {
     $ScriptDir = Join-Path $ProjectRoot "scripts"
 }
 
-# バージョン番号の解決 (version.txt 優先、フォールバック 2.4.16)
-$script:AppVersion = "2.4.16"
+# --- PowerShell 7 (pwsh.exe) 必須化 & 既存ユーザー自動移行トランポリン ---
+# 旧版ランチャー (PS 5.1) からのアップデート直後の再起動や旧 start.vbs からの起動時に、
+# PowerShell 7 が未導入であれば公式 MSIX 版を自動導入し、pwsh.exe -File へ透過的に引き継ぐ。
+if ($PSVersionTable.PSVersion.Major -lt 7) {
+    $pwshExe = $null
+    foreach ($cand in @(
+        (where.exe pwsh.exe 2>$null | Select-Object -First 1),
+        "$env:ProgramFiles\PowerShell\7\pwsh.exe",
+        "$env:LOCALAPPDATA\Microsoft\WindowsApps\pwsh.exe",
+        "${env:ProgramFiles(x86)}\PowerShell\7\pwsh.exe"
+    )) {
+        if ($cand -and (Test-Path -LiteralPath $cand)) { $pwshExe = $cand; break }
+    }
+    if (-not $pwshExe) {
+        $wingetExe = (where.exe winget.exe 2>$null | Select-Object -First 1)
+        if (-not $wingetExe -and (Test-Path "$env:LOCALAPPDATA\Microsoft\WindowsApps\winget.exe")) {
+            $wingetExe = "$env:LOCALAPPDATA\Microsoft\WindowsApps\winget.exe"
+        }
+        if ($wingetExe) {
+            Start-Process -FilePath $wingetExe -ArgumentList "install --id Microsoft.PowerShell -e --source winget --accept-package-agreements --accept-source-agreements --silent" -Wait -WindowStyle Hidden
+            foreach ($cand in @(
+                (where.exe pwsh.exe 2>$null | Select-Object -First 1),
+                "$env:ProgramFiles\PowerShell\7\pwsh.exe",
+                "$env:LOCALAPPDATA\Microsoft\WindowsApps\pwsh.exe",
+                "${env:ProgramFiles(x86)}\PowerShell\7\pwsh.exe"
+            )) {
+                if ($cand -and (Test-Path -LiteralPath $cand)) { $pwshExe = $cand; break }
+            }
+        }
+    }
+    $selfScript = Join-Path $ScriptDir "launcher_gui.ps1"
+    if ($pwshExe -and (Test-Path -LiteralPath $selfScript)) {
+        Start-Process -FilePath $pwshExe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$selfScript`""
+        exit 0
+    }
+    Add-Type -AssemblyName PresentationFramework
+    [void][System.Windows.MessageBox]::Show(
+        "Hayamimi Live の実行には PowerShell 7 (pwsh.exe) が必要です。`r`nMicrosoft Store または https://aka.ms/powershell-release?tag=stable から PowerShell 7 をインストールしてください。",
+        "PowerShell 7 が必要です - Hayamimi Live",
+        [System.Windows.MessageBoxButton]::OK,
+        [System.Windows.MessageBoxImage]::Warning
+    )
+    exit 1
+}
+
+# バージョン番号の解決 (version.txt 優先、フォールバック 2.5.0)
+$script:AppVersion = "2.5.0"
 $versionTxtFile = Join-Path $ProjectRoot "version.txt"
 if (Test-Path $versionTxtFile) {
     try {
@@ -74,17 +119,19 @@ if (Test-Path $versionTxtFile) {
 $version = "GUI v$script:AppVersion"
 $script:VersionCheckUrl = "https://raw.githubusercontent.com/Maximilian2022/hayamimi-live/main/version.txt"
 
-# --- 既存ユーザーの Git Remote URL 自動更新 (hayamimi -> hayamimi-live) ---
-try {
-    # カレントディレクトリに依存しないよう、リポジトリルートを明示する (-C)
-    if (Test-Path (Join-Path $ProjectRoot ".git")) {
-        $currentOrigin = (git -C "$ProjectRoot" remote get-url origin 2>$null)
-        if ($currentOrigin -and $currentOrigin -match "Maximilian2022/hayamimi(\.git)?$") {
-            git -C "$ProjectRoot" remote set-url origin "https://github.com/Maximilian2022/hayamimi-live.git" 2>$null
-            $script:OriginMigrated = "$currentOrigin -> hayamimi-live"
+# 既存ユーザーの Git Remote URL 自動更新ヘルパー (ウィンドウ表示後に非同期タイマーから実行)
+function Update-GitOriginIfNeeded {
+    try {
+        if (Test-Path (Join-Path $ProjectRoot ".git")) {
+            $currentOrigin = (git -C "$ProjectRoot" remote get-url origin 2>$null)
+            if ($currentOrigin -and $currentOrigin -match "Maximilian2022/hayamimi(\.git)?$") {
+                git -C "$ProjectRoot" remote set-url origin "https://github.com/Maximilian2022/hayamimi-live.git" 2>$null
+                $script:OriginMigrated = "$currentOrigin -> hayamimi-live"
+            }
         }
-    }
-} catch {}
+    } catch {}
+}
+
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
 
@@ -96,11 +143,11 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 
 <#
 .SYNOPSIS
-    hayamimi (早耳) - WSL Containers (WSL3) ランチャー GUI
+    hayamimi (早耳) - ランチャー GUI (PowerShell 7)
 .DESCRIPTION
     WPFを用いたモダンなダークUIランチャー。
-    WSL Containers (wslc) を制御して hayamimi コンテナを起動・停止し、
-    コンテナログ同期、起動完了後のブラウザ自動表示を行います。
+    Python 仮想環境または WSL Containers (wslc) を制御して hayamimi を起動・停止し、
+    ログ同期、起動完了後のブラウザ自動表示を行います。
 #>
 
 Add-Type -AssemblyName PresentationFramework
@@ -110,8 +157,6 @@ Add-Type -AssemblyName System.Drawing
 
 # --- WPF ハードウェアアクセラレーション起因の Win32 メッセージクォータ溢れ (エラー 1816) を完全防止 ---
 [System.Windows.Media.RenderOptions]::ProcessRenderMode = [System.Windows.Interop.RenderMode]::SoftwareOnly
-
-[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
 
 # --- Windows Defender「コントロールされたフォルダー アクセス」ブロック防止 ---
 # OneDrive や保護フォルダー配下での Python バイトコードキャッシュ (__pycache__) 作成を抑止
@@ -291,6 +336,37 @@ function Set-UpdateFailedVersion {
     }
 }
 
+# Smart App Control (SAC) 状態取得 (0:オフ, 1:オン(強制), 2:評価モード, -1:取得不可)
+function Get-SmartAppControlState {
+    try {
+        $prop = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy" -Name VerifiedAndReputablePolicyState -ErrorAction Stop
+        return [int]$prop.VerifiedAndReputablePolicyState
+    } catch {
+        return -1
+    }
+}
+
+function Test-IsSmartAppControlActive {
+    $st = Get-SmartAppControlState
+    return ($st -eq 1 -or $st -eq 2)
+}
+
+function Test-IsTrustedSignedExecutable {
+    param([string]$FilePath)
+    if ([string]::IsNullOrWhiteSpace($FilePath) -or -not (Test-Path -LiteralPath $FilePath)) {
+        return $false
+    }
+    try {
+        $item = Get-Item -LiteralPath $FilePath -ErrorAction Stop
+        if ($item.Length -le 0) { return $false }
+        if ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) { return $false }
+        $sig = Get-AuthenticodeSignature -LiteralPath $FilePath -ErrorAction Stop
+        return ($sig.Status -eq [System.Management.Automation.SignatureStatus]::Valid)
+    } catch {
+        return $false
+    }
+}
+
 # 起動時の環境診断 (ログに残してサポート時に原因を追えるようにする)
 function Write-EnvDiagnostics {
     try {
@@ -298,11 +374,11 @@ function Write-EnvDiagnostics {
         Write-AppLog "[診断] launcher v$script:AppVersion / PowerShell $($PSVersionTable.PSVersion) ($($PSVersionTable.PSEdition)) / OS $([System.Environment]::OSVersion.Version)"
         Write-AppLog "[診断] ProjectRoot=$ProjectRoot / ScriptDir=$ScriptDir / CWD=$((Get-Location).Path)"
         Write-AppLog "[診断] LanguageMode=$($ExecutionContext.SessionState.LanguageMode) (ConstrainedLanguage の場合は SAC/AppLocker の制限下)"
-        try {
-            $sac = (Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy" -Name VerifiedAndReputablePolicyState -ErrorAction Stop).VerifiedAndReputablePolicyState
+        $sac = Get-SmartAppControlState
+        if ($sac -ge 0) {
             $sacText = switch ($sac) { 0 { "オフ" } 1 { "オン (強制)" } 2 { "評価モード" } default { "不明($sac)" } }
             Write-AppLog "[診断] スマートアプリコントロール: $sacText"
-        } catch {
+        } else {
             Write-AppLog "[診断] スマートアプリコントロール状態は取得できませんでした"
         }
         $verFile = Get-LocalVersionFromDisk
@@ -373,34 +449,12 @@ function Unblock-ProjectFiles {
                     }
             }
         }
-        # PowerShell 5.1 互換性のため .ps1 ファイルに正確に単一の UTF-8 BOM (EF BB BF) を保証 (多重BOM自己治癒)
-        $ps1Files = @(
-            (Join-Path $RootDir "setup.ps1"),
-            (Join-Path $RootDir "scripts\launcher_gui.ps1"),
-            (Join-Path $RootDir "scripts\desktop_overlay.ps1")
-        )
-        foreach ($pf in $ps1Files) {
-            if (Test-Path $pf) {
-                try {
-                    $b = [System.IO.File]::ReadAllBytes($pf)
-                    $offset = 0
-                    while ($offset + 3 -le $b.Length -and $b[$offset] -eq 239 -and $b[$offset+1] -eq 187 -and $b[$offset+2] -eq 191) {
-                        $offset += 3
-                    }
-                    if ($offset -ne 3) {
-                        $contentWithoutBom = if ($offset -gt 0) { $b[$offset..($b.Length - 1)] } else { $b }
-                        $singleBom = [byte[]]@(239, 187, 191)
-                        [System.IO.File]::WriteAllBytes($pf, ($singleBom + $contentWithoutBom))
-                    }
-                } catch {}
-            }
-        }
     } catch {}
 }
 
 $script:UvBlockedBySac = $false
 
-# スマートアプリコントロール (SAC) でブロックされない 안전한 uv 実行可能ファイルの検証・取得関数
+# スマートアプリコントロール (SAC) でブロックされない安全な uv 実行可能ファイルの検証・取得関数
 function Get-SafeUvCommand {
     if ($script:UvBlockedBySac) { return $null }
     $cand = $null
@@ -417,6 +471,17 @@ function Get-SafeUvCommand {
     } catch {}
 
     if (-not $cand) { return $null }
+
+    # SAC 有効環境では未署名 uv.exe を起動する前に署名確認を行い、ブロック警告ダイアログ自体を抑止する
+    if ((Test-IsSmartAppControlActive) -and -not (Test-IsTrustedSignedExecutable -FilePath $cand)) {
+        $script:UvBlockedBySac = $true
+        Write-AppLog "Smart App Control 有効環境で未署名の uv.exe を検出したため使用をスキップし、公式 Python (pip) を使用します: $cand" "WARN"
+        $localUv = Join-Path $ProjectRoot "tools\uv\uv.exe"
+        if ($cand -eq $localUv -and (Test-Path $localUv)) {
+            try { Move-Item -LiteralPath $localUv -Destination "$localUv.blocked" -Force -ErrorAction SilentlyContinue } catch {}
+        }
+        return $null
+    }
 
     try {
         Unblock-File -LiteralPath $cand -ErrorAction SilentlyContinue
@@ -819,7 +884,7 @@ function Update-ContainerLogFile {
 [xml]$xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Hayamimi Live ランチャー (GUI v2.4.16)"
+        Title="Hayamimi Live ランチャー (GUI v2.5.0)"
         Height="780" Width="780"
         MinHeight="680" MinWidth="720"
         WindowStartupLocation="CenterScreen"
@@ -897,7 +962,7 @@ function Update-ContainerLogFile {
                         <TextBlock x:Name="GpuBadge" Text="⚡ GPU: 検出中..." FontSize="11" Foreground="#10B981" FontWeight="SemiBold"/>
                     </Border>
                     <Border Background="#1E1B4B" CornerRadius="12" Padding="10,5" Margin="0,0,8,0" BorderBrush="#4338CA" BorderThickness="1">
-                        <TextBlock x:Name="VersionBadge" Text="GUI v2.4.16" FontSize="11" Foreground="#A5B4FC" FontWeight="Bold" FontFamily="{StaticResource MonoFont}"/>
+                        <TextBlock x:Name="VersionBadge" Text="GUI v2.5.0" FontSize="11" Foreground="#A5B4FC" FontWeight="Bold" FontFamily="{StaticResource MonoFont}"/>
                     </Border>
                     <Border Background="#141B2D" CornerRadius="12" Padding="10,5" BorderBrush="#253350" BorderThickness="1">
                         <TextBlock x:Name="RuntimeBadge" Text="Python venv" FontSize="11" Foreground="#38BDF8" FontWeight="SemiBold"/>
@@ -1314,24 +1379,48 @@ function Update-DeviceBadgeDisplay {
 # ハードウェア (NPU / メイン GPU) 状態の検出とラジオボタン・バッジ更新
 function Update-GpuDeviceBadge {
     try {
-        # 1. NPU (Neural Processing Unit) の検出
+        # 1. NPU (Neural Processing Unit) の高速検出
         # 注意: OpenVINO NPU は Intel AI Boost (VEN_8086) 専用です。
-        # AMD NPU (AMD IPU / VEN_1002 / XDNA) は OpenVINO 非対応のため、AMD 環境では NPU 起動モードを非表示 (Collapsed) にします。
-        # また "Input" 等の USB デバイス誤検知を完全に防止します。
-        $npu = Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue | Where-Object {
-            ($_.Name -match "AI Boost|\bNPU\b|\bIPU\b" -or $_.PNPClass -eq "ComputeAccelerator") -and
-            $_.Name -notmatch "AMD" -and
-            $_.PNPDeviceID -notmatch "VEN_1002" -and
-            ($_.Name -match "Intel" -or $_.PNPDeviceID -match "VEN_8086" -or $_.Name -match "AI Boost") -and
-            $_.PNPClass -notmatch "Mouse|Keyboard|HIDClass|Media" -and
-            $_.Name -notmatch "Input|Receiver|Mouse|Keyboard|Audio|Controller"
-        } | Select-Object -First 1
+        # 全 PnP デバイス走査 (約4秒) を避け、ComputeAccelerator クラスレジストリが存在する場合のみ対象クラスを照会します。
+        $npu = $null
+        $amdNpu = $null
+        $caClassKey = "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{f01a9d53-3ff6-48d2-9f97-c8a7004be10c}"
+        $hasAccelReg = $false
+        if (Test-Path $caClassKey) {
+            $subKeys = Get-ChildItem -LiteralPath $caClassKey -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -match '^\d{4}$' }
+            if (@($subKeys).Count -gt 0) { $hasAccelReg = $true }
+        }
 
-        # AMD NPU (XDNA) の検知とログ案内 (非表示理由をログに記録)
-        $amdNpu = Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue | Where-Object {
-            ($_.Name -match "AMD.*(NPU|IPU)" -or ($_.PNPDeviceID -match "VEN_1002" -and $_.Name -match "\bNPU\b|\bIPU\b")) -and
-            $_.PNPClass -notmatch "Mouse|Keyboard|HIDClass|Media"
-        } | Select-Object -First 1
+        if ($hasAccelReg) {
+            $accelDevs = @()
+            try {
+                $pnpCmd = Get-Command Get-PnpDevice -ErrorAction SilentlyContinue
+                if ($pnpCmd) {
+                    $accelDevs = @(Get-PnpDevice -Class 'ComputeAccelerator' -Status 'OK' -ErrorAction SilentlyContinue | ForEach-Object {
+                        [PSCustomObject]@{
+                            Name        = $_.FriendlyName
+                            PNPDeviceID = $_.InstanceId
+                            PNPClass    = $_.Class
+                            Status      = $_.Status
+                        }
+                    })
+                } else {
+                    $accelDevs = @(Get-CimInstance Win32_PnPEntity -Filter "PNPClass = 'ComputeAccelerator'" -ErrorAction SilentlyContinue)
+                }
+            } catch {}
+
+            $npu = $accelDevs | Where-Object {
+                $_.Status -eq "OK" -and
+                $_.Name -notmatch "AMD" -and
+                $_.PNPDeviceID -notmatch "VEN_1002" -and
+                ($_.Name -match "Intel|AI Boost|\bNPU\b" -or $_.PNPDeviceID -match "VEN_8086")
+            } | Select-Object -First 1
+
+            $amdNpu = $accelDevs | Where-Object {
+                ($_.Name -match "AMD" -or $_.PNPDeviceID -match "VEN_1002")
+            } | Select-Object -First 1
+        }
+
         if ($amdNpu) {
             Write-AppLog "ℹ AMD NPU 検出 ($($amdNpu.Name)): OpenVINO 未対応のため NPU 起動は非表示とし、高速な CPU 起動 (ReazonSpeech) を適用します" "INFO"
         }
@@ -2019,11 +2108,54 @@ function Test-HayamimiImageExists {
     }
 }
 
-# Python プロセス稼働確認関数
+$script:IgnoredPythonPids = [System.Collections.Generic.HashSet[int]]::new()
+
+# Python プロセス稼働確認関数 (高速・配信中の WMI 負荷ゼロ設計)
 function Test-PythonRunning {
     try {
-        $procs = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like "*realtime_transcribe.py*" }
-        return ($null -ne $procs -and $procs.Count -gt 0)
+        # 1. ランチャー自身が起動/捕捉したプロセスが生存中なら WMI 照会なしで即 True (0.01ms)
+        if ($script:ProcPython) {
+            try {
+                if (-not $script:ProcPython.HasExited) {
+                    return $true
+                }
+            } catch {}
+            $script:ProcPython = $null
+        }
+
+        # 2. システム上の python プロセス一覧を取得し、未調査の新規 PID がある時だけ WMI を照会する
+        #    (他ツールの常駐 python.exe が居る環境でも毎回の WMI 700ms スキャンを完全にゼロ化)
+        $pyProcs = [System.Diagnostics.Process]::GetProcessesByName("python")
+        if (-not $pyProcs -or $pyProcs.Length -eq 0) {
+            $script:IgnoredPythonPids.Clear()
+            return $false
+        }
+
+        $hasUncheckedPid = $false
+        foreach ($pp in $pyProcs) {
+            if (-not $script:IgnoredPythonPids.Contains($pp.Id)) {
+                $hasUncheckedPid = $true
+                break
+            }
+        }
+        if (-not $hasUncheckedPid) {
+            return $false
+        }
+
+        # 3. 新規 python PID 出現時のみ WQL フィルタで照会し、対象ならキャッシュ、無関係なら除外登録
+        $allPyWmi = @(Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" -ErrorAction SilentlyContinue)
+        foreach ($wp in $allPyWmi) {
+            $wpid = [int]$wp.ProcessId
+            if ($wp.CommandLine -like "*realtime_transcribe.py*") {
+                try {
+                    $script:ProcPython = [System.Diagnostics.Process]::GetProcessById($wpid)
+                } catch {}
+                return $true
+            } else {
+                [void]$script:IgnoredPythonPids.Add($wpid)
+            }
+        }
+        return $false
     } catch {
         return $false
     }
@@ -2082,12 +2214,66 @@ function Write-RequirementsHashMarker {
     }
 }
 
+function Get-GpuRequirementsHash {
+    $req1 = Join-Path $ProjectRoot "requirements.txt"
+    $req2 = Join-Path $ProjectRoot "requirements-gpu.txt"
+    if (-not (Test-Path $req1) -or -not (Test-Path $req2)) { return $null }
+    try {
+        $h1 = (Get-FileHash -Path $req1 -Algorithm SHA256 -ErrorAction Stop).Hash.Substring(0, 16)
+        $h2 = (Get-FileHash -Path $req2 -Algorithm SHA256 -ErrorAction Stop).Hash.Substring(0, 16)
+        return "$h1-$h2"
+    } catch {
+        return $null
+    }
+}
+
+function Write-GpuRequirementsHashMarker {
+    $hash = Get-GpuRequirementsHash
+    $gpuDir = Join-Path $ProjectRoot ".venv_gpu"
+    if ($hash -and (Test-Path $gpuDir)) {
+        try {
+            $marker = Join-Path $gpuDir ".hayamimi_gpu_req_hash"
+            [System.IO.File]::WriteAllText($marker, $hash, [System.Text.UTF8Encoding]::new($false))
+        } catch {}
+    }
+}
+
+function Ensure-PipAvailableInVenv {
+    param([string]$PythonExe)
+    if (-not $PythonExe -or -not (Test-Path -LiteralPath $PythonExe)) { return $false }
+    try {
+        & $PythonExe -B -m pip --version *> $null
+        if ($LASTEXITCODE -eq 0) { return $true }
+    } catch {}
+    try {
+        $pinfo = [System.Diagnostics.ProcessStartInfo]::new()
+        $pinfo.FileName = $PythonExe
+        $pinfo.Arguments = "-B -m ensurepip --upgrade"
+        $pinfo.WorkingDirectory = $ProjectRoot
+        $pinfo.RedirectStandardOutput = $true
+        $pinfo.RedirectStandardError = $true
+        $pinfo.UseShellExecute = $false
+        $pinfo.CreateNoWindow = $true
+        $pinfo.Environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        $proc = [System.Diagnostics.Process]::Start($pinfo)
+        Wait-ProcessWithUiPump -Proc $proc -LogPrefix "[pip初期化]"
+        return ($proc.ExitCode -eq 0)
+    } catch {
+        return $false
+    }
+}
+
 # .venv の構造・依存パッケージ健全性を包括診断する (破損/コード入れ替え後の不整合検知)
 function Get-PythonVenvHealth {
     $venvDir = Join-Path $ProjectRoot ".venv"
     $venvPython = Join-Path $venvDir "Scripts\python.exe"
     if (-not (Test-Path $venvPython)) {
         return @{ exists = $false; healthy = $false; needRecreate = $true; needSync = $false; forceReinstall = $false; missing = @(); version = $null; reason = "missing_python" }
+    }
+
+    # 0. SAC 有効環境では python.exe 起動前に署名を確認し、旧 uv 無署名残骸によるブロック警告を抑止して公式版へ再構築する
+    if ((Test-IsSmartAppControlActive) -and -not (Test-IsTrustedSignedExecutable -FilePath $venvPython)) {
+        return @{ exists = $true; healthy = $false; needRecreate = $true; needSync = $false; forceReinstall = $false; missing = @(); version = $null; reason = "unsigned_python_sac" }
     }
 
     # 1. pyvenv.cfg のベース Python パス切れチェック (別 PC からのコピー等)
@@ -2207,6 +2393,7 @@ function Sync-PythonVenvRequirements {
     if (-not $syncOk) {
         try {
             Unblock-File -LiteralPath $venvPython -ErrorAction SilentlyContinue
+            Ensure-PipAvailableInVenv -PythonExe $venvPython | Out-Null
             $pinfoPipSys = [System.Diagnostics.ProcessStartInfo]::new()
             $pinfoPipSys.FileName = $venvPython
             $forceFlag = if ($ForceReinstall) { "--force-reinstall " } else { "" }
@@ -2295,9 +2482,22 @@ function Ensure-PythonVenvUpToDate {
 # GPU 仮想環境 (.venv_gpu) 健全性診断関数
 function Test-GpuVenvHealth {
     param([switch]$Silent)
+    $gpuPy = Join-Path $ProjectRoot ".venv_gpu\Scripts\python.exe"
+    if ((Test-Path $gpuPy) -and (Test-IsSmartAppControlActive) -and -not (Test-IsTrustedSignedExecutable -FilePath $gpuPy)) {
+        return [PSCustomObject]@{
+            status  = "unsigned_sac"
+            ready   = $false
+            message = "GPU仮想環境の Python が未署名ビルドのため、Smart App Control 対応の公式 Python 環境へ再構築が必要です。"
+        }
+    }
     $checkScript = Join-Path $ProjectRoot "scripts\check_gpu_env.py"
     $venvPy = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
-    $pyRunner = if (Test-Path $venvPy) { $venvPy } elseif ($script:PythonExe -and (Test-Path $script:PythonExe)) { $script:PythonExe } else { "python.exe" }
+    $pyRunner = if ((Test-Path $venvPy) -and (-not (Test-IsSmartAppControlActive) -or (Test-IsTrustedSignedExecutable -FilePath $venvPy))) {
+        $venvPy
+    } else {
+        $foundSys = Find-SystemPythonForVenv -TargetVersions @("3.14") -RequireSigned (Test-IsSmartAppControlActive)
+        if ($foundSys) { $foundSys } else { "python.exe" }
+    }
     try {
         $jsonStr = & $pyRunner -B $checkScript 2>$null | Out-String
         if ($jsonStr) {
@@ -2315,6 +2515,245 @@ function Test-GpuVenvHealth {
     }
 }
 
+# 公式署名済みシステム Python 探索 & Winget 導入ヘルパー (SAC 環境での無署名 python-build-standalone 取得を防止)
+function Test-IsUvManagedOrVenvPythonPath {
+    param([string]$FilePath)
+    if ([string]::IsNullOrWhiteSpace($FilePath)) { return $true }
+    $norm = $FilePath.ToLowerInvariant()
+    if ($norm -like "*\windowsapps\*") { return $true }
+    if ($norm -like "*\uv\python\*") { return $true }
+    if ($norm -match "\\(\.venv[^\\]*|venv)\\scripts\\python\.exe$") { return $true }
+    return $false
+}
+
+function Get-PythonExecutableVersion {
+    param([string]$PythonExe)
+    if ([string]::IsNullOrWhiteSpace($PythonExe) -or -not (Test-Path -LiteralPath $PythonExe)) { return $null }
+    try {
+        $item = Get-Item -LiteralPath $PythonExe -ErrorAction Stop
+        if ($item.Length -le 0) { return $null }
+        if ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) { return $null }
+        $pinfo = [System.Diagnostics.ProcessStartInfo]::new()
+        $pinfo.FileName = $PythonExe
+        $pinfo.Arguments = "-B -c `"import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')`""
+        $pinfo.RedirectStandardOutput = $true
+        $pinfo.RedirectStandardError = $true
+        $pinfo.UseShellExecute = $false
+        $pinfo.CreateNoWindow = $true
+        $pinfo.Environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        $proc = [System.Diagnostics.Process]::Start($pinfo)
+        $out = $proc.StandardOutput.ReadToEnd()
+        $proc.WaitForExit(5000) | Out-Null
+        if ($proc.ExitCode -eq 0 -and $out) {
+            return $out.Trim()
+        }
+    } catch {}
+    return $null
+}
+
+function Find-SystemPythonForVenv {
+    param(
+        [string[]]$TargetVersions = @("3.14"),
+        [bool]$RequireSigned = $false
+    )
+
+    $candidates = New-Object System.Collections.Generic.List[string]
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+
+    $addCand = {
+        param([string]$p)
+        if ([string]::IsNullOrWhiteSpace($p)) { return }
+        $trimmed = $p.Trim().Trim('"')
+        if (-not $trimmed -or (Test-IsUvManagedOrVenvPythonPath -FilePath $trimmed)) { return }
+        if ((Test-Path -LiteralPath $trimmed) -and $seen.Add($trimmed)) {
+            $candidates.Add($trimmed)
+        }
+    }
+
+    # 1. 公式 Python.org / Python Install Manager の標準パスを優先探索
+    foreach ($v in $TargetVersions) {
+        $nodot = $v.Replace(".", "")
+        & $addCand "C:\Python$nodot\python.exe"
+        if ($env:LOCALAPPDATA) {
+            & $addCand (Join-Path $env:LOCALAPPDATA "Programs\Python\Python$nodot\python.exe")
+            & $addCand (Join-Path $env:LOCALAPPDATA "Python\pythoncore-$v-64\python.exe")
+        }
+        if ($env:ProgramFiles) {
+            & $addCand (Join-Path $env:ProgramFiles "Python$nodot\python.exe")
+        }
+    }
+
+    # 2. py.exe ランチャー経由 (Astral/uv 管理版と WindowsApps を除外)
+    try {
+        $pyLauncher = (where.exe py.exe 2>$null | Select-Object -First 1)
+        if ($pyLauncher) {
+            $pyList = & $pyLauncher -0p 2>$null
+            foreach ($line in $pyList) {
+                if ($line -match '^\s*-V:(\S+)(?:\s+\*)?\s+(.+?python\.exe)\s*$') {
+                    $tag = $matches[1]
+                    $exePath = $matches[2].Trim()
+                    if ($tag -like "Astral*") { continue }
+                    & $addCand $exePath
+                }
+            }
+        }
+    } catch {}
+
+    # 3. PATH 上の python.exe
+    try {
+        $whereList = where.exe python.exe 2>$null
+        foreach ($w in $whereList) {
+            & $addCand $w
+        }
+    } catch {}
+
+    $unsignedFallback = $null
+    foreach ($cand in $candidates) {
+        $ver = Get-PythonExecutableVersion -PythonExe $cand
+        if (-not $ver -or ($TargetVersions -notcontains $ver)) { continue }
+
+        if (Test-IsTrustedSignedExecutable -FilePath $cand) {
+            return $cand
+        }
+        if (-not $RequireSigned -and -not $unsignedFallback) {
+            $unsignedFallback = $cand
+        }
+    }
+
+    return $unsignedFallback
+}
+
+function Install-OfficialPythonWithWinget {
+    param([string]$Version = "3.14")
+    $winget = (Get-Command winget.exe -ErrorAction SilentlyContinue).Source
+    if (-not $winget) {
+        $waWinget = Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps\winget.exe"
+        if (Test-Path $waWinget) { $winget = $waWinget }
+    }
+    if (-not $winget) { return $false }
+
+    $pkgId = "Python.Python.$Version"
+    Write-AppLog "公式署名済み Python $Version ($pkgId) を winget で導入しています..." "INFO"
+    try {
+        $pinfo = [System.Diagnostics.ProcessStartInfo]::new()
+        $pinfo.FileName = $winget
+        $pinfo.Arguments = "install --id $pkgId -e --source winget --accept-package-agreements --accept-source-agreements --silent"
+        $pinfo.WorkingDirectory = $ProjectRoot
+        $pinfo.RedirectStandardOutput = $true
+        $pinfo.RedirectStandardError = $true
+        $pinfo.UseShellExecute = $false
+        $pinfo.CreateNoWindow = $true
+        $proc = [System.Diagnostics.Process]::Start($pinfo)
+        Wait-ProcessWithUiPump -Proc $proc -LogPrefix "[Python導入]"
+        return ($proc.ExitCode -eq 0)
+    } catch {
+        Write-AppLog "winget による Python $Version 導入に失敗しました: $($_.Exception.Message)" "WARN"
+        return $false
+    }
+}
+
+function New-PythonVirtualEnv {
+    param(
+        [string]$VenvDirName,
+        [string[]]$TargetVersions,
+        [string]$WingetVersion,
+        [string]$LogPrefix = "[venv作成]",
+        [string]$UvCmd = $null
+    )
+
+    $venvDir = Join-Path $ProjectRoot $VenvDirName
+    $venvPython = Join-Path $venvDir "Scripts\python.exe"
+    $sacActive = Test-IsSmartAppControlActive
+
+    # 1. 公式システム Python を探索 (SAC 有効時は署名 Valid 必須)
+    $sysPy = Find-SystemPythonForVenv -TargetVersions $TargetVersions -RequireSigned $sacActive
+    if (-not $sysPy) {
+        Write-AppLog "対象バージョンの公式 Python ($($TargetVersions -join ' / ')) が見つからないため、公式インストーラでの導入を試みます..." "INFO"
+        Install-OfficialPythonWithWinget -Version $WingetVersion | Out-Null
+        $sysPy = Find-SystemPythonForVenv -TargetVersions $TargetVersions -RequireSigned $sacActive
+    }
+
+    if ($sysPy) {
+        Write-AppLog "公式システム Python を使用します: $sysPy" "INFO"
+        $created = $false
+        if ($UvCmd) {
+            try {
+                $pinfoVenv = [System.Diagnostics.ProcessStartInfo]::new()
+                $pinfoVenv.FileName = $UvCmd
+                # --python に公式システム Python の実パスを明示し、環境変数でも uv 独自バイナリ取得を完全禁止
+                $pinfoVenv.Arguments = "venv `"$VenvDirName`" --python `"$sysPy`" --seed"
+                $pinfoVenv.WorkingDirectory = $ProjectRoot
+                $pinfoVenv.RedirectStandardOutput = $true
+                $pinfoVenv.RedirectStandardError = $true
+                $pinfoVenv.UseShellExecute = $false
+                $pinfoVenv.CreateNoWindow = $true
+                $pinfoVenv.Environment["UV_PYTHON_PREFERENCE"] = "only-system"
+                $pinfoVenv.Environment["UV_PYTHON_DOWNLOADS"] = "never"
+                $pinfoVenv.Environment["UV_NO_MANAGED_PYTHON"] = "1"
+                $procVenv = [System.Diagnostics.Process]::Start($pinfoVenv)
+                Wait-ProcessWithUiPump -Proc $procVenv -LogPrefix $LogPrefix
+                if ($procVenv.ExitCode -eq 0 -and (Test-Path $venvPython)) {
+                    $created = $true
+                }
+            } catch {
+                Write-AppLog "uv による venv 作成が制限されたため、公式 Python 標準 venv に切り替えます: $_" "WARN"
+            }
+        }
+        if (-not $created) {
+            try {
+                $pinfoSys = [System.Diagnostics.ProcessStartInfo]::new()
+                $pinfoSys.FileName = $sysPy
+                $pinfoSys.Arguments = "-B -m venv `"$VenvDirName`""
+                $pinfoSys.WorkingDirectory = $ProjectRoot
+                $pinfoSys.RedirectStandardOutput = $true
+                $pinfoSys.RedirectStandardError = $true
+                $pinfoSys.UseShellExecute = $false
+                $pinfoSys.CreateNoWindow = $true
+                $pinfoSys.Environment["PYTHONDONTWRITEBYTECODE"] = "1"
+                $procSys = [System.Diagnostics.Process]::Start($pinfoSys)
+                Wait-ProcessWithUiPump -Proc $procSys -LogPrefix $LogPrefix
+                if ($procSys.ExitCode -eq 0 -and (Test-Path $venvPython)) {
+                    $created = $true
+                }
+            } catch {
+                Write-AppLog "Python による venv 作成エラー: $_" "ERROR"
+            }
+        }
+        return $created
+    }
+
+    # 2. 公式 Python が見つからない場合:
+    # SAC 有効時は無署名 python-build-standalone を使うとブロックされるため明示停止して案内する
+    if ($sacActive) {
+        Write-AppLog "Smart App Control (SAC) 有効環境では公式署名済み Python ($($TargetVersions -join ' / ')) が必要です。" "ERROR"
+        Write-AppLog "無署名 Python (python-build-standalone) の自動ダウンロードはブロック回避のため無効化しました。" "ERROR"
+        Write-AppLog "https://www.python.org/downloads/ または Microsoft Store から公式 Python $WingetVersion をインストール後に再試行してください。" "ERROR"
+        return $false
+    }
+
+    # SAC 無効環境のみ uv 管理 Python へのフォールバックを許容
+    if ($UvCmd) {
+        Write-AppLog "システムに Python $WingetVersion が見つからないため、uv 管理 Python で作成します (SAC 無効環境)。" "WARN"
+        try {
+            $pinfoVenv = [System.Diagnostics.ProcessStartInfo]::new()
+            $pinfoVenv.FileName = $UvCmd
+            $pinfoVenv.Arguments = "venv `"$VenvDirName`" --python $WingetVersion --seed"
+            $pinfoVenv.WorkingDirectory = $ProjectRoot
+            $pinfoVenv.RedirectStandardOutput = $true
+            $pinfoVenv.RedirectStandardError = $true
+            $pinfoVenv.UseShellExecute = $false
+            $pinfoVenv.CreateNoWindow = $true
+            $procVenv = [System.Diagnostics.Process]::Start($pinfoVenv)
+            Wait-ProcessWithUiPump -Proc $procVenv -LogPrefix $LogPrefix
+            if ($procVenv.ExitCode -eq 0 -and (Test-Path $venvPython)) {
+                return $true
+            }
+        } catch {}
+    }
+
+    return $false
+}
+
 # GPU (CUDA) 仮想環境 (.venv_gpu) 自動構築 & 自己修復関数
 function Invoke-SetupGpuVenv {
     param([bool]$ForceRecreate = $false)
@@ -2327,12 +2766,18 @@ function Invoke-SetupGpuVenv {
     $gpuVenvDir = Join-Path $ProjectRoot ".venv_gpu"
     $gpuVenvPython = Join-Path $gpuVenvDir "Scripts\python.exe"
 
-    # 既存の .venv_gpu の Python バージョンを確認し、PyTorch CUDA 未対応 (3.14 等) の場合は自動クリーンアップ
+    # 既存の .venv_gpu の署名 (SAC 有効時) および Python バージョンを確認し、不適合な場合は自動クリーンアップ
+    # ※ 新規・再構築は Python 3.14 に統一するが、導入済みの健全な 3.12 / 3.13 環境は数GBの再DLを強いずに温存し、3.11 以下のみ再構築する
     if (Test-Path $gpuVenvPython) {
-        $existingVer = (& $gpuVenvPython -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null)
-        if ($existingVer -and $existingVer -notin @("3.9", "3.10", "3.11", "3.12", "3.13")) {
-            Write-AppLog "⚠️ 既存の GPU 仮想環境 (.venv_gpu) は PyTorch CUDA 未対応バージョン (Python $existingVer) です。互換性のある Python 3.12 で再構築します。" "WARN"
+        if ((Test-IsSmartAppControlActive) -and -not (Test-IsTrustedSignedExecutable -FilePath $gpuVenvPython)) {
+            Write-AppLog "⚠️ 既存の GPU 仮想環境 (.venv_gpu) は未署名 Python ベースのため、Smart App Control 対応の公式 Python 3.14 で再構築します。" "WARN"
             $ForceRecreate = $true
+        } else {
+            $existingVer = Get-PythonExecutableVersion -PythonExe $gpuVenvPython
+            if ($existingVer -and ($existingVer -notin @("3.12", "3.13", "3.14"))) {
+                Write-AppLog "⚠️ 既存の GPU 仮想環境 (.venv_gpu) はサポート終了バージョン (Python $existingVer) です。統一環境の Python 3.14 で再構築します。" "WARN"
+                $ForceRecreate = $true
+            }
         }
     }
 
@@ -2348,53 +2793,8 @@ function Invoke-SetupGpuVenv {
     $uvCmd = Get-SafeUvCommand
 
     if ($ForceRecreate -or -not (Test-Path $gpuVenvPython)) {
-        Write-AppLog "GPU 仮想環境 (.venv_gpu) を作成しています (Python 3.12)..." "INFO"
-        $created = $false
-        if ($uvCmd) {
-            try {
-                $pinfoVenv = [System.Diagnostics.ProcessStartInfo]::new()
-                $pinfoVenv.FileName = $uvCmd
-                # PyTorch CUDA 12.8 に最も安定して対応する Python 3.12 を指定 (--seed で pip 同梱)
-                $pinfoVenv.Arguments = "venv .venv_gpu --python 3.12 --seed"
-                $pinfoVenv.WorkingDirectory = $ProjectRoot
-                $pinfoVenv.RedirectStandardOutput = $true
-                $pinfoVenv.RedirectStandardError = $true
-                $pinfoVenv.UseShellExecute = $false
-                $pinfoVenv.CreateNoWindow = $true
-                $procVenv = [System.Diagnostics.Process]::Start($pinfoVenv)
-                Wait-ProcessWithUiPump -Proc $procVenv -LogPrefix "[GPU-venv作成]"
-                if ($procVenv.ExitCode -eq 0 -and (Test-Path $gpuVenvPython)) {
-                    $created = $true
-                }
-            } catch {}
-        }
-        if (-not $created) {
-            # py ランチャーから 3.12 / 3.11 を優先探索
-            $targetPy = (py -3.12 -c "import sys; print(sys.executable)" 2>$null)
-            if (-not $targetPy) {
-                $targetPy = (py -3.11 -c "import sys; print(sys.executable)" 2>$null)
-            }
-            if (-not $targetPy) {
-                $targetPy = (where.exe python 2>$null | Select-Object -First 1)
-            }
-            if ($targetPy) {
-                try {
-                    $pinfoSys = [System.Diagnostics.ProcessStartInfo]::new()
-                    $pinfoSys.FileName = $targetPy
-                    $pinfoSys.Arguments = "-m venv .venv_gpu"
-                    $pinfoSys.WorkingDirectory = $ProjectRoot
-                    $pinfoSys.RedirectStandardOutput = $true
-                    $pinfoSys.RedirectStandardError = $true
-                    $pinfoSys.UseShellExecute = $false
-                    $pinfoSys.CreateNoWindow = $true
-                    $procSys = [System.Diagnostics.Process]::Start($pinfoSys)
-                    Wait-ProcessWithUiPump -Proc $procSys -LogPrefix "[GPU-venv作成]"
-                    if ($procSys.ExitCode -eq 0 -and (Test-Path $gpuVenvPython)) {
-                        $created = $true
-                    }
-                } catch {}
-            }
-        }
+        Write-AppLog "GPU 仮想環境 (.venv_gpu) を作成しています (Python 3.14)..." "INFO"
+        $created = New-PythonVirtualEnv -VenvDirName ".venv_gpu" -TargetVersions @("3.14") -WingetVersion "3.14" -LogPrefix "[GPU-venv作成]" -UvCmd $uvCmd
         if (-not $created) {
             Write-AppLog "GPU 仮想環境 (.venv_gpu) の作成に失敗しました。" "ERROR"
             Set-UIState "GPU環境構築失敗" $brushRed $true $false
@@ -2430,6 +2830,7 @@ function Invoke-SetupGpuVenv {
     if (-not $installed -and (Test-Path $gpuVenvPython)) {
         try {
             Unblock-File -LiteralPath $gpuVenvPython -ErrorAction SilentlyContinue
+            Ensure-PipAvailableInVenv -PythonExe $gpuVenvPython | Out-Null
             $pinfoPipSys = [System.Diagnostics.ProcessStartInfo]::new()
             $pinfoPipSys.FileName = $gpuVenvPython
             $pinfoPipSys.Arguments = "-B -m pip install --extra-index-url https://download.pytorch.org/whl/cu128 -r `"$reqFile`""
@@ -2456,6 +2857,7 @@ function Invoke-SetupGpuVenv {
     try {
         & "$gpuVenvPython" -B "$checkScript" --write-marker 2>$null | Out-Null
     } catch {}
+    Write-GpuRequirementsHashMarker
 
     Unblock-ProjectFiles -RootDir $ProjectRoot
     Protect-VenvFiles -IncludeGpu
@@ -2470,6 +2872,20 @@ function Invoke-SetupGpuVenv {
 function Ensure-GpuVenvReady {
     $diag = Test-GpuVenvHealth -Silent
     if ($diag.ready -eq $true) {
+        # 導入済みの正常な .venv_gpu に対しても requirements 更新時は再構築せず軽量パッケージのみ差分同期する
+        $curGpuHash = Get-GpuRequirementsHash
+        $gpuDir = Join-Path $ProjectRoot ".venv_gpu"
+        $gpuMarker = Join-Path $gpuDir ".hayamimi_gpu_req_hash"
+        if ($curGpuHash -and (Test-Path $gpuDir)) {
+            $savedGpuHash = $null
+            if (Test-Path $gpuMarker) {
+                try { $savedGpuHash = (Get-Content -LiteralPath $gpuMarker -Raw -Encoding UTF8 -ErrorAction SilentlyContinue).Trim() } catch {}
+            }
+            if ($savedGpuHash -ne $curGpuHash) {
+                Write-AppLog "【GPU環境同期】コード更新に伴う GPU 仮想環境 (.venv_gpu) の依存パッケージ差分を同期します..." "INFO"
+                Invoke-SetupGpuVenv -ForceRecreate $false | Out-Null
+            }
+        }
         return $true
     }
 
@@ -2483,11 +2899,13 @@ function Ensure-GpuVenvReady {
     } elseif ($diag.status -eq "incompatible_directml") {
         $msg = "⚠️ 旧バージョン (v2.0.0 以前) の DirectML 環境が残留しているため、最新の CUDA 環境に再構築（自己修復）が必要です。`r`n`r`n今すぐ自動再構築を実行しますか？"
     } elseif ($diag.status -eq "incompatible_python") {
-        $msg = "⚠️ GPU仮想環境の Python バージョンが PyTorch CUDA 未対応です。`r`n`r`n安定した Python 3.12 環境へ自動再構築しますか？"
+        $msg = "⚠️ GPU仮想環境の Python バージョンが旧構成です。`r`n`r`n統一環境の Python 3.14 へ自動再構築しますか？"
     } elseif ($diag.status -eq "incomplete") {
         $msg = "⚠️ GPU環境に不足パッケージが検出されました: $($diag.message)`r`n`r`n差分パッケージを高速インストール（約10〜30秒）して修復しますか？"
     } elseif ($diag.status -eq "outdated_torch") {
         $msg = "⚠️ $($diag.message)`r`n`r`nPyTorch を更新しますか？ (約 3GB のダウンロードが発生します)"
+    } elseif ($diag.status -eq "unsigned_sac") {
+        $msg = "⚠️ $($diag.message)`r`n`r`n今すぐ公式署名済み Python 3.14 環境へ自動再構築しますか？"
     } elseif ($diag.status -eq "no_cuda") {
         $msg = "⚠️ GPU環境で CUDA が利用できません: $($diag.message)`r`n`r`nCUDA 12.8 対応環境へ自動再構築しますか？"
     } else {
@@ -2496,7 +2914,7 @@ function Ensure-GpuVenvReady {
 
     $ans = Show-AppConfirm -Message $msg -Title $title
     if ($ans -eq [System.Windows.MessageBoxResult]::Yes) {
-        $force = ($diag.status -eq "incompatible_directml" -or $diag.status -eq "incompatible_python" -or $diag.status -eq "error" -or $diag.status -eq "no_cuda")
+        $force = ($diag.status -eq "incompatible_directml" -or $diag.status -eq "incompatible_python" -or $diag.status -eq "unsigned_sac" -or $diag.status -eq "error" -or $diag.status -eq "no_cuda")
         $setupRes = Invoke-SetupGpuVenv -ForceRecreate $force
         return $setupRes
     }
@@ -2517,7 +2935,8 @@ function Invoke-SetupPythonVenv {
     $localUvDir = Join-Path $ProjectRoot "tools\uv"
     $localUvExe = Join-Path $localUvDir "uv.exe"
 
-    if (-not $uvCmd -and -not $script:UvBlockedBySac) {
+    # SAC 有効環境では未署名 uv.exe のダウンロード自体をスキップし、ブロックポップアップを抑止する
+    if (-not $uvCmd -and -not $script:UvBlockedBySac -and -not (Test-IsSmartAppControlActive)) {
         Write-AppLog "高速パッケージツール (uv) を取得中 (GitHub Releases)..." "INFO"
         try {
             if (-not (Test-Path $localUvDir)) {
@@ -2553,11 +2972,26 @@ function Invoke-SetupPythonVenv {
         } catch {
             Write-AppLog "uv のダウンロードに失敗しました (標準 Python pip を使用します): $_" "WARN"
         }
+    } elseif (-not $uvCmd -and (Test-IsSmartAppControlActive)) {
+        Write-AppLog "Smart App Control 有効環境のため未署名 uv.exe の取得をスキップし、公式 Python (pip) を使用します。" "INFO"
     }
 
-    # 2. 仮想環境 .venv の作成
+    # 2. 仮想環境 .venv の作成 (公式署名済みシステム Python 3.14 を優先・無署名スタンドアロン取得を抑止)
     $venvDir = Join-Path $ProjectRoot ".venv"
     $venvPython = Join-Path $venvDir "Scripts\python.exe"
+
+    if (-not $ForceRecreate -and (Test-Path $venvPython)) {
+        if ((Test-IsSmartAppControlActive) -and -not (Test-IsTrustedSignedExecutable -FilePath $venvPython)) {
+            Write-AppLog "⚠️ 既存の仮想環境 (.venv) は未署名 Python ベースのため、Smart App Control 対応の公式 Python 3.14 で再構築します。" "WARN"
+            $ForceRecreate = $true
+        } else {
+            $existingCpuVer = Get-PythonExecutableVersion -PythonExe $venvPython
+            if ($existingCpuVer -and $existingCpuVer -ne "3.14") {
+                Write-AppLog "⚠️ 既存の仮想環境 (.venv) は旧バージョン (Python $existingCpuVer) のため、Python 3.14 で再構築します。" "WARN"
+                $ForceRecreate = $true
+            }
+        }
+    }
 
     if ($ForceRecreate -and (Test-Path $venvDir)) {
         Write-AppLog "既存の仮想環境 (.venv) をクリーンアップしています..." "INFO"
@@ -2570,57 +3004,14 @@ function Invoke-SetupPythonVenv {
 
     if ($ForceRecreate -or -not (Test-Path $venvPython)) {
         Write-AppLog "Python 3.14 仮想環境 (.venv) を作成しています..." "INFO"
-        $venvCreated = $false
-        if ($uvCmd) {
-            try {
-                $pinfoVenv = [System.Diagnostics.ProcessStartInfo]::new()
-                $pinfoVenv.FileName = $uvCmd
-                $pinfoVenv.Arguments = "venv .venv --python 3.14"
-                $pinfoVenv.WorkingDirectory = $ProjectRoot
-                $pinfoVenv.RedirectStandardOutput = $true
-                $pinfoVenv.RedirectStandardError = $true
-                $pinfoVenv.UseShellExecute = $false
-                $pinfoVenv.CreateNoWindow = $true
-                $procVenv = [System.Diagnostics.Process]::Start($pinfoVenv)
-                Wait-ProcessWithUiPump -Proc $procVenv -LogPrefix "[venv作成]"
-                
-                if ($procVenv.ExitCode -eq 0 -and (Test-Path $venvPython)) {
-                    Write-AppLog "✔ Python 3.14 仮想環境 (.venv) を作成しました。" "INFO"
-                    $venvCreated = $true
-                }
-            } catch {
-                Write-AppLog "uv による venv 作成がブロックされたため、標準 Python にフォールバックします: $_" "WARN"
-                $uvCmd = $null
-            }
-        }
+        $venvCreated = New-PythonVirtualEnv -VenvDirName ".venv" -TargetVersions @("3.14") -WingetVersion "3.14" -LogPrefix "[venv作成]" -UvCmd $uvCmd
         if (-not $venvCreated) {
-            $sysPython = (where.exe python 2>$null | Select-Object -First 1)
-            if ($sysPython) {
-                try {
-                    $pinfoSys = [System.Diagnostics.ProcessStartInfo]::new()
-                    $pinfoSys.FileName = $sysPython
-                    $pinfoSys.Arguments = "-m venv .venv"
-                    $pinfoSys.WorkingDirectory = $ProjectRoot
-                    $pinfoSys.RedirectStandardOutput = $true
-                    $pinfoSys.RedirectStandardError = $true
-                    $pinfoSys.UseShellExecute = $false
-                    $pinfoSys.CreateNoWindow = $true
-                    $procSys = [System.Diagnostics.Process]::Start($pinfoSys)
-                    Wait-ProcessWithUiPump -Proc $procSys -LogPrefix "[venv作成]"
-                    if ($procSys.ExitCode -eq 0 -and (Test-Path $venvPython)) {
-                        $venvCreated = $true
-                    }
-                } catch {
-                    Write-AppLog "Python による venv 作成エラー: $_" "ERROR"
-                }
-            }
-            if (-not $venvCreated) {
-                Write-AppLog "Python 仮想環境の作成に失敗しました。" "ERROR"
-                Set-UIState "セットアップ失敗" $brushRed $true $false
-                if ($initProgressBar) { $initProgressBar.Visibility = "Collapsed" }
-                return $false
-            }
+            Write-AppLog "Python 仮想環境の作成に失敗しました。" "ERROR"
+            Set-UIState "セットアップ失敗" $brushRed $true $false
+            if ($initProgressBar) { $initProgressBar.Visibility = "Collapsed" }
+            return $false
         }
+        Write-AppLog "✔ Python 3.14 仮想環境 (.venv) を作成しました。" "INFO"
     }
 
     # 3. 依存ライブラリのインストール
@@ -2650,6 +3041,7 @@ function Invoke-SetupPythonVenv {
         if (-not $installSuccess -and (Test-Path $venvPython)) {
             try {
                 Unblock-File -LiteralPath $venvPython -ErrorAction SilentlyContinue
+                Ensure-PipAvailableInVenv -PythonExe $venvPython | Out-Null
                 $pinfoPipSys = [System.Diagnostics.ProcessStartInfo]::new()
                 $pinfoPipSys.FileName = $venvPython
                 $pinfoPipSys.Arguments = "-B -m pip install -r `"$reqFile`""
@@ -3701,15 +4093,14 @@ function Invoke-UpdateAppCode {
             $copyErrors = [System.Collections.Generic.List[string]]::new()
             try {
                 Write-AppLog "GitHub から最新ソースコードアーカイブを取得中..." "INFO"
-                [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
                 $zipUrl = "https://github.com/Maximilian2022/hayamimi-live/archive/refs/heads/main.zip"
 
                 try {
-                    Invoke-WebRequest -Uri $zipUrl -OutFile $tempZip -UseBasicParsing -TimeoutSec 30
+                    Invoke-WebRequest -Uri $zipUrl -OutFile $tempZip -TimeoutSec 30
                 } catch {
                     Write-AppLog "[更新] ZIP 取得失敗 ($zipUrl): $($_.Exception.Message) → 旧 URL を試します" "WARN"
                     $fallbackZipUrl = "https://github.com/Maximilian2022/hayamimi/archive/refs/heads/main.zip"
-                    Invoke-WebRequest -Uri $fallbackZipUrl -OutFile $tempZip -UseBasicParsing -TimeoutSec 30
+                    Invoke-WebRequest -Uri $fallbackZipUrl -OutFile $tempZip -TimeoutSec 30
                 }
                 Write-AppLog "[更新] ZIP 取得完了: $((Get-Item $tempZip).Length) bytes" "INFO"
                 # 展開前に ZIP ファイル自体の Mark of the Web (Zone.Identifier) を除去し、スマートアプリコントロールの誤検知を防止
@@ -3717,14 +4108,14 @@ function Invoke-UpdateAppCode {
                 Expand-Archive -Path $tempZip -DestinationPath $tempExtract -Force
                 Write-AppLog "[更新] ZIP 展開完了: $tempExtract" "INFO"
 
-                # 展開フォルダ内のファイルをプロジェクトルートに安全上書き (.venv / models / logs / config / scratch / .git は保持)
+                # 展開フォルダ内のファイルをプロジェクトルートに安全上書き (.venv / .venv_gpu / models / logs / config / scratch / .git は保持)
                 $innerDir = Get-ChildItem -Path $tempExtract -Directory | Select-Object -First 1
                 if (-not $innerDir) {
                     Write-AppLog "[更新] ZIP の中身が空です" "ERROR"
                 } else {
                     $copied = 0
                     $srcFiles = Get-ChildItem -Path $innerDir.FullName -Recurse -File
-                    $skipTop = @(".git", ".venv", "models", "logs", "config", "profiles", "scratch", "config_backups")
+                    $skipTop = @(".git", ".venv", ".venv_gpu", "models", "logs", "config", "profiles", "scratch", "config_backups")
                     foreach ($f in $srcFiles) {
                         $rel = $f.FullName.Substring($innerDir.FullName.Length).TrimStart('\', '/')
                         $top = ($rel -split '[\\/]')[0]
@@ -4753,13 +5144,16 @@ if ($btnOpenProfile) {
 }
 if ($btnOpenOverlay) {
     $btnOpenOverlay.Add_Click({
-        $overlayBat = Join-Path $PSScriptRoot "..\desktop_overlay.bat"
-        if (Test-Path $overlayBat) {
-            Start-Process -FilePath $overlayBat
+        $overlayScript = Join-Path $ScriptDir "desktop_overlay.ps1"
+        if (Test-Path -LiteralPath $overlayScript) {
+            $pwshBin = $null
+            try { $pwshBin = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName } catch {}
+            if (-not $pwshBin -or -not (Test-Path -LiteralPath $pwshBin)) { $pwshBin = "pwsh.exe" }
+            Start-Process -FilePath $pwshBin -ArgumentList "-STA -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$overlayScript`""
+            Write-AppLog "🖥️ デスクトップ透過字幕オーバーレイを起動しました。" "INFO"
         } else {
-            Start-Process -FilePath $PS_CMD -ArgumentList "-STA -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PSScriptRoot\desktop_overlay.ps1`""
+            Write-AppLog "desktop_overlay.ps1 が見つかりません: $overlayScript" "WARN"
         }
-        Write-AppLog "🖥️ デスクトップ透過字幕オーバーレイを起動しました。" "INFO"
     })
 }
 $btnClearLog.Add_Click({ $logTextBox.Clear() })
@@ -5044,13 +5438,7 @@ function Optimize-DesktopShortcut {
         $targetVbs = Join-Path $ProjectRoot "start.vbs"
 
         # SAC 判定 (1: Enforced, 2: Evaluation)
-        $isSac = $false
-        try {
-            $key = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy" -Name "VerifiedAndReputablePolicyState" -ErrorAction SilentlyContinue
-            if ($key -and ($key.VerifiedAndReputablePolicyState -eq 1 -or $key.VerifiedAndReputablePolicyState -eq 2)) {
-                $isSac = $true
-            }
-        } catch {}
+        $isSac = Test-IsSmartAppControlActive
 
         if ($isSac) {
             # SAC ON なのに start.vbs を指している場合 -> start.bat に自動修復 (SACブロック回避)
@@ -5062,17 +5450,29 @@ function Optimize-DesktopShortcut {
                 Write-AppLog "Smart App Control (SAC) 有効環境を検出: デスクトップショートカットを start.bat に自動最適化しました。" "INFO"
             }
         } else {
-            # SAC OFF 環境: start.vbs が無ければ自動配備し、VBS起動ショートカットを維持
-            if (-not (Test-Path $targetVbs)) {
+            # SAC OFF 環境: start.vbs が無いか旧版 (scriptblock 残存 / MSIX pwsh 非対応) なら最新の PS7 専用版へ自動更新
+            $needWriteVbs = -not (Test-Path $targetVbs)
+            if (-not $needWriteVbs) {
+                try {
+                    $existingVbs = Get-Content -LiteralPath $targetVbs -Raw -ErrorAction SilentlyContinue
+                    if ($existingVbs -match "scriptblock" -or $existingVbs -notmatch "WindowsApps\\pwsh\.exe") {
+                        $needWriteVbs = $true
+                    }
+                } catch {}
+            }
+            if ($needWriteVbs) {
                 $vbsCode = @"
 Set WshShell = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 scriptDir = fso.GetParentFolderName(WScript.ScriptFullName)
 WshShell.CurrentDirectory = scriptDir
 
-psCmd = "powershell"
+psCmd = ""
+localAppData = WshShell.ExpandEnvironmentStrings("%LOCALAPPDATA%")
 If fso.FileExists("C:\Program Files\PowerShell\7\pwsh.exe") Then
     psCmd = """C:\Program Files\PowerShell\7\pwsh.exe"""
+ElseIf fso.FileExists(localAppData & "\Microsoft\WindowsApps\pwsh.exe") Then
+    psCmd = """" & localAppData & "\Microsoft\WindowsApps\pwsh.exe"""
 ElseIf fso.FileExists("C:\Program Files (x86)\PowerShell\7\pwsh.exe") Then
     psCmd = """C:\Program Files (x86)\PowerShell\7\pwsh.exe"""
 Else
@@ -5082,29 +5482,25 @@ Else
     For Each p In paths
         If p <> "" And fso.FolderExists(p) Then
             If fso.FileExists(fso.BuildPath(p, "pwsh.exe")) Then
-                psCmd = "pwsh"
+                psCmd = """" & fso.BuildPath(p, "pwsh.exe") & """"
                 Exit For
             End If
         End If
     Next
 End If
 
-targetScript = scriptDir & "\scripts\launcher_gui.ps1"
-If Not fso.FileExists(targetScript) Then
-    If fso.FileExists(scriptDir & "\scripts\scripts\launcher_gui.ps1") Then
-        targetScript = scriptDir & "\scripts\scripts\launcher_gui.ps1"
-    Else
-        MsgBox "Cannot find launcher script:" & vbCrLf & _
-               scriptDir & "\scripts\launcher_gui.ps1", 16, "hayamimi launcher error"
-        WScript.Quit 1
-    End If
+If psCmd = "" Then
+    WshShell.Run """" & scriptDir & "\start.bat""", 7, False
+    WScript.Quit 0
 End If
 
-If InStr(psCmd, "pwsh") > 0 Then
-    cmdLine = psCmd & " -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & targetScript & """"
-Else
-    cmdLine = psCmd & " -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command ""$s=[System.IO.File]::ReadAllText('" & Replace(targetScript, "'", "''") & "',[System.Text.Encoding]::UTF8);&([scriptblock]::Create($s))"""
+targetScript = scriptDir & "\scripts\launcher_gui.ps1"
+If Not fso.FileExists(targetScript) Then
+    MsgBox "Cannot find launcher script:" & vbCrLf & targetScript, 16, "hayamimi launcher error"
+    WScript.Quit 1
 End If
+
+cmdLine = psCmd & " -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & targetScript & """"
 
 On Error Resume Next
 WshShell.Run cmdLine, 0, False
@@ -5127,6 +5523,7 @@ $updateCheckTimer.Interval = [TimeSpan]::FromMilliseconds(1200)
 $updateCheckTimer.Add_Tick({
     $updateCheckTimer.Stop()
     try {
+        Update-GitOriginIfNeeded
         Write-EnvDiagnostics
         Test-AppUpdate -PromptUser -AutoCheck
     } catch {
@@ -5185,38 +5582,61 @@ $depCheckTimer.Interval = [TimeSpan]::FromMilliseconds(600)
 $depCheckTimer.Add_Tick({
     $depCheckTimer.Stop()
     try {
-        # 起動直後にスクリプト・実行ファイル群の Zone.Identifier (Mark of the Web) を安全解除
+        # 起動直後にスクリプト・実行ファイル群の Zone.Identifier (Mark of the Web) を安全解除 (1回に集約)
         Unblock-ProjectFiles -RootDir $ProjectRoot
 
         if ($script:CurrentEngineMode -eq "Venv" -and -not $script:IsRepairingVenv) {
-            $venvPython = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
-            if (Test-Path $venvPython) {
-                # 必須依存モジュール (imageio_ffmpeg / huggingface_hub / httpx) の有無をクイックチェック
-                $pinfoCheck = [System.Diagnostics.ProcessStartInfo]::new()
-                $pinfoCheck.FileName = $venvPython
-                $pinfoCheck.Arguments = "-B -c `"import imageio_ffmpeg, huggingface_hub, httpx`""
-                $pinfoCheck.CreateNoWindow = $true
-                $pinfoCheck.UseShellExecute = $false
-                $procCheck = [System.Diagnostics.Process]::Start($pinfoCheck)
-                $procCheck.WaitForExit(3000) | Out-Null
-                if ($procCheck.HasExited -and $procCheck.ExitCode -ne 0) {
-                    $reqFile = Join-Path $ProjectRoot "requirements.txt"
-                    Write-AppLog "未適用または欠損した依存パッケージ (imageio-ffmpeg / httpx 等) を検出しました。仮想環境を同期中..." "INFO"
-                    # スマートアプリコントロール (SAC) による未署名 uv.exe ブロック警告を回避するため、
-                    # 既に起動確認済みの公式 Python (pip) を直接使用してバックグラウンド導入する
-                    $pinfoInstall = [System.Diagnostics.ProcessStartInfo]::new()
-                    $pinfoInstall.FileName = $venvPython
-                    if (Test-Path $reqFile) {
-                        $pinfoInstall.Arguments = "-B -m pip install -r `"$reqFile`""
-                    } else {
-                        $pinfoInstall.Arguments = "-B -m pip install imageio-ffmpeg>=0.5.1 httpx huggingface_hub"
+            $venvDir = Join-Path $ProjectRoot ".venv"
+            $venvPython = Join-Path $venvDir "Scripts\python.exe"
+            if ((Test-Path $venvPython) -and (-not (Test-IsSmartAppControlActive) -or (Test-IsTrustedSignedExecutable -FilePath $venvPython))) {
+                # 既に requirements.txt ハッシュマーカーが一致している健全環境では毎起動の Python 子プロセス生成を省略
+                $curHash = Get-RequirementsHash
+                $markerPath = Join-Path $venvDir ".hayamimi_req_hash"
+                $hashMatched = $false
+                if ($curHash -and (Test-Path $markerPath)) {
+                    try {
+                        $saved = (Get-Content -LiteralPath $markerPath -Raw -Encoding UTF8 -ErrorAction SilentlyContinue).Trim()
+                        if ($saved -eq $curHash) { $hashMatched = $true }
+                    } catch {}
+                }
+                if (-not $hashMatched) {
+                    $pinfoCheck = [System.Diagnostics.ProcessStartInfo]::new()
+                    $pinfoCheck.FileName = $venvPython
+                    $pinfoCheck.Arguments = "-B -c `"import imageio_ffmpeg, huggingface_hub, httpx`""
+                    $pinfoCheck.CreateNoWindow = $true
+                    $pinfoCheck.UseShellExecute = $false
+                    $procCheck = [System.Diagnostics.Process]::Start($pinfoCheck)
+                    $procCheck.WaitForExit(3000) | Out-Null
+                    if ($procCheck.HasExited -and $procCheck.ExitCode -ne 0) {
+                        $reqFile = Join-Path $ProjectRoot "requirements.txt"
+                        Write-AppLog "未適用または欠損した依存パッケージ (imageio-ffmpeg / httpx 等) を検出しました。仮想環境を同期中..." "INFO"
+                        $uvCmd = Get-SafeUvCommand
+                        $pinfoInstall = [System.Diagnostics.ProcessStartInfo]::new()
+                        if ($uvCmd) {
+                            $pinfoInstall.FileName = $uvCmd
+                            if (Test-Path $reqFile) {
+                                $pinfoInstall.Arguments = "pip install -r `"$reqFile`" --python `"$venvPython`""
+                            } else {
+                                $pinfoInstall.Arguments = "pip install imageio-ffmpeg>=0.5.1 httpx huggingface_hub --python `"$venvPython`""
+                            }
+                        } else {
+                            Ensure-PipAvailableInVenv -PythonExe $venvPython | Out-Null
+                            $pinfoInstall.FileName = $venvPython
+                            if (Test-Path $reqFile) {
+                                $pinfoInstall.Arguments = "-B -m pip install -r `"$reqFile`""
+                            } else {
+                                $pinfoInstall.Arguments = "-B -m pip install imageio-ffmpeg>=0.5.1 httpx huggingface_hub"
+                            }
+                        }
+                        $pinfoInstall.WorkingDirectory = $ProjectRoot
+                        $pinfoInstall.CreateNoWindow = $true
+                        $pinfoInstall.UseShellExecute = $false
+                        $pinfoInstall.Environment["PYTHONDONTWRITEBYTECODE"] = "1"
+                        $script:ProcDepInstall = [System.Diagnostics.Process]::Start($pinfoInstall)
+                        $depInstallWatchTimer.Start()
                     }
-                    $pinfoInstall.WorkingDirectory = $ProjectRoot
-                    $pinfoInstall.CreateNoWindow = $true
-                    $pinfoInstall.UseShellExecute = $false
-                    $pinfoInstall.Environment["PYTHONDONTWRITEBYTECODE"] = "1"
-                    $script:ProcDepInstall = [System.Diagnostics.Process]::Start($pinfoInstall)
-                    $depInstallWatchTimer.Start()
+                    # ※ ここで Write-RequirementsHashMarker を書くと、requirements.txt のバージョン更新が
+                    #    Ensure-PythonVenvUpToDate でスキップされるため、完全同期完了後のみマーカーを更新する
                 }
             }
         }

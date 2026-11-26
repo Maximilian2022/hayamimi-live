@@ -29,7 +29,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.14"
       # Same versions as requirements.txt, limited to what the standard tests load.
       - run: >
           pip install numpy==2.4.6 onnxruntime==1.31.1 ctranslate2==4.8.1

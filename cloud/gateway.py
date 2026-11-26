@@ -510,6 +510,18 @@ async def set_gemini_key(request: Request):
     return {"ok": True, "is_configured": bool(key)}
 
 
+def _classify_gemini_test_error(exc: Exception) -> str:
+    """例外から内部情報を一切含まないクライアント向け定型エラーメッセージを返す"""
+    detail = f"{type(exc).__name__} {exc}".upper()
+    if any(k in detail for k in ("API_KEY_INVALID", "INVALID API KEY", "UNAUTHENTICATED", "PERMISSION_DENIED", "401", "403")):
+        return "接続テスト失敗: API キーが無効か、利用権限がありません。"
+    if any(k in detail for k in ("RESOURCE_EXHAUSTED", "QUOTA", "429")):
+        return "接続テスト失敗: Gemini API の利用上限（クォータ）に達しています。"
+    if any(k in detail for k in ("TIMEOUT", "TIMED OUT", "CONNECTERROR")):
+        return "接続テスト失敗: Gemini API サーバーへの通信がタイムアウトしました。"
+    return "接続テスト失敗: Gemini API サーバーとの通信に失敗しました。キーと通信環境を確認してください。"
+
+
 @app.post("/api/gemini-key/test")
 async def test_gemini_key(request: Request):
     user = get_current_user(request)
@@ -523,13 +535,14 @@ async def test_gemini_key(request: Request):
         from google import genai
         client = genai.Client(api_key=key)
         # 接続確認: gemini-2.5-flash / gemini-2.0-flash / gemini-1.5-flash 等で簡易テキスト生成
-        resp = client.models.generate_content(
+        client.models.generate_content(
             model="gemini-2.5-flash",
             contents="ping",
         )
         return {"ok": True, "message": "✔ Gemini API キーの接続確認に成功しました！"}
     except Exception as e:
-        return {"ok": False, "error": f"接続テスト失敗: {e}"}
+        logger.warning("Gemini API key test failed for user %s (%s): %s", user["id"], type(e).__name__, e)
+        return {"ok": False, "error": _classify_gemini_test_error(e)}
 
 
 @app.post("/api/youtube-grow")

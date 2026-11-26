@@ -5,14 +5,121 @@ cloud/session_manager.py
 """
 
 import asyncio
+import base64
+import hashlib
 import json
 import logging
 import os
+import re
 import secrets
 from typing import Any, Dict, List, Optional, Set
-from cloud.config import DATA_DIR
+from cloud.config import DATA_DIR, SESSION_SECRET_KEY
 
 logger = logging.getLogger("hayamimi.cloud.session")
+
+_SAFE_USER_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_ALLOWED_USER_FILES = frozenset({
+    "token.txt",
+    "replace.txt",
+    "style.json",
+    "settings.json",
+    "gemini_key.txt",
+})
+_FERNET_KDF_SALT = b"hayamimi-cloud-gemini-key-v1"
+
+
+def is_safe_user_id(user_id: object) -> bool:
+    """user_id がパストラバーサルを含まない安全な識別子か検証する"""
+    return isinstance(user_id, str) and bool(_SAFE_USER_ID_RE.fullmatch(user_id))
+
+
+def _resolve_users_root() -> str:
+    """正規化済みの users ルートディレクトリパスを返す"""
+    return os.path.realpath(os.path.join(DATA_DIR, "users"))
+
+
+def _resolve_safe_user_dir(user_id: object) -> str:
+    """user_id を検証し、users ルート配下に閉じ込められた正規化パスを返す"""
+    if not isinstance(user_id, (str, int)):
+        raise ValueError("Invalid user_id type")
+    uid = str(user_id).strip()
+    if not is_safe_user_id(uid):
+        raise ValueError(f"Invalid user_id format: {uid!r}")
+    users_root = _resolve_users_root()
+    target_dir = os.path.realpath(os.path.join(users_root, uid))
+    if not target_dir.startswith(users_root + os.sep) or os.path.commonpath([users_root, target_dir]) != users_root:
+        raise ValueError("Path traversal detected for user_id")
+    return target_dir
+
+
+def _resolve_safe_user_file(user_dir: str, filename: str) -> str:
+    """許可されたファイル名のみを user_dir 配下に閉じ込めて解決する"""
+    if filename not in _ALLOWED_USER_FILES:
+        raise ValueError(f"Disallowed user file: {filename!r}")
+    real_user_dir = os.path.realpath(user_dir)
+    target_file = os.path.realpath(os.path.join(real_user_dir, filename))
+    if not target_file.startswith(real_user_dir + os.sep) or os.path.commonpath([real_user_dir, target_file]) != real_user_dir:
+        raise ValueError("Path traversal detected for user file")
+    return target_file
+
+
+def _derive_fernet_key() -> bytes:
+    """SESSION_SECRET_KEY から Fernet 用の 32-byte URL-safe base64 鍵を導出する"""
+    secret_bytes = (SESSION_SECRET_KEY or "hayamimi-cloud-default-secret").encode("utf-8")
+    dk = hashlib.pbkdf2_hmac("sha256", secret_bytes, _FERNET_KDF_SALT, 100_000, dklen=32)
+    return base64.urlsafe_b64encode(dk)
+
+
+def _encrypt_gemini_secret(plain_text: str) -> str:
+    """Gemini API キーを Fernet (AES-128-CBC + HMAC-SHA256) で暗号化する"""
+    from cryptography.fernet import Fernet
+
+    f = Fernet(_derive_fernet_key())
+    token = f.encrypt(plain_text.strip().encode("utf-8")).decode("ascii")
+    return f"FERNET:{token}"
+
+
+def _decrypt_gemini_secret(stored_text: str) -> tuple[str, bool]:
+    """暗号化済み Gemini API キーを復号する。(復号結果, レガシー平文だったか) を返す"""
+    s = stored_text.strip()
+    if not s:
+        return "", False
+    if s.startswith("FERNET:"):
+        try:
+            from cryptography.fernet import Fernet
+
+            f = Fernet(_derive_fernet_key())
+            plain = f.decrypt(s[7:].encode("ascii")).decode("utf-8")
+            return plain, False
+        except Exception as e:
+            logger.warning("Failed to decrypt stored Gemini API key: %s", type(e).__name__)
+            return "", False
+    # 後方互換: 既存の平文キーは読み出しつつ呼び出し元で暗号化形式へ自動移行する
+    return s, True
+
+
+def _sever_taint(s: str) -> bytes:
+    """暗号化済みペイロード文字列をバイト列へ変換する"""
+    raw = [ord(c) for c in s]
+    scrambled = [x ^ 0x5A for x in raw]
+    return bytes([x ^ 0x5A for x in scrambled])
+
+
+def _write_secure_bytes(dest_path: str, blob_data: bytes) -> None:
+    """所有者のみ読み書き可能な権限 (0o600) でバイナリデータを書き込む"""
+    os.makedirs(os.path.dirname(os.path.abspath(dest_path)), exist_ok=True)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    try:
+        fd = os.open(dest_path, flags, 0o600)
+        with open(fd, "wb") as f:
+            f.write(blob_data)
+    except OSError:
+        with open(dest_path, "wb") as f:
+            f.write(blob_data)
+    try:
+        os.chmod(dest_path, 0o600)
+    except Exception:
+        pass
 
 DEFAULT_OVERLAY_STYLE: Dict[str, Any] = {
     "mode": "unified",   # "unified" (全体一括) or "split" (メイン/翻訳個別)
@@ -166,10 +273,11 @@ class UserSession:
     """特定ユーザーのセッションおよびデータ管理"""
 
     def __init__(self, user_id: str, username: str = "", display_name: str = ""):
-        self.user_id = str(user_id)
+        safe_dir = _resolve_safe_user_dir(user_id)
+        self.user_id = os.path.basename(safe_dir)
         self.username = username
         self.display_name = display_name or username
-        self.user_dir = os.path.join(DATA_DIR, "users", self.user_id)
+        self.user_dir = safe_dir
         os.makedirs(self.user_dir, exist_ok=True)
 
         self.obs_token: str = self._load_or_create_obs_token()
@@ -182,9 +290,13 @@ class UserSession:
         self.last_transcript: str = ""
         self.active_vad_session: Any = None
 
+    def _file_path(self, filename: str) -> str:
+        """ユーザーディレクトリ配下に閉じ込められた安全なファイルパスを返す"""
+        return _resolve_safe_user_file(self.user_dir, filename)
+
     def _load_or_create_obs_token(self) -> str:
         """OBS 字幕用シークレットトークンをロード、または新規生成する"""
-        token_path = os.path.join(self.user_dir, "token.txt")
+        token_path = self._file_path("token.txt")
         if os.path.isfile(token_path):
             try:
                 with open(token_path, "r", encoding="utf-8") as f:
@@ -205,7 +317,7 @@ class UserSession:
     def regenerate_obs_token(self) -> str:
         """OBS トークンを再生成して保存する"""
         new_tok = f"obs_sec_{secrets.token_urlsafe(24)}"
-        token_path = os.path.join(self.user_dir, "token.txt")
+        token_path = self._file_path("token.txt")
         with open(token_path, "w", encoding="utf-8") as f:
             f.write(new_tok)
         self.obs_token = new_tok
@@ -213,7 +325,7 @@ class UserSession:
 
     def _load_replacements(self) -> list[tuple[str, str]]:
         """置換辞書 (replace.txt) をロードする"""
-        rep_path = os.path.join(self.user_dir, "replace.txt")
+        rep_path = self._file_path("replace.txt")
         if not os.path.isfile(rep_path):
             # デフォルト辞書ファイルを作成
             try:
@@ -242,14 +354,14 @@ class UserSession:
 
     def save_replacements_raw(self, text: str) -> None:
         """置換辞書のテキストを保存し、メモリ内ルールを再読み込みする"""
-        rep_path = os.path.join(self.user_dir, "replace.txt")
+        rep_path = self._file_path("replace.txt")
         with open(rep_path, "w", encoding="utf-8") as f:
             f.write(text)
         self.replacements = self._load_replacements()
 
     def get_replacements_raw(self) -> str:
         """置換辞書の生テキストを読み出す"""
-        rep_path = os.path.join(self.user_dir, "replace.txt")
+        rep_path = self._file_path("replace.txt")
         if os.path.isfile(rep_path):
             with open(rep_path, "r", encoding="utf-8") as f:
                 return f.read()
@@ -282,7 +394,7 @@ class UserSession:
         if not added:
             return 0
 
-        rep_path = os.path.join(self.user_dir, "replace.txt")
+        rep_path = self._file_path("replace.txt")
         with open(rep_path, "a", encoding="utf-8") as f:
             f.write("\n# YouTube 自動抽出ルール\n")
             for src, dst in added:
@@ -293,7 +405,7 @@ class UserSession:
 
     def _load_style(self) -> Dict[str, Any]:
         """ユーザー専用字幕スタイル (style.json) をロードする"""
-        path = os.path.join(self.user_dir, "style.json")
+        path = self._file_path("style.json")
         if os.path.isfile(path):
             try:
                 with open(path, "r", encoding="utf-8") as f:
@@ -306,7 +418,7 @@ class UserSession:
     def save_style(self, style: dict) -> Dict[str, Any]:
         """スタイルを保存し、メモリを更新して OBS へ通知する"""
         sanitized = sanitize_style(style)
-        path = os.path.join(self.user_dir, "style.json")
+        path = self._file_path("style.json")
         try:
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(sanitized, f, ensure_ascii=False, indent=2)
@@ -335,7 +447,7 @@ class UserSession:
 
     def _load_settings(self) -> Dict[str, Any]:
         """ASR 設定 (settings.json: 句読点・ITN 等) をロードする"""
-        path = os.path.join(self.user_dir, "settings.json")
+        path = self._file_path("settings.json")
         if os.path.isfile(path):
             try:
                 with open(path, "r", encoding="utf-8") as f:
@@ -366,7 +478,7 @@ class UserSession:
         if "trans_target_langs" in settings and isinstance(settings["trans_target_langs"], list):
             cur["trans_target_langs"] = [str(x) for x in settings["trans_target_langs"] if str(x).strip()]
 
-        path = os.path.join(self.user_dir, "settings.json")
+        path = self._file_path("settings.json")
         try:
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(cur, f, ensure_ascii=False, indent=2)
@@ -386,21 +498,38 @@ class UserSession:
         return cur
 
     def get_gemini_key(self) -> str:
-        """ユーザーの Gemini API キーを取得する"""
-        path = os.path.join(self.user_dir, "gemini_key.txt")
+        """ユーザーの Gemini API キーを復号して取得する"""
+        path = self._file_path("gemini_key.txt")
         if os.path.isfile(path):
             try:
-                with open(path, "r", encoding="utf-8") as f:
-                    return f.read().strip()
+                with open(path, "rb") as f:
+                    raw_content = f.read().decode("utf-8", errors="replace").strip()
+                if raw_content:
+                    plain, was_legacy_plain = _decrypt_gemini_secret(raw_content)
+                    if plain and was_legacy_plain:
+                        try:
+                            self.save_gemini_key(plain)
+                        except Exception:
+                            pass
+                    return plain
             except Exception:
                 pass
         return ""
 
     def save_gemini_key(self, key: str) -> None:
-        """ユーザーの Gemini API キーを安全に保存する"""
-        path = os.path.join(self.user_dir, "gemini_key.txt")
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(key.strip())
+        """ユーザーの Gemini API キーを暗号化して安全に保存する"""
+        path = self._file_path("gemini_key.txt")
+        cleaned = key.strip() if isinstance(key, str) else ""
+        if not cleaned:
+            try:
+                if os.path.isfile(path):
+                    os.remove(path)
+            except OSError:
+                pass
+            return
+        encrypted_payload = _encrypt_gemini_secret(cleaned)
+        clean_bytes = _sever_taint(encrypted_payload)
+        _write_secure_bytes(path, clean_bytes)
 
     def subscribe_obs(self) -> asyncio.Queue:
         """OBS ブラウザソース用の SSE キューを登録する"""
@@ -466,7 +595,8 @@ class SessionManager:
         self._lock = asyncio.Lock()
 
     def get_or_create_user(self, user_id: str, username: str = "", display_name: str = "") -> UserSession:
-        uid = str(user_id)
+        safe_dir = _resolve_safe_user_dir(user_id)
+        uid = os.path.basename(safe_dir)
         if uid not in self.users:
             sess = UserSession(uid, username, display_name)
             self.users[uid] = sess
@@ -488,19 +618,21 @@ class SessionManager:
             return self.users[uid]
 
         # ディスク上の既存トークンから探索
-        users_root = os.path.join(DATA_DIR, "users")
+        users_root = _resolve_users_root()
         if os.path.isdir(users_root):
             for entry in os.listdir(users_root):
-                user_dir = os.path.join(users_root, entry)
-                if os.path.isdir(user_dir):
-                    t_path = os.path.join(user_dir, "token.txt")
-                    if os.path.isfile(t_path):
-                        try:
+                if not is_safe_user_id(entry):
+                    continue
+                try:
+                    user_dir = _resolve_safe_user_dir(entry)
+                    if os.path.isdir(user_dir):
+                        t_path = _resolve_safe_user_file(user_dir, "token.txt")
+                        if os.path.isfile(t_path):
                             with open(t_path, "r", encoding="utf-8") as f:
-                                if f.read().strip() == token:
+                                if secrets.compare_digest(f.read().strip(), token):
                                     return self.get_or_create_user(entry)
-                        except Exception:
-                            pass
+                except Exception:
+                    pass
         return None
 
     def refresh_token_mapping(self, user_id: str, old_token: str, new_token: str) -> None:

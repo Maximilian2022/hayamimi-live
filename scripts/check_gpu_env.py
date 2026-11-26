@@ -219,13 +219,15 @@ def run_gpu_env_probe(force: bool = False) -> dict:
 
     installed_version = read_marker_version()
 
-    # 0. Python バージョン互換性チェック (PyTorch CUDA は 3.9〜3.13 のみ対応。3.14+ は wheel なし)
+    # 0. Python バージョン整合性チェック
+    # 新規構築・再構築は Python 3.14 に統一するが、導入済みの健全な 3.12 / 3.13 環境は
+    # 数GBの再ダウンロードを強いずに温存し、scipy>=1.18.1 非対応の 3.11 以下のみ再構築対象とする。
     py_ver = diag.get("python_major_minor", "")
-    if py_ver and (py_ver not in ["3.9", "3.10", "3.11", "3.12", "3.13"]):
+    if py_ver and (py_ver not in ["3.12", "3.13", "3.14"]):
         return {
             "status": "incompatible_python",
             "ready": False,
-            "message": f"GPU 仮想環境の Python バージョン ({py_ver}) は PyTorch CUDA 未対応です。Python 3.12 で再構築が必要です。",
+            "message": f"GPU 仮想環境の Python バージョン ({py_ver}) はサポート対象外です。Python 3.14 環境への再構築が必要です。",
             "diag": diag,
             "installed_version": installed_version,
             "current_version": CURRENT_GPU_ENV_VERSION,

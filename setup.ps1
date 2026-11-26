@@ -1,3 +1,47 @@
+# --- PowerShell 7 (pwsh.exe) 自動導入 & 移行トランポリン ---
+if ($PSVersionTable.PSVersion.Major -lt 7) {
+    $pwshExe = $null
+    foreach ($cand in @(
+        (where.exe pwsh.exe 2>$null | Select-Object -First 1),
+        "$env:ProgramFiles\PowerShell\7\pwsh.exe",
+        "$env:LOCALAPPDATA\Microsoft\WindowsApps\pwsh.exe",
+        "${env:ProgramFiles(x86)}\PowerShell\7\pwsh.exe"
+    )) {
+        if ($cand -and (Test-Path -LiteralPath $cand)) { $pwshExe = $cand; break }
+    }
+    if (-not $pwshExe) {
+        $wingetExe = (where.exe winget.exe 2>$null | Select-Object -First 1)
+        if (-not $wingetExe -and (Test-Path "$env:LOCALAPPDATA\Microsoft\WindowsApps\winget.exe")) {
+            $wingetExe = "$env:LOCALAPPDATA\Microsoft\WindowsApps\winget.exe"
+        }
+        if ($wingetExe) {
+            Start-Process -FilePath $wingetExe -ArgumentList "install --id Microsoft.PowerShell -e --source winget --accept-package-agreements --accept-source-agreements --silent" -Wait -WindowStyle Hidden
+            foreach ($cand in @(
+                (where.exe pwsh.exe 2>$null | Select-Object -First 1),
+                "$env:ProgramFiles\PowerShell\7\pwsh.exe",
+                "$env:LOCALAPPDATA\Microsoft\WindowsApps\pwsh.exe",
+                "${env:ProgramFiles(x86)}\PowerShell\7\pwsh.exe"
+            )) {
+                if ($cand -and (Test-Path -LiteralPath $cand)) { $pwshExe = $cand; break }
+            }
+        }
+    }
+    $selfPath = $MyInvocation.MyCommand.Path
+    if (-not $selfPath) { $selfPath = Join-Path (Get-Location).Path "setup.ps1" }
+    if ($pwshExe -and (Test-Path -LiteralPath $selfPath)) {
+        Start-Process -FilePath $pwshExe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$selfPath`""
+        exit 0
+    }
+    Add-Type -AssemblyName PresentationFramework
+    [void][System.Windows.MessageBox]::Show(
+        "Hayamimi Live のセットアップには PowerShell 7 (pwsh.exe) が必要です。`r`nMicrosoft Store または https://aka.ms/powershell-release?tag=stable からインストールしてください。",
+        "PowerShell 7 が必要です - Hayamimi Live",
+        [System.Windows.MessageBoxButton]::OK,
+        [System.Windows.MessageBoxImage]::Warning
+    )
+    exit 1
+}
+
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
 
@@ -7,7 +51,7 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 
 <#
 .SYNOPSIS
-    Hayamimi Live (早耳 Live) - モダンGUI インストーラー / セットアップスクリプト
+    Hayamimi Live (早耳 Live) - モダンGUI インストーラー / セットアップスクリプト (PowerShell 7)
 .DESCRIPTION
     GitHubから最新の hayamimi を安全なローカル領域（既定: AppData\Local\hayamimi）にダウンロード・展開し、
     デスクトップショートカットの作成や実行環境のセットアップを行います。
@@ -19,8 +63,6 @@ Add-Type -AssemblyName WindowsBase
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-
-[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
 
 # --- Windows Defender「コントロールされたフォルダー アクセス」ブロック防止 ---
 # OneDrive や保護フォルダー配下での Python バイトコードキャッシュ (__pycache__) 作成を抑止
@@ -40,16 +82,28 @@ function Test-IsSmartAppControlEnforced {
 function Ensure-StartVbs {
     param([string]$TargetDirectory)
     $vbs = Join-Path $TargetDirectory "start.vbs"
-    if (-not (Test-Path $vbs)) {
+    $needWrite = -not (Test-Path $vbs)
+    if (-not $needWrite) {
+        try {
+            $oldVbs = Get-Content -LiteralPath $vbs -Raw -ErrorAction SilentlyContinue
+            if ($oldVbs -match "scriptblock" -or $oldVbs -notmatch "WindowsApps\\pwsh\.exe") {
+                $needWrite = $true
+            }
+        } catch {}
+    }
+    if ($needWrite) {
         $code = @"
 Set WshShell = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 scriptDir = fso.GetParentFolderName(WScript.ScriptFullName)
 WshShell.CurrentDirectory = scriptDir
 
-psCmd = "powershell"
+psCmd = ""
+localAppData = WshShell.ExpandEnvironmentStrings("%LOCALAPPDATA%")
 If fso.FileExists("C:\Program Files\PowerShell\7\pwsh.exe") Then
     psCmd = """C:\Program Files\PowerShell\7\pwsh.exe"""
+ElseIf fso.FileExists(localAppData & "\Microsoft\WindowsApps\pwsh.exe") Then
+    psCmd = """" & localAppData & "\Microsoft\WindowsApps\pwsh.exe"""
 ElseIf fso.FileExists("C:\Program Files (x86)\PowerShell\7\pwsh.exe") Then
     psCmd = """C:\Program Files (x86)\PowerShell\7\pwsh.exe"""
 Else
@@ -59,29 +113,25 @@ Else
     For Each p In paths
         If p <> "" And fso.FolderExists(p) Then
             If fso.FileExists(fso.BuildPath(p, "pwsh.exe")) Then
-                psCmd = "pwsh"
+                psCmd = """" & fso.BuildPath(p, "pwsh.exe") & """"
                 Exit For
             End If
         End If
     Next
 End If
 
-targetScript = scriptDir & "\scripts\launcher_gui.ps1"
-If Not fso.FileExists(targetScript) Then
-    If fso.FileExists(scriptDir & "\scripts\scripts\launcher_gui.ps1") Then
-        targetScript = scriptDir & "\scripts\scripts\launcher_gui.ps1"
-    Else
-        MsgBox "Cannot find launcher script:" & vbCrLf & _
-               scriptDir & "\scripts\launcher_gui.ps1", 16, "hayamimi launcher error"
-        WScript.Quit 1
-    End If
+If psCmd = "" Then
+    WshShell.Run """" & scriptDir & "\start.bat""", 7, False
+    WScript.Quit 0
 End If
 
-If InStr(psCmd, "pwsh") > 0 Then
-    cmdLine = psCmd & " -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & targetScript & """"
-Else
-    cmdLine = psCmd & " -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command ""$s=[System.IO.File]::ReadAllText('" & Replace(targetScript, "'", "''") & "',[System.Text.Encoding]::UTF8);&([scriptblock]::Create($s))"""
+targetScript = scriptDir & "\scripts\launcher_gui.ps1"
+If Not fso.FileExists(targetScript) Then
+    MsgBox "Cannot find launcher script:" & vbCrLf & targetScript, 16, "hayamimi launcher error"
+    WScript.Quit 1
 End If
+
+cmdLine = psCmd & " -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & targetScript & """"
 
 On Error Resume Next
 WshShell.Run cmdLine, 0, False
@@ -774,7 +824,7 @@ $stepTimer.Add_Tick({
                         }
                         continue
                     }
-                    if ($item.Name -in @("logs", "scratch", ".git", ".venv", "config_backups")) { continue }
+                    if ($item.Name -in @("logs", "scratch", ".git", ".venv", ".venv_gpu", "config_backups")) { continue }
 
                     # ユーザー設定 (config) およびプロファイル (profiles) の保護:
                     # 既存のインストール環境への再セットアップ・更新時、保存済み設定やプロファイルが上書きされるのを厳格に防止する
@@ -847,20 +897,6 @@ $stepTimer.Add_Tick({
                             Get-ChildItem -LiteralPath $subPath -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
                                 try { Unblock-File -LiteralPath $_.FullName -ErrorAction SilentlyContinue } catch {}
                             }
-                        }
-                    }
-                    foreach ($psTarget in @(
-                        (Join-Path $script:targetDir "setup.ps1"),
-                        (Join-Path $script:targetDir "scripts\launcher_gui.ps1"),
-                        (Join-Path $script:targetDir "scripts\desktop_overlay.ps1")
-                    )) {
-                        if (Test-Path $psTarget) {
-                            try {
-                                $b = [System.IO.File]::ReadAllBytes($psTarget)
-                                if ($b.Length -ge 3 -and ($b[0] -ne 239 -or $b[1] -ne 187 -or $b[2] -ne 191)) {
-                                    [System.IO.File]::WriteAllBytes($psTarget, ([byte[]]@(239, 187, 191) + $b))
-                                }
-                            } catch {}
                         }
                     }
                     if ($script:targetDir -match "(?i)OneDrive|Dropbox|Google Drive|iCloudDrive") {
@@ -983,7 +1019,6 @@ $btnLaunch.Add_Click({
                 Start-Process $batPath
             }
         }
-        $window.Close()
         $window.Close()
     } catch {
         Write-SetupLog "起動エラー: $_"

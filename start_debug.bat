@@ -1,5 +1,6 @@
 @echo off
 setlocal
+chcp 65001 >nul 2>&1
 cd /d "%~dp0"
 
 echo ===================================================
@@ -15,14 +16,20 @@ pause
 exit /b 1
 
 :check_runtime
-set "PS_CMD=powershell"
-where pwsh >nul 2>&1
-if %errorlevel% equ 0 (
-    set "PS_CMD=pwsh"
-    echo [*] Using PowerShell 7 (pwsh)
-) else (
-    echo [*] Using Windows PowerShell 5.1
+set "PWSH_EXE="
+for /f "delims=" %%P in ('where pwsh 2^>nul') do (
+    if not defined PWSH_EXE set "PWSH_EXE=%%P"
 )
+if not defined PWSH_EXE if exist "%ProgramFiles%\PowerShell\7\pwsh.exe" set "PWSH_EXE=%ProgramFiles%\PowerShell\7\pwsh.exe"
+if not defined PWSH_EXE if exist "%LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.exe" set "PWSH_EXE=%LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.exe"
+if not defined PWSH_EXE if exist "%ProgramFiles(x86)%\PowerShell\7\pwsh.exe" set "PWSH_EXE=%ProgramFiles(x86)%\PowerShell\7\pwsh.exe"
+
+if not defined PWSH_EXE (
+    echo [ERROR] PowerShell 7 ^(pwsh.exe^) is required. Please run setup.bat or start.bat to install it.
+    pause
+    exit /b 1
+)
+echo [*] Using PowerShell 7 ^(%PWSH_EXE%^)
 
 :: Check image
 wslc images 2>nul | findstr /i "hayamimi" >nul
@@ -38,11 +45,7 @@ exit /b 1
 
 :launch_gui
 echo [*] Starting hayamimi GUI Launcher (Console Active)...
-if "%PS_CMD%"=="pwsh" (
-    %PS_CMD% -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\launcher_gui.ps1"
-) else (
-    %PS_CMD% -NoProfile -ExecutionPolicy Bypass -Command "$s=[System.IO.File]::ReadAllText('%~dp0scripts\launcher_gui.ps1',[System.Text.Encoding]::UTF8);&([scriptblock]::Create($s))"
-)
+"%PWSH_EXE%" -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\launcher_gui.ps1"
 
 pause
 endlocal

@@ -12,6 +12,27 @@ param(
     [switch]$Demo
 )
 
+# PowerShell 7 (pwsh.exe) 自動移行トランポリン
+if ($PSVersionTable.PSVersion.Major -lt 7) {
+    $pwshExe = $null
+    foreach ($cand in @(
+        (where.exe pwsh.exe 2>$null | Select-Object -First 1),
+        "$env:ProgramFiles\PowerShell\7\pwsh.exe",
+        "$env:LOCALAPPDATA\Microsoft\WindowsApps\pwsh.exe",
+        "${env:ProgramFiles(x86)}\PowerShell\7\pwsh.exe"
+    )) {
+        if ($cand -and (Test-Path -LiteralPath $cand)) { $pwshExe = $cand; break }
+    }
+    $selfScript = $MyInvocation.MyCommand.Path
+    if (-not $selfScript) { $selfScript = Join-Path (Get-Location).Path "scripts\desktop_overlay.ps1" }
+    if ($pwshExe -and (Test-Path -LiteralPath $selfScript)) {
+        $demoArg = if ($Demo) { " -Demo" } else { "" }
+        Start-Process -FilePath $pwshExe -ArgumentList "-STA -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$selfScript`" -ServerUrl `"$ServerUrl`"$demoArg"
+        exit 0
+    }
+    exit 1
+}
+
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Drawing, System.Windows.Forms
 
 # Win32 API Helper (Smart App Control 完全対応: Add-Type による動的 C# コンパイルを排除)

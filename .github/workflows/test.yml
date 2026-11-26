@@ -12,12 +12,12 @@ jobs:
     strategy:
       matrix:
         os: [windows-latest, ubuntu-latest]
-        python-version: ["3.11", "3.14"]
+        python-version: ["3.14"]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: pip install sherpa-onnx numpy scipy soundfile pydantic google-genai yt-dlp pytest
+      - run: pip install sherpa-onnx numpy scipy soundfile pydantic google-genai yt-dlp cryptography pytest
       - run: python -m pytest tests -q

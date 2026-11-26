@@ -21,12 +21,37 @@ _KNOWN_BROWSERS = ["firefox", "chrome", "edge", "brave", "opera", "vivaldi"]
 _WORKING_COOKIE_BROWSER: Optional[str] = None
 
 
+def _is_sac_block_error(exc_or_text: object) -> bool:
+    """Windows Smart App Control / Code Integrity block (WinError 4551) detection."""
+    if isinstance(exc_or_text, BaseException):
+        winerr = getattr(exc_or_text, "winerror", None)
+        if winerr == 4551:
+            return True
+        msg = str(exc_or_text)
+    else:
+        msg = str(exc_or_text or "")
+    lowered = msg.lower()
+    return (
+        "4551" in lowered
+        or "application control policy has blocked" in lowered
+        or "スマート アプリ コントロール" in msg
+        or "このファイルをブロックしました" in msg
+    )
+
+
+def _sac_ffmpeg_guidance_message(target_path: str = "ffmpeg") -> str:
+    return (
+        f"Windows のスマート アプリ コントロール (SAC) により音声変換ツール ({target_path}) の実行がブロックされました (WinError 4551)。"
+        " 対処法: PowerShell 等で `winget install Gyan.FFmpeg` を実行するか、信頼済み ffmpeg を PATH に配置してから再試行してください。"
+    )
+
+
 def resolve_yt_dlp_cmd(custom_cmd: Optional[Union[str, List[str]]] = None) -> List[str]:
     """Resolve working yt-dlp command line tokens.
-    
-    Robustly handles environments where yt-dlp.exe is missing from PATH,
-    falling back to Python's Scripts directory, sys.executable -m yt_dlp,
-    or on-demand pip installation.
+
+    Prefers `sys.executable -m yt_dlp` so execution stays inside the signed
+    Python interpreter instead of launching unsigned `Scripts/yt-dlp.exe` shims
+    that Windows Smart App Control (SAC) may block.
     """
     if custom_cmd:
         if isinstance(custom_cmd, str):
@@ -37,32 +62,14 @@ def resolve_yt_dlp_cmd(custom_cmd: Optional[Union[str, List[str]]] = None) -> Li
         elif isinstance(custom_cmd, (list, tuple)) and custom_cmd:
             return list(custom_cmd)
 
-    # 1. System PATH
-    found = shutil.which("yt-dlp") or shutil.which("yt-dlp.exe")
-    if found:
-        return [found]
-
-    # 2. Adjacent Python Scripts / bin directories
-    py_dir = os.path.dirname(os.path.abspath(sys.executable))
-    candidates = [
-        os.path.join(py_dir, "Scripts", "yt-dlp.exe"),
-        os.path.join(py_dir, "Scripts", "yt-dlp"),
-        os.path.join(py_dir, "bin", "yt-dlp"),
-        os.path.join(py_dir, "yt-dlp.exe"),
-        os.path.join(py_dir, "yt-dlp"),
-    ]
-    for c in candidates:
-        if os.path.exists(c):
-            return [c]
-
-    # 3. Importable yt_dlp Python package
+    # 1. Importable yt_dlp Python package (runs under signed python.exe -> SAC safe)
     try:
         import yt_dlp  # noqa: F401
         return [sys.executable, "-m", "yt_dlp"]
     except ImportError:
         pass
 
-    # 4. Check if sys.executable -m yt_dlp works
+    # 2. Check if sys.executable -m yt_dlp works in subprocess
     try:
         res = subprocess.run(
             [sys.executable, "-m", "yt_dlp", "--version"],
@@ -75,9 +82,25 @@ def resolve_yt_dlp_cmd(custom_cmd: Optional[Union[str, List[str]]] = None) -> Li
     except Exception:
         pass
 
-    # 5. On-demand pip install self-healing
+    # 3. System PATH / Adjacent Scripts fallback
+    found = shutil.which("yt-dlp") or shutil.which("yt-dlp.exe")
+    if found:
+        return [found]
+
+    py_dir = os.path.dirname(os.path.abspath(sys.executable))
+    for c in (
+        os.path.join(py_dir, "Scripts", "yt-dlp.exe"),
+        os.path.join(py_dir, "Scripts", "yt-dlp"),
+        os.path.join(py_dir, "bin", "yt-dlp"),
+        os.path.join(py_dir, "yt-dlp.exe"),
+        os.path.join(py_dir, "yt-dlp"),
+    ):
+        if os.path.exists(c):
+            return [c]
+
+    # 4. On-demand pip install self-healing
     try:
-        logger.warning("yt-dlp not found in PATH or environment. Attempting on-demand pip install...")
+        logger.warning("yt-dlp not found in Python environment or PATH. Attempting on-demand pip install...")
         install_res = subprocess.run(
             [sys.executable, "-m", "pip", "install", "--no-warn-script-location", "yt-dlp>=2025.1.0"],
             capture_output=True,
@@ -93,94 +116,117 @@ def resolve_yt_dlp_cmd(custom_cmd: Optional[Union[str, List[str]]] = None) -> Li
     return [sys.executable, "-m", "yt_dlp"]
 
 
+def _probe_ffmpeg_executable(exe_path: str) -> Tuple[bool, bool]:
+    """Return (usable, blocked_by_sac) for a candidate ffmpeg binary."""
+    try:
+        res = subprocess.run(
+            [exe_path, "-version"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=5,
+        )
+        return (res.returncode == 0, False)
+    except OSError as exc:
+        if _is_sac_block_error(exc):
+            logger.warning("ffmpeg candidate blocked by Smart App Control (%s): %s", exe_path, exc)
+            return (False, True)
+        return (False, False)
+    except Exception:
+        return (False, False)
+
+
 def resolve_ffmpeg_cmd(custom_cmd: Optional[str] = None) -> str:
-    """Resolve ffmpeg executable path with fallbacks for portable/bundled environments.
-    
-    If ffmpeg is missing from PATH, attempts imageio_ffmpeg, local bin/tools,
-    or on-demand pip installation of imageio-ffmpeg. Automatically injects
-    the resolved directory into os.environ['PATH'] so child processes (like yt-dlp)
-    can discover it natively.
+    """Resolve ffmpeg executable path without duplicating 80MB unsigned binaries.
+
+    Returns the full executable path directly (yt-dlp's `--ffmpeg-location` natively
+    accepts a full binary path even when named `ffmpeg-win-x86_64-v7.1.exe`) and adds
+    its parent directory to PATH.
     """
-    def _inject_path(exe_path: str) -> str:
-        d = os.path.dirname(os.path.abspath(exe_path))
-        alias_name = "ffmpeg.exe" if sys.platform == "win32" else "ffmpeg"
-        alias_path = os.path.join(d, alias_name)
-        if not os.path.exists(alias_path) and os.path.exists(exe_path):
-            try:
-                shutil.copy2(exe_path, alias_path)
-                logger.info("Created standard ffmpeg alias: %s", alias_path)
-            except Exception as e:
-                logger.warning("Could not create ffmpeg alias: %s", e)
-
-        py_dir = os.path.dirname(os.path.abspath(sys.executable))
-        scripts_dir = os.path.join(py_dir, "Scripts")
-        if os.path.exists(scripts_dir):
-            scripts_alias = os.path.join(scripts_dir, alias_name)
-            if not os.path.exists(scripts_alias) and os.path.exists(exe_path):
-                try:
-                    shutil.copy2(exe_path, scripts_alias)
-                    logger.info("Placed ffmpeg.exe in Python Scripts dir: %s", scripts_alias)
-                except Exception:
-                    pass
-
-        cur_path = os.environ.get("PATH", "")
-        if d not in cur_path:
-            os.environ["PATH"] = d + os.pathsep + cur_path
-        resolved = alias_path if os.path.exists(alias_path) else exe_path
+    def _register_dir_and_return(exe_path: str) -> str:
+        resolved = os.path.abspath(exe_path) if os.path.exists(exe_path) else exe_path
+        d = os.path.dirname(resolved)
+        if d and os.path.isdir(d):
+            cur_path = os.environ.get("PATH", "")
+            path_entries = [p.strip() for p in cur_path.split(os.pathsep) if p.strip()]
+            if not any(os.path.normcase(p) == os.path.normcase(d) for p in path_entries):
+                os.environ["PATH"] = d + os.pathsep + cur_path
         return resolved
 
     if custom_cmd:
-        if shutil.which(custom_cmd) or os.path.exists(custom_cmd):
-            return _inject_path(custom_cmd)
+        resolved_custom = shutil.which(custom_cmd) or (custom_cmd if os.path.exists(custom_cmd) else None)
+        if resolved_custom:
+            return _register_dir_and_return(resolved_custom)
+
+    sac_blocked_paths: List[str] = []
+
+    def _try_candidate(cand: Optional[str]) -> Optional[str]:
+        if not cand or not os.path.exists(cand):
+            return None
+        ok, sac_blocked = _probe_ffmpeg_executable(cand)
+        if ok:
+            return _register_dir_and_return(cand)
+        if sac_blocked:
+            sac_blocked_paths.append(cand)
+        return None
 
     # 1. System PATH
     found = shutil.which("ffmpeg") or shutil.which("ffmpeg.exe")
-    if found:
-        return _inject_path(found)
+    picked = _try_candidate(found)
+    if picked:
+        return picked
 
     # 2. Adjacent Python Scripts / bin / repo tools
     py_dir = os.path.dirname(os.path.abspath(sys.executable))
     repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    candidates = [
+    for c in (
         os.path.join(py_dir, "Scripts", "ffmpeg.exe"),
         os.path.join(py_dir, "ffmpeg.exe"),
         os.path.join(repo_root, "bin", "ffmpeg.exe"),
         os.path.join(repo_root, "tools", "ffmpeg.exe"),
         os.path.join(repo_root, "bin", "ffmpeg"),
         os.path.join(repo_root, "tools", "ffmpeg"),
-    ]
-    for c in candidates:
-        if os.path.exists(c):
-            return _inject_path(c)
+    ):
+        picked = _try_candidate(c)
+        if picked:
+            return picked
 
-    # 3. imageio_ffmpeg Python package
+    # 3. imageio_ffmpeg Python package (use original binary in-place; no 80MB copy)
     try:
         import imageio_ffmpeg
         exe = imageio_ffmpeg.get_ffmpeg_exe()
-        if exe and os.path.exists(exe):
-            return _inject_path(exe)
+        picked = _try_candidate(exe)
+        if picked:
+            return picked
+        if exe and os.path.exists(exe) and not sac_blocked_paths:
+            return _register_dir_and_return(exe)
     except Exception:
         pass
 
-    # 4. On-demand self-healing: install imageio-ffmpeg via uv or pip
-    install_cmds = []
-    uv_bin = shutil.which("uv")
-    if uv_bin:
-        install_cmds.append([uv_bin, "pip", "install", "imageio-ffmpeg>=0.5.1"])
-    install_cmds.append([sys.executable, "-m", "pip", "install", "--no-warn-script-location", "imageio-ffmpeg>=0.5.1"])
-
-    for icmd in install_cmds:
+    # 4. On-demand self-healing: install imageio-ffmpeg via pip
+    if not sac_blocked_paths:
         try:
-            logger.warning("Attempting on-demand install of imageio-ffmpeg via %s...", icmd[0])
-            res = subprocess.run(icmd, capture_output=True, text=True, timeout=120)
+            logger.warning("Attempting on-demand install of imageio-ffmpeg via pip...")
+            res = subprocess.run(
+                [sys.executable, "-m", "pip", "install", "--no-warn-script-location", "imageio-ffmpeg>=0.5.1"],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
             if res.returncode == 0:
                 import imageio_ffmpeg
                 exe = imageio_ffmpeg.get_ffmpeg_exe()
-                if exe and os.path.exists(exe):
-                    logger.info("Successfully deployed standalone ffmpeg binary via imageio-ffmpeg: %s", exe)
-                    return _inject_path(exe)
+                picked = _try_candidate(exe)
+                if picked:
+                    logger.info("Successfully deployed ffmpeg binary via imageio-ffmpeg: %s", picked)
+                    return picked
         except Exception as e:
-            logger.error("Failed on-demand install using %s: %s", icmd[0], e)
+            logger.error("Failed on-demand install of imageio-ffmpeg: %s", e)
+
+    if sac_blocked_paths:
+        logger.error("%s", _sac_ffmpeg_guidance_message(sac_blocked_paths[0]))
+        return sac_blocked_paths[0]
 
     return "ffmpeg"
 
@@ -1292,7 +1338,7 @@ class YouTubeFetcher:
         cookie_args = get_cookie_args()
         ffmpeg_location_args = []
         if self.ffmpeg_cmd and os.path.exists(self.ffmpeg_cmd):
-            ffmpeg_location_args = ["--ffmpeg-location", os.path.dirname(os.path.abspath(self.ffmpeg_cmd))]
+            ffmpeg_location_args = ["--ffmpeg-location", os.path.abspath(self.ffmpeg_cmd)]
 
         url = validate_youtube_url(url)
         cmd = list(self.yt_dlp_cmd) + [
@@ -1326,10 +1372,12 @@ class YouTubeFetcher:
                     errors="replace",
                     bufsize=1,
                 )
-            except FileNotFoundError as fnf:
-                logger.warning("yt-dlp executable not found (%s). Falling back to python -m yt_dlp...", fnf)
+            except OSError as fnf:
+                if os.path.normcase(os.path.abspath(exec_cmd[0])) == os.path.normcase(os.path.abspath(sys.executable)):
+                    raise
+                logger.warning("yt-dlp executable failed to launch (%s). Falling back to python -m yt_dlp...", fnf)
                 if log_callback:
-                    log_callback("WARN", "yt-dlp 実行ファイルを直接検出できなかったため、Pythonモジュール経由で再試行します...")
+                    log_callback("WARN", "yt-dlp 実行ファイルを直接起動できなかったため、Pythonモジュール経由で再試行します...")
                 fallback_tokens = [sys.executable, "-m", "yt_dlp"]
                 self.yt_dlp_cmd = fallback_tokens
                 opt_idx = 1
@@ -1372,6 +1420,12 @@ class YouTubeFetcher:
         if ret != 0:
             err_text = "\n".join(output_lines[-15:])
 
+            if _is_sac_block_error(err_text):
+                sac_msg = _sac_ffmpeg_guidance_message(self.ffmpeg_cmd or "ffmpeg")
+                if log_callback:
+                    log_callback("ERROR", sac_msg)
+                raise RuntimeError(sac_msg)
+
             # Check for YouTube bot detection (Sign in required)
             if is_bot_detection_error(err_text):
                 if log_callback:
@@ -1403,7 +1457,7 @@ class YouTubeFetcher:
                 repaired_ffmpeg = resolve_ffmpeg_cmd()
                 self.ffmpeg_cmd = repaired_ffmpeg
                 if repaired_ffmpeg and (os.path.exists(repaired_ffmpeg) or shutil.which(repaired_ffmpeg)):
-                    ffmpeg_loc = os.path.dirname(os.path.abspath(repaired_ffmpeg)) if os.path.isfile(repaired_ffmpeg) else repaired_ffmpeg
+                    ffmpeg_loc = os.path.abspath(repaired_ffmpeg) if os.path.isfile(repaired_ffmpeg) else repaired_ffmpeg
                     clean_cmd = []
                     skip_next = False
                     for c_arg in cmd:
@@ -1483,7 +1537,7 @@ class YouTubeFetcher:
             cookie_args = get_cookie_args()
             ffmpeg_location_args = []
             if self.ffmpeg_cmd and os.path.exists(self.ffmpeg_cmd):
-                ffmpeg_location_args = ["--ffmpeg-location", os.path.dirname(os.path.abspath(self.ffmpeg_cmd))]
+                ffmpeg_location_args = ["--ffmpeg-location", os.path.abspath(self.ffmpeg_cmd)]
 
             url = validate_youtube_url(url)
             cmd = list(self.yt_dlp_cmd) + [
@@ -1511,8 +1565,10 @@ class YouTubeFetcher:
                     errors="replace",
                     bufsize=1,
                 )
-            except FileNotFoundError as fnf:
-                logger.warning("yt-dlp executable not found in fallback Popen (%s). Retrying with python -m yt_dlp...", fnf)
+            except OSError as fnf:
+                if os.path.normcase(os.path.abspath(cmd[0])) == os.path.normcase(os.path.abspath(sys.executable)):
+                    raise
+                logger.warning("yt-dlp executable failed to launch in fallback Popen (%s). Retrying with python -m yt_dlp...", fnf)
                 fallback_tokens = [sys.executable, "-m", "yt_dlp"]
                 self.yt_dlp_cmd = fallback_tokens
                 opt_idx = 1
@@ -1568,8 +1624,21 @@ class YouTubeFetcher:
                 "-ac", "1",
                 output_wav_path,
             ]
-            res = subprocess.run(trim_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+            try:
+                res = subprocess.run(trim_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+            except OSError as exc:
+                if _is_sac_block_error(exc):
+                    sac_msg = _sac_ffmpeg_guidance_message(self.ffmpeg_cmd or "ffmpeg")
+                    if log_callback:
+                        log_callback("ERROR", sac_msg)
+                    raise RuntimeError(sac_msg) from exc
+                raise
             if res.returncode != 0:
+                if _is_sac_block_error(res.stderr):
+                    sac_msg = _sac_ffmpeg_guidance_message(self.ffmpeg_cmd or "ffmpeg")
+                    if log_callback:
+                        log_callback("ERROR", sac_msg)
+                    raise RuntimeError(sac_msg)
                 raise RuntimeError(f"Local ffmpeg trimming failed: {res.stderr}")
 
             if log_callback:
