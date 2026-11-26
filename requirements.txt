@@ -19,6 +19,7 @@ fugashi==1.5.2
 unidic-lite==1.0.8
 psutil==7.2.2
 huggingface_hub==1.28.0
+httpx>=0.27.0
 tokenizers==0.23.3
 
 # Optional: fixes SenseVoice's token-spaced Korean output (--translate / ko

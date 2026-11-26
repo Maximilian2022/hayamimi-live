@@ -188,6 +188,9 @@ def _load_gateway_module(monkeypatch):
     fastapi_tpl = types.ModuleType("fastapi.templating")
     fastapi_tpl.Jinja2Templates = lambda *args, **kwargs: types.SimpleNamespace(TemplateResponse=lambda *a, **k: None)
 
+    if importlib.util.find_spec("httpx") is None:
+        monkeypatch.setitem(sys.modules, "httpx", types.ModuleType("httpx"))
+
     for name, mod in [
         ("fastapi", fastapi_mod),
         ("fastapi.middleware", fastapi_mw),
