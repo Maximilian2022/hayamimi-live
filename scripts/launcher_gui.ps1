@@ -107,8 +107,8 @@ if ($PSVersionTable.PSVersion.Major -lt 7) {
     exit 1
 }
 
-# バージョン番号の解決 (version.txt 優先、フォールバック 2.5.0)
-$script:AppVersion = "2.5.0"
+# バージョン番号の解決 (version.txt 優先、フォールバック 2.5.1)
+$script:AppVersion = "2.5.1"
 $versionTxtFile = Join-Path $ProjectRoot "version.txt"
 if (Test-Path $versionTxtFile) {
     try {
@@ -402,12 +402,24 @@ function Write-EnvDiagnostics {
         } else {
             Write-AppLog "[診断] git が見つかりません (更新は ZIP 取得で行われます)" "WARN"
         }
-        foreach ($rel in @("scripts\realtime_transcribe.py", ".venv\Scripts\python.exe", ".venv_gpu\Scripts\python.exe")) {
+        foreach ($rel in @("scripts\realtime_transcribe.py", ".venv\Scripts\python.exe", ".venv_gpu\Scripts\python.exe", "tools\uv\uv.exe")) {
             $fp = Join-Path $ProjectRoot $rel
-            if (Test-Path $fp) {
-                $zone = Get-Content -LiteralPath $fp -Stream Zone.Identifier -ErrorAction SilentlyContinue
+            if (Test-Path -LiteralPath $fp) {
+                $zone = Get-Item -LiteralPath $fp -Stream Zone.Identifier -ErrorAction SilentlyContinue
                 $mark = if ($zone) { "MOTWあり(ブロックされる可能性)" } else { "MOTWなし" }
-                Write-AppLog "[診断] $rel : $mark"
+                $sigInfo = ""
+                if ($rel.EndsWith(".exe")) {
+                    $sigText = "未署名/取得不可"
+                    try {
+                        $sig = Get-AuthenticodeSignature -LiteralPath $fp -ErrorAction Stop
+                        $subj = if ($sig.SignerCertificate -and $sig.SignerCertificate.Subject) {
+                            ($sig.SignerCertificate.Subject -split ',')[0]
+                        } else { "" }
+                        $sigText = if ($subj) { "$($sig.Status) ($subj)" } else { "$($sig.Status)" }
+                    } catch {}
+                    $sigInfo = " / 署名: $sigText"
+                }
+                Write-AppLog "[診断] $rel : $mark$sigInfo"
             }
         }
         foreach ($m in (Get-ModelPinStates)) {
@@ -427,11 +439,15 @@ function Unblock-ProjectFiles {
     param([string]$RootDir = $ProjectRoot)
     try {
         if (-not $RootDir -or -not (Test-Path $RootDir)) { return }
-        # ルート直下および主要サブフォルダのスクリプト・バイナリから Zone.Identifier ストリームを除去
-        # ルート直下ファイルのみ (Recurse なしで .venv の約9,000ファイルを完全スキップ: P-1)
+        # ルート直下および主要サブフォルダのうち Zone.Identifier ストリームを持つファイルのみに絞って解除 (I/O 削減・高速化)
         Get-ChildItem -LiteralPath $RootDir -File -ErrorAction SilentlyContinue |
             Where-Object { $_.Extension -in @(".ps1", ".bat", ".vbs", ".py", ".cmd") } |
-            ForEach-Object { $uf = $_.FullName; try { Unblock-File -LiteralPath $uf -ErrorAction Stop } catch { Write-AppLog "[Unblock] 失敗: $uf : $($_.Exception.Message)" "WARN" } }
+            ForEach-Object {
+                $uf = $_.FullName
+                if (Get-Item -LiteralPath $uf -Stream Zone.Identifier -ErrorAction SilentlyContinue) {
+                    try { Unblock-File -LiteralPath $uf -ErrorAction Stop } catch { Write-AppLog "[Unblock] 失敗: $uf : $($_.Exception.Message)" "WARN" }
+                }
+            }
 
         $subDirs = @(
             (Join-Path $RootDir "scripts"),
@@ -445,7 +461,9 @@ function Unblock-ProjectFiles {
                     Where-Object { $_.Extension -in @(".ps1", ".bat", ".vbs", ".py", ".exe", ".dll", ".pyd") } |
                     ForEach-Object {
                         $uf = $_.FullName
-                        try { Unblock-File -LiteralPath $uf -ErrorAction Stop } catch { Write-AppLog "[Unblock] 失敗: $uf : $($_.Exception.Message)" "WARN" }
+                        if (Get-Item -LiteralPath $uf -Stream Zone.Identifier -ErrorAction SilentlyContinue) {
+                            try { Unblock-File -LiteralPath $uf -ErrorAction Stop } catch { Write-AppLog "[Unblock] 失敗: $uf : $($_.Exception.Message)" "WARN" }
+                        }
                     }
             }
         }
@@ -884,7 +902,7 @@ function Update-ContainerLogFile {
 [xml]$xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Hayamimi Live ランチャー (GUI v2.5.0)"
+        Title="Hayamimi Live ランチャー (GUI v2.5.1)"
         Height="780" Width="780"
         MinHeight="680" MinWidth="720"
         WindowStartupLocation="CenterScreen"
@@ -962,7 +980,7 @@ function Update-ContainerLogFile {
                         <TextBlock x:Name="GpuBadge" Text="⚡ GPU: 検出中..." FontSize="11" Foreground="#10B981" FontWeight="SemiBold"/>
                     </Border>
                     <Border Background="#1E1B4B" CornerRadius="12" Padding="10,5" Margin="0,0,8,0" BorderBrush="#4338CA" BorderThickness="1">
-                        <TextBlock x:Name="VersionBadge" Text="GUI v2.5.0" FontSize="11" Foreground="#A5B4FC" FontWeight="Bold" FontFamily="{StaticResource MonoFont}"/>
+                        <TextBlock x:Name="VersionBadge" Text="GUI v2.5.1" FontSize="11" Foreground="#A5B4FC" FontWeight="Bold" FontFamily="{StaticResource MonoFont}"/>
                     </Border>
                     <Border Background="#141B2D" CornerRadius="12" Padding="10,5" BorderBrush="#253350" BorderThickness="1">
                         <TextBlock x:Name="RuntimeBadge" Text="Python venv" FontSize="11" Foreground="#38BDF8" FontWeight="SemiBold"/>
@@ -4189,7 +4207,7 @@ function Invoke-UpdateAppCode {
         }
 
         if ($updateSuccess) {
-            # 取得・展開された全ファイルから Zone.Identifier (Mark of the Web) を除去し、UTF-8 BOM を保証
+            # 取得・展開されたファイルから Zone.Identifier (Mark of the Web) を除去
             Unblock-ProjectFiles -RootDir $ProjectRoot
 
             # 既存の .venv に対する依存パッケージの更新確認 (スマートアプリコントロール SAC 安全フォールバック付き)
@@ -5532,23 +5550,7 @@ $updateCheckTimer.Add_Tick({
 })
 $updateCheckTimer.Start()
 
-# 起動時モデル自己修復タイマー (ウィンドウ描画後 400ms に非同期実行)
-$modelRepairTimer = [System.Windows.Threading.DispatcherTimer]::new()
-$modelRepairTimer.Interval = [TimeSpan]::FromMilliseconds(400)
-$modelRepairTimer.Add_Tick({
-    $modelRepairTimer.Stop()
-    try {
-        if ($script:NeedModelRepairOnStartup) {
-            $script:NeedModelRepairOnStartup = $false
-            Ensure-ModelsIntegrity | Out-Null
-        }
-    } catch {
-        Write-AppLog "起動時モデル自己修復中に例外が発生しました: $_" "WARN"
-    }
-})
-$modelRepairTimer.Start()
-
-# 起動時新機能依存パッケージ自己修復タイマー (起動600ms後にUIスレッドセーフ・SAC安全にチェック)
+# 起動時メンテナンス統合タイマー (Unblock -> モデル自己修復 -> 依存パッケージチェックを直列実行し競合を防止)
 # ※ PowerShell では ThreadPool.QueueUserWorkItem に ScriptBlock を渡すと Runspace 不在例外で
 #    プロセス全体が即死するため、必ず WPF DispatcherTimer でプロセス完了を監視する。
 $script:ProcDepInstall = $null
@@ -5577,15 +5579,22 @@ $depInstallWatchTimer.Add_Tick({
     }
 })
 
-$depCheckTimer = [System.Windows.Threading.DispatcherTimer]::new()
-$depCheckTimer.Interval = [TimeSpan]::FromMilliseconds(600)
-$depCheckTimer.Add_Tick({
-    $depCheckTimer.Stop()
+$startupMaintenanceTimer = [System.Windows.Threading.DispatcherTimer]::new()
+$startupMaintenanceTimer.Interval = [TimeSpan]::FromMilliseconds(400)
+$startupMaintenanceTimer.Add_Tick({
+    $startupMaintenanceTimer.Stop()
     try {
-        # 起動直後にスクリプト・実行ファイル群の Zone.Identifier (Mark of the Web) を安全解除 (1回に集約)
+        # 1. Zone.Identifier (Mark of the Web) 保持ファイルのみ解除 (1回に集約)
         Unblock-ProjectFiles -RootDir $ProjectRoot
 
-        if ($script:CurrentEngineMode -eq "Venv" -and -not $script:IsRepairingVenv) {
+        # 2. モデル自己修復を先に直列完了させる (依存チェックとの並走・競合を完全防止)
+        if ($script:NeedModelRepairOnStartup) {
+            $script:NeedModelRepairOnStartup = $false
+            Ensure-ModelsIntegrity | Out-Null
+        }
+
+        # 3. Venv モードかつ待機中の場合のみ依存パッケージ整合性を確認
+        if ($script:CurrentEngineMode -eq "Venv" -and -not $script:IsRepairingVenv -and -not $script:ProcDepInstall) {
             $venvDir = Join-Path $ProjectRoot ".venv"
             $venvPython = Join-Path $venvDir "Scripts\python.exe"
             if ((Test-Path $venvPython) -and (-not (Test-IsSmartAppControlActive) -or (Test-IsTrustedSignedExecutable -FilePath $venvPython))) {
@@ -5641,10 +5650,10 @@ $depCheckTimer.Add_Tick({
             }
         }
     } catch {
-        Write-AppLog "依存パッケージ自動チェックをスキップしました: $_" "WARN"
+        Write-AppLog "起動時メンテナンスをスキップしました: $_" "WARN"
     }
 })
-$depCheckTimer.Start()
+$startupMaintenanceTimer.Start()
 
 $pollTimer.Start()
 
@@ -5656,11 +5665,8 @@ $healthTimer.Stop()
 if ($updateCheckTimer -and $updateCheckTimer.IsEnabled) {
     $updateCheckTimer.Stop()
 }
-if ($modelRepairTimer -and $modelRepairTimer.IsEnabled) {
-    $modelRepairTimer.Stop()
-}
-if ($depCheckTimer -and $depCheckTimer.IsEnabled) {
-    $depCheckTimer.Stop()
+if ($startupMaintenanceTimer -and $startupMaintenanceTimer.IsEnabled) {
+    $startupMaintenanceTimer.Stop()
 }
 if ($depInstallWatchTimer -and $depInstallWatchTimer.IsEnabled) {
     $depInstallWatchTimer.Stop()

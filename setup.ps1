@@ -1,4 +1,4 @@
-# --- PowerShell 7 (pwsh.exe) 自動導入 & 移行トランポリン ---
+﻿# --- PowerShell 7 (pwsh.exe) 自動導入 & 移行トランポリン ---
 if ($PSVersionTable.PSVersion.Major -lt 7) {
     $pwshExe = $null
     foreach ($cand in @(
